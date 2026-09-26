@@ -14,14 +14,16 @@ use ratatui::style::Style;
 use ratatui::widgets::Widget;
 
 use crate::clock::Clock;
-use crate::keymap::{Action, key_label};
-use crate::state::value::{Value, format_score};
+use crate::help;
+use crate::keymap::Action;
+use crate::state::HelpView;
+use crate::state::value::format_score;
 use crate::state::{
     Attachment, EditBuffer, EditTarget, FieldPart, Link, Liveness, PendingMutation, PendingRead,
-    State, is_valid_zset_score,
+    State,
 };
 use crate::theme::{Theme, Token, env_token};
-use crate::update::{Mode, mode};
+use crate::update::{Mode, mode_beneath_help};
 
 /// Render the whole frame into a fresh buffer of the given size.
 pub fn frame(state: &State, theme: &Theme, clock: &dyn Clock, area: Rect) -> Buffer {
@@ -40,7 +42,12 @@ pub fn frame(state: &State, theme: &Theme, clock: &dyn Clock, area: Rect) -> Buf
     status_bar(state, theme, clock, area, &mut buf);
 
     if plan.hint_bar && area.height >= 3 {
-        let hints = hint_bar(state);
+        // Drawn starting at column 1, not 0 (the `put` call below) — the
+        // budget has to leave that margin, or a row `hint_bar` judged just
+        // short enough clips its last character against the buffer edge
+        // anyway (the "help" in `F1 help` losing its `p` was this exact
+        // off-by-one, caught by a golden frame at 70 columns).
+        let hints = hint_bar(state, area.width.saturating_sub(1));
         put(
             &mut buf,
             1,
@@ -49,15 +56,20 @@ pub fn frame(state: &State, theme: &Theme, clock: &dyn Clock, area: Rect) -> Buf
             theme.style(Token::Muted),
         );
     }
-    if state.help_open {
-        help_overlay(state, theme, area, &mut buf);
-    }
     // Not `mode()`: drawing the dialog is not a precedence question. The
-    // overlay is drawn last, so it is on top whenever one is staged, and
-    // asking the mode here would only buy an `expect` on the way to the
-    // `PendingMutation` this needs anyway.
+    // confirm overlay draws whenever one is staged, regardless of whether
+    // help is also open — `PendingMutation` is read straight off `State`.
     if let Some(pending) = &state.confirm {
         confirm_overlay(state, pending, theme, area, &mut buf);
+    }
+    // Help draws last, over everything — including a confirm dialog
+    // (decision 8, `docs/plans/m3-contextual-help.md`: "help drawn over a
+    // confirm dialog is on top, so it owns the keys"). `Mode::Help` outranks
+    // `Mode::Confirm` in `update::mode` for exactly this reason; the paint
+    // order has to agree; or the overlay that owns the keyboard could be
+    // hidden under the dialog it owns them over.
+    if let Some(view) = state.help {
+        help_overlay(state, view, theme, area, &mut buf);
     }
     buf
 }
@@ -504,7 +516,7 @@ fn value_pane(
             // read as "the one taking keys right now".
             let name_part = editor.active_part() == Some(FieldPart::Name);
             let value_part = !name_part;
-            let show_marker = mode(state) == Mode::Editing;
+            let show_marker = mode_beneath_help(state) == Mode::Editing;
             let name_active = show_marker && name_part;
             let value_active = show_marker && value_part;
             // The ZSet add form's two parts are a MEMBER and a SCORE, not a
@@ -840,13 +852,140 @@ fn status_bar(state: &State, theme: &Theme, clock: &dyn Clock, area: Rect, buf: 
     }
 }
 
+/// `help::HelpContext`'s title, as shown in the overlay's border (`help ·
+/// <context>`, PLAN's Render section) — presentation wording, so it lives
+/// here rather than in `help.rs`, which only names *targets* (decision 6),
+/// never describes a context as a whole.
+fn context_title(ctx: help::HelpContext) -> String {
+    use help::{EditorContext, HelpContext, ValueContext};
+    match ctx {
+        HelpContext::Keys { tree, .. } => {
+            format!("keys pane{}", if tree { " · tree" } else { "" })
+        }
+        HelpContext::Filter => "filter".to_string(),
+        HelpContext::Value(None) => "value pane".to_string(),
+        HelpContext::Value(Some(vc)) => {
+            let ty = match vc {
+                ValueContext::Str { .. } => "string",
+                ValueContext::Hash { .. } => "hash",
+                ValueContext::List { .. } => "list",
+                ValueContext::Set { .. } => "set",
+                ValueContext::ZSet { .. } => "zset",
+                ValueContext::Stream { .. } => "stream",
+                ValueContext::Json { .. } => "json",
+                ValueContext::Binary { .. } => "binary",
+            };
+            format!("value pane · {ty}")
+        }
+        HelpContext::Editor(ec) => {
+            let target = match ec {
+                EditorContext::Value => "value",
+                EditorContext::Field => "field",
+                EditorContext::AddFormName { zset } | EditorContext::AddFormValue { zset } => {
+                    if zset {
+                        "add member"
+                    } else {
+                        "add field"
+                    }
+                }
+                EditorContext::ListAdd => "add element",
+                EditorContext::ZSetScore => "score",
+                EditorContext::Ttl => "ttl",
+            };
+            format!("editor · {target}")
+        }
+        HelpContext::Confirm => "confirm".to_string(),
+    }
+}
+
+/// The footer's `Tab <phrase>` pointer to the other pane — `None` outside
+/// the two pane contexts, where `Tab` does nothing (decision 7: "Only
+/// offered for the two pane contexts"). A whole phrase, not just the other
+/// pane's name plus a hard-coded trailing "keys": the keys pane's own name
+/// already *is* "keys", so "Tab keys keys" is what that template produces
+/// once help is viewing the value pane and pointing back at it.
+fn other_pane_pointer(ctx: help::HelpContext) -> Option<&'static str> {
+    match ctx {
+        help::HelpContext::Keys { .. } => Some("value keys"),
+        help::HelpContext::Value(_) => Some("keys"),
+        _ => None,
+    }
+}
+
+/// One HERE row as plain text, for sizing the box before it is drawn styled
+/// (`draw_help_row`, below) — the two must stay in lockstep, since a row
+/// wider once drawn than once measured would clip mid-reason.
+fn here_row_text(row: &help::HelpRow) -> String {
+    match &row.refused {
+        Some(r) => format!("{:<10}{}  {}", row.keys, row.label, r.text()),
+        None => format!("{:<10}{}", row.keys, row.label),
+    }
+}
+
+/// Draw one HERE row: the key and label in `Text` (or `Muted`, refused), the
+/// reason — if any — in `Warn` right after it (PLAN's Render section: "dim
+/// token plus the reason in a warn token"). `Muted` doubles as the dim token
+/// here — it is already "de-emphasised text" by its own doc comment, and the
+/// plan only asks for *a* token that reads as dimmed, not a new one.
+fn draw_help_row(buf: &mut Buffer, x: u16, y: u16, theme: &Theme, row: &help::HelpRow) {
+    let key_and_label = format!("{:<10}{}", row.keys, row.label);
+    let base = if row.refused.is_some() {
+        Token::Muted
+    } else {
+        Token::Text
+    };
+    let end = put(buf, x, y, &key_and_label, theme.style(base));
+    if let Some(refusal) = &row.refused {
+        put(buf, end + 2, y, &refusal.text(), theme.style(Token::Warn));
+    }
+}
+
 /// A dismissible overlay rather than resident chrome (G7): screen space is a
 /// budget, and the help is only needed while it is being read.
-fn help_overlay(state: &State, theme: &Theme, area: Rect, buf: &mut Buffer) {
-    let lines = help_lines(state);
-    let inner_w = lines.iter().map(|l| l.chars().count()).max().unwrap_or(10);
-    let w = (inner_w + 4).min(area.width as usize);
-    let h = (lines.len() + 4).min(area.height as usize);
+///
+/// One model, two readers (R7.5): every row here is exactly what
+/// [`hint_bar`] would show given room, read from the same [`help`] module —
+/// `view.pane` decides which pane's context is shown, not [`State::focus`]
+/// (`update::help_key`'s own comment on why); that is already folded into
+/// `help::context`, so this only needs `state` itself.
+fn help_overlay(state: &State, _view: HelpView, theme: &Theme, area: Rect, buf: &mut Buffer) {
+    let ctx = help::context(state);
+    let here_rows = help::here(state, ctx);
+    let everywhere_rows = help::everywhere(state);
+    let status = help::status(state);
+    let everywhere_line = join_rows(&everywhere_rows);
+    let footer = match other_pane_pointer(ctx) {
+        Some(phrase) => format!("Tab {phrase} · Esc close"),
+        None => "Esc close".to_string(),
+    };
+    let title = format!(" help · {} ", context_title(ctx));
+
+    // Sizing: top border + status line(s) + one row per HERE row + a blank +
+    // the EVERYWHERE line + a blank + the footer + bottom border. Every
+    // context fits 24 rows at 80 columns (`help::tests::no_context_…`'s own
+    // budget) with this same shape, which is why the overlay's row budget
+    // lives there, not here — one accounting, not two.
+    let mut plain_lines: Vec<&str> = Vec::new();
+    if let Some(s) = status.as_deref() {
+        plain_lines.push(s);
+    }
+    let here_text: Vec<String> = here_rows.iter().map(here_row_text).collect();
+    for line in &here_text {
+        plain_lines.push(line);
+    }
+    plain_lines.push(&everywhere_line);
+    plain_lines.push(&footer);
+
+    let inner_w = plain_lines
+        .iter()
+        .map(|l| l.chars().count())
+        .max()
+        .unwrap_or(10)
+        .max(title.chars().count());
+    let w = (inner_w + 4).min(area.width as usize).max(4);
+    // + 4: two blanks, the EVERYWHERE line, the footer line.
+    let content_rows = usize::from(status.is_some()) + here_rows.len() + 4;
+    let h = (content_rows + 2).min(area.height as usize).max(4); // + top/bottom border
     let x0 = (area.width as usize - w) / 2;
     let y0 = (area.height as usize - h) / 2;
 
@@ -857,11 +996,11 @@ fn help_overlay(state: &State, theme: &Theme, area: Rect, buf: &mut Buffer) {
             format!(
                 "{}{}{}",
                 if y == 0 { "┌" } else { "└" },
-                "─".repeat(w - 2),
+                "─".repeat(w.saturating_sub(2)),
                 if y == 0 { "┐" } else { "┘" }
             )
         } else {
-            format!("│{}│", " ".repeat(w - 2))
+            format!("│{}│", " ".repeat(w.saturating_sub(2)))
         };
         put(buf, x0 as u16, row, &line, border);
     }
@@ -869,19 +1008,34 @@ fn help_overlay(state: &State, theme: &Theme, area: Rect, buf: &mut Buffer) {
         buf,
         x0 as u16 + 2,
         y0 as u16,
-        " keys ",
+        &title,
         theme.style(Token::Text),
     );
-    for (i, line) in lines.iter().enumerate() {
-        if y0 + 2 + i < y0 + h - 1 {
-            put(
-                buf,
-                x0 as u16 + 2,
-                (y0 + 2 + i) as u16,
-                line,
-                theme.style(Token::Text),
-            );
+
+    let inner_x = x0 as u16 + 2;
+    let inner_bottom = y0 + h - 1;
+    let mut y = y0 as u16 + 1;
+    if let Some(s) = &status
+        && (y as usize) < inner_bottom
+    {
+        put(buf, inner_x, y, s, theme.style(Token::Warn));
+        y += 1;
+    }
+    for row in &here_rows {
+        if (y as usize) >= inner_bottom {
+            break;
         }
+        draw_help_row(buf, inner_x, y, theme, row);
+        y += 1;
+    }
+    y += 1; // blank
+    if (y as usize) < inner_bottom {
+        put(buf, inner_x, y, &everywhere_line, theme.style(Token::Muted));
+        y += 1;
+    }
+    y += 1; // blank
+    if (y as usize) < inner_bottom {
+        put(buf, inner_x, y, &footer, theme.style(Token::Muted));
     }
 }
 
@@ -1429,218 +1583,76 @@ pub fn status_readout(state: &State, clock: &dyn Clock) -> Vec<(String, Token)> 
     out
 }
 
-/// The hint bar: the effective binding for each action, never a hard-coded
-/// label (R7.5).
-///
-/// Filter capture is the one input mode that already bypasses the keymap
-/// (`update::filter_key` matches `KeyCode` directly, not through `Action`),
-/// so there is no binding to look up here either — the hint has to be
-/// hard-coded too, or the fact that Esc clears and exits stays invisible.
-pub fn hint_bar(state: &State) -> String {
-    if mode(state) == Mode::Filtering {
-        return "Esc clear & exit   Enter apply".to_string();
-    }
-    // The inline editor is a mode of its own (ADR-0014), the same way filter
-    // capture is above: hard-coded wording, effective bindings looked up
-    // from the keymap so a rebinding still shows correctly (R7.5). The add
-    // form's two parts each get their own wording (PLAN M2 task 6
-    // follow-up, F/N) — the name part shares the editor's rank but not its
-    // vocabulary, since `⌃S`/`↑` mean nothing there yet.
-    if let Some(editor) = state.open.as_ref().and_then(crate::state::OpenKey::typing) {
-        let cancel = state.keymap.hint(Action::Cancel).unwrap_or_default();
-        // `Enter` stages every target except a plain String/JSON value
-        // (2026-09-22 amendment to ADR-0014) — the hint names whichever key
-        // actually does it, per target, rather than always naming the
-        // keymap's `EditorStage` binding. `Enter` itself is not a rebindable
-        // action (ADR-0014: `⌃S` was chosen over it precisely because no
-        // terminal reliably tells "commit" from "insert a newline"), so it is
-        // spelled out here the same way the name part's own "Enter value"
-        // wording already is, a few lines below.
-        let is_value = matches!(editor.target(), EditTarget::Value);
-        // D6, ADR-0018: the ZSet add form's name part is a member, not a
-        // Hash field — its own noun and its own duplicate check
-        // ([`crate::state::OpenKey::zset_member_shown_duplicate`]), but the
-        // same two-part shape, so it shares this match arm rather than
-        // duplicating it.
-        let is_zset_add = matches!(editor.target(), EditTarget::NewZSetMember { .. });
-        match editor.active_part() {
-            Some(FieldPart::Name) => {
-                let duplicate = state.open.as_ref().is_some_and(|o| {
-                    if is_zset_add {
-                        o.zset_member_shown_duplicate()
-                    } else {
-                        o.hash_field_shown_duplicate()
-                    }
-                });
-                if is_zset_add {
-                    return if duplicate {
-                        let edit = state.keymap.hint(Action::Edit).unwrap_or_default();
-                        format!("member exists — {cancel}, then {edit} its score")
-                    } else {
-                        format!("Enter score · {cancel} cancel")
-                    };
-                }
-                return if duplicate {
-                    let edit = state.keymap.hint(Action::Edit).unwrap_or_default();
-                    format!("field exists — {cancel}, then {edit} to edit")
-                } else {
-                    format!("Enter value · {cancel} cancel")
-                };
-            }
-            Some(FieldPart::Value) => {
-                // Reachable for the Hash add form's value part and the ZSet
-                // add form's score part — the name part returns above — so
-                // `is_value` is always false here and `Enter` always stages,
-                // once D4's numeric guard (ZSet only) allows it.
-                let undo = state.keymap.hint(Action::EditorUndo).unwrap_or_default();
-                let back = if is_zset_add { "member" } else { "field" };
-                if is_zset_add && !is_valid_zset_score(&String::from_utf8_lossy(&editor.text())) {
-                    // D4's live indicator: `⌃S`/`Enter` are blocked
-                    // (`value_part_stage_blocked`) while this holds, so the
-                    // hint says so rather than silently doing nothing.
-                    return format!("invalid score · ↑ {back} · {undo} undo · {cancel} cancel");
-                }
-                return format!("Enter stage · ↑ {back} · {undo} undo · {cancel} cancel");
-            }
-            // The List add form (D6, ADR-0017): `Tab` flips Head/Tail rather
-            // than inserting a tab character (`editor_key`), so the hint
-            // names it explicitly — nothing else on this bar mentions `Tab`
-            // at all, and a reader would otherwise have no way to discover
-            // it short of trying it.
-            None if matches!(editor.target(), EditTarget::NewListElement { .. }) => {
-                let undo = state.keymap.hint(Action::EditorUndo).unwrap_or_default();
-                return format!("Enter stage   Tab head/tail   {undo} undo   {cancel} cancel");
-            }
-            // A ZSet score edit — existing member (D1, D4, ADR-0018): no
-            // `MEMBER`/`SCORE` split (`active_part` is `None` the same way a
-            // Hash field edit's is), but the score's own numeric guard
-            // still applies, with the same live indicator the add form's
-            // score part shows above.
-            None if matches!(editor.target(), EditTarget::ZSetScore { .. }) => {
-                let stage = state.keymap.hint(Action::EditorStage).unwrap_or_default();
-                let undo = state.keymap.hint(Action::EditorUndo).unwrap_or_default();
-                if !is_valid_zset_score(&String::from_utf8_lossy(&editor.text())) {
-                    return format!("invalid score · {undo} undo · {cancel} cancel");
-                }
-                return format!("{stage} stage   {undo} undo   {cancel} cancel");
-            }
-            // The TTL capture (D13, ADR-0019): the bar stays constant here,
-            // deliberately diverging from the ZSet score edit's live
-            // invalid/valid indicator just above — a TTL edit always
-            // resolves to a shown value (or a named refusal), and that
-            // belongs on the resolution line under the field, not in the
-            // bar (D13). `never persists` is spelled out because typing
-            // nothing is itself a valid write here, unlike every other
-            // capture on this bar.
-            None if matches!(editor.target(), EditTarget::Ttl { .. }) => {
-                let stage = state.keymap.hint(Action::EditorStage).unwrap_or_default();
-                return format!("{stage} apply · never persists · {cancel} cancel");
-            }
-            None => {
-                let stage = state.keymap.hint(Action::EditorStage).unwrap_or_default();
-                let undo = state.keymap.hint(Action::EditorUndo).unwrap_or_default();
-                return if is_value {
-                    format!("{stage} stage   {undo} undo   {cancel} cancel")
-                } else {
-                    format!("Enter stage   {undo} undo   {cancel} cancel")
-                };
-            }
-        }
-    }
-    // A Hash with the value cursor on a row, *and the value pane focused*:
-    // `e`/`a`/`d` all mean something there (D4), and the hint names the
-    // effective binding for each (R7.5). `Tab` (`Action::CyclePane`) can move
-    // focus back to the keys pane without clearing `cursor_active`, and `d`
-    // there is `DeleteKey`, not `HDEL` — the hint must not claim `remove`
-    // for a `d` that is about to stage something else entirely.
-    if !state.keys_pane_focused()
-        && state
-            .open
-            .as_ref()
-            .is_some_and(|o| o.cursor_active && matches!(o.value, Some(Value::Hash(_))))
-    {
-        let edit = state.keymap.hint(Action::Edit).unwrap_or_default();
-        let add = state.keymap.hint(Action::Add).unwrap_or_default();
-        let remove = state.keymap.hint(Action::Delete).unwrap_or_default();
-        return format!("{edit} edit · {add} add · {remove} remove");
-    }
-    // A Set with the value cursor on a row, and the value pane focused: only
-    // `a`/`d` mean anything (D1, ADR-0016) — `e` always refuses, since a
-    // member has no name half to keep while "the value changes" and there is
-    // no in-place edit to hint at. Naming `edit` here would promise a mode
-    // `open_editor` never opens.
-    if !state.keys_pane_focused()
-        && state
-            .open
-            .as_ref()
-            .is_some_and(|o| o.cursor_active && matches!(o.value, Some(Value::Set(_))))
-    {
-        let add = state.keymap.hint(Action::Add).unwrap_or_default();
-        let remove = state.keymap.hint(Action::Delete).unwrap_or_default();
-        return format!("{add} add · {remove} remove");
-    }
-    // A List with the value cursor on a row, and the value pane focused: all
-    // three mean something here, like a Hash (D1, ADR-0017) — an element has
-    // an identity, its index, that survives its bytes changing, so `e` is a
-    // real in-place edit rather than the refusal it is on a Set.
-    if !state.keys_pane_focused()
-        && state
-            .open
-            .as_ref()
-            .is_some_and(|o| o.cursor_active && matches!(o.value, Some(Value::List(_))))
-    {
-        let edit = state.keymap.hint(Action::Edit).unwrap_or_default();
-        let add = state.keymap.hint(Action::Add).unwrap_or_default();
-        let remove = state.keymap.hint(Action::Delete).unwrap_or_default();
-        return format!("{edit} edit · {add} add · {remove} remove");
-    }
-    // A ZSet with the value cursor on a row, and the value pane focused: all
-    // three mean something, like a Hash/List (D1, ADR-0018) — but `e` edits
-    // the *score*, never the member (D1), so the hint says `score`, not
-    // `edit`, matching `OpenKey::edit_verb`'s "editing score" wording — the
-    // one word D1 calls out so this is not a surprise.
-    if !state.keys_pane_focused()
-        && state
-            .open
-            .as_ref()
-            .is_some_and(|o| o.cursor_active && matches!(o.value, Some(Value::ZSet(_))))
-    {
-        let edit = state.keymap.hint(Action::Edit).unwrap_or_default();
-        let add = state.keymap.hint(Action::Add).unwrap_or_default();
-        let remove = state.keymap.hint(Action::Delete).unwrap_or_default();
-        return format!("{edit} score · {add} add · {remove} remove");
-    }
-    [
-        Action::Cancel,
-        Action::Refetch,
-        Action::ToggleReadOnly,
-        Action::Help,
-        Action::Quit,
-    ]
-    .into_iter()
-    .filter_map(|a| state.keymap.key_for(a).map(|k| (a, k)))
-    .map(|(a, k)| {
-        format!(
-            "{} {}",
-            key_label(&k),
-            a.label_in(
-                state.keys_pane_focused(),
-                state.liveness() == Liveness::Disconnected
-            )
-        )
-    })
-    .collect::<Vec<_>>()
-    .join("   ")
+/// The separator between hint bar entries. Three spaces, not `" · "` — the
+/// old hard-coded ladder used a bullet for some arms and this same run for
+/// others; one join, one spelling.
+const HINT_BAR_SEP: &str = "   ";
+
+/// Join `key label` for every row, `sep`-separated.
+fn join_rows(rows: &[help::HelpRow]) -> String {
+    rows.iter()
+        .map(|r| format!("{} {}", r.keys, r.label))
+        .collect::<Vec<_>>()
+        .join(HINT_BAR_SEP)
 }
 
-/// The help overlay: every binding in force, read from the same keymap.
-pub fn help_lines(state: &State) -> Vec<String> {
-    state
-        .keymap
-        .bindings()
-        .iter()
-        .map(|b| format!("{:<6}  {}", key_label(&b.key), b.action.label()))
-        .collect()
+/// The hint bar: `help::status`'s prefix if there is one, then `help::here`'s
+/// rows, then `help::everywhere`'s, fitted to `width` with the `help`
+/// binding pinned last so it never scrolls out of reach (PLAN's decision 4)
+/// — one model read by both this and the overlay (R7.5), so a rebound key
+/// or a Read-only refusal shows identically in both.
+///
+/// `width` is the caller's own — `frame` passes `area.width`, the Rect it is
+/// actually about to paint into — deliberately not `state.cols`: the two
+/// agree in the running app (`Msg::Resized` keeps them in lockstep), but
+/// nothing else in a frame reads `State::cols` in place of the `Rect` it was
+/// handed, and a great many tests build a `State` at one width and render it
+/// at another for convenience. Reading `state.cols` here would fit the bar
+/// to a width nothing on screen actually has.
+///
+/// Reads `help::context`, not `state.help` — the bar keeps describing the
+/// context underneath even while the overlay is drawn over it (same reason
+/// `help::context` itself reads `mode_beneath_help`, not `mode`).
+pub fn hint_bar(state: &State, width: u16) -> String {
+    let ctx = help::context(state);
+    let everywhere = help::everywhere(state);
+    // `help` is pinned last (decision 4) — split it out so it survives
+    // truncation even when nothing else does.
+    let (help_row, everywhere): (Vec<_>, Vec<_>) =
+        everywhere.into_iter().partition(|r| r.label == "help");
+    let mut rows = help::here(state, ctx);
+    rows.extend(everywhere);
+
+    let help_suffix = if help_row.is_empty() {
+        String::new()
+    } else {
+        format!("{HINT_BAR_SEP}{}", join_rows(&help_row))
+    };
+    let width = width as usize;
+    let budget = width.saturating_sub(help_suffix.chars().count());
+
+    let mut out = String::new();
+    if let Some(status) = help::status(state) {
+        out = status;
+    }
+    // Stop at the first row that would not fit, rather than skipping it and
+    // trying shorter ones after — the bar's rows are always a *prefix* of
+    // help's own (`hint_bar_is_a_prefix_of_help_for_every_context`, below,
+    // pins it), and skipping ahead would show a row out of the rank order
+    // `help::here`/`help::everywhere` put it in.
+    for row in &rows {
+        let entry = format!("{} {}", row.keys, row.label);
+        let candidate = if out.is_empty() {
+            entry
+        } else {
+            format!("{out}{HINT_BAR_SEP}{entry}")
+        };
+        if candidate.chars().count() > budget {
+            break;
+        }
+        out = candidate;
+    }
+    format!("{out}{help_suffix}")
 }
 
 /// How long ago the displayed value was read. Shown whenever Liveness is
@@ -1857,7 +1869,7 @@ mod hint_bar_tests {
     use super::*;
     use crate::render::layout::Pane;
     use crate::state::open::OpenKey;
-    use crate::state::value::IndexedValue;
+    use crate::state::value::{IndexedValue, Value};
     use crate::state::{EditBuffer, State};
 
     fn open_with_list(items: &[&str], total: usize) -> State {
@@ -1881,10 +1893,13 @@ mod hint_bar_tests {
     fn a_list_with_the_cursor_active_and_the_value_pane_focused_hints_all_three() {
         let mut s = open_with_list(&["alpha"], 1);
         s.open.as_mut().unwrap().cursor_active = true;
-        let hint = hint_bar(&s);
+        let hint = hint_bar(&s, s.cols);
         assert!(hint.contains("edit"), "{hint}");
         assert!(hint.contains("add"), "{hint}");
-        assert!(hint.contains("remove"), "{hint}");
+        // "delete", not "remove" (M3, decision 6: labels name the target —
+        // an element is *deleted*, a Set/ZSet *member* is *removed*, and the
+        // two words now distinguish them on the bar rather than sharing one).
+        assert!(hint.contains("delete"), "{hint}");
     }
 
     #[test]
@@ -1895,7 +1910,7 @@ mod hint_bar_tests {
         let mut s = open_with_list(&["alpha"], 1);
         s.open.as_mut().unwrap().cursor_active = true;
         s.focus = Pane::Keys;
-        let hint = hint_bar(&s);
+        let hint = hint_bar(&s, s.cols);
         assert!(!hint.contains("edit · "), "{hint}");
     }
 
@@ -1906,7 +1921,7 @@ mod hint_bar_tests {
             .as_mut()
             .unwrap()
             .begin_edit(EditBuffer::new_list_element());
-        let hint = hint_bar(&s);
+        let hint = hint_bar(&s, s.cols);
         assert!(hint.contains("Tab"), "{hint}");
         assert!(hint.contains("head/tail"), "{hint}");
 
@@ -1922,7 +1937,11 @@ mod hint_bar_tests {
             .as_mut()
             .unwrap()
             .begin_edit(EditBuffer::new_hash_field());
-        assert!(!hint_bar(&hash).contains("Tab"), "{}", hint_bar(&hash));
+        assert!(
+            !hint_bar(&hash, hash.cols).contains("Tab"),
+            "{}",
+            hint_bar(&hash, hash.cols)
+        );
     }
 
     #[test]
@@ -1934,7 +1953,11 @@ mod hint_bar_tests {
             .as_mut()
             .unwrap()
             .begin_edit(EditBuffer::list_element(0, b"alpha").unwrap());
-        assert!(!hint_bar(&s).contains("Tab"), "{}", hint_bar(&s));
+        assert!(
+            !hint_bar(&s, s.cols).contains("Tab"),
+            "{}",
+            hint_bar(&s, s.cols)
+        );
     }
 
     #[test]
@@ -1943,7 +1966,7 @@ mod hint_bar_tests {
         let mut buffer = EditBuffer::new_list_element();
         buffer.toggle_list_end();
         s.open.as_mut().unwrap().begin_edit(buffer);
-        let hint = hint_bar(&s);
+        let hint = hint_bar(&s, s.cols);
         assert!(hint.contains("Tab"), "{hint}");
     }
 }
@@ -1958,7 +1981,7 @@ mod zset_hint_bar_tests {
     use super::*;
     use crate::render::layout::Pane;
     use crate::state::open::OpenKey;
-    use crate::state::value::ScoredValue;
+    use crate::state::value::{ScoredValue, Value};
     use crate::state::{EditBuffer, State};
 
     fn open_with_zset(entries: &[(&[u8], f64)], total: usize) -> State {
@@ -1982,12 +2005,16 @@ mod zset_hint_bar_tests {
     fn a_zset_with_the_cursor_active_hints_score_not_edit() {
         let mut s = open_with_zset(&[(b"alpha", 1.0)], 1);
         s.open.as_mut().unwrap().cursor_active = true;
-        let hint = hint_bar(&s);
+        let hint = hint_bar(&s, s.cols);
         assert!(hint.contains("score"), "{hint}");
         assert!(
-            !hint.contains("edit"),
+            !hint.contains("e edit"),
             "D1: e edits the score, not e edit — {hint}"
         );
+        // "edit ttl" (`t`, M3) is a legitimate row on this same bar now and
+        // does contain the substring "edit" — D1 only ever constrained the
+        // `e` row's own label, never the whole bar's text, so the check
+        // above is scoped to that row rather than the bar as a whole.
         assert!(hint.contains("add"), "{hint}");
         assert!(hint.contains("remove"), "{hint}");
     }
@@ -1997,7 +2024,7 @@ mod zset_hint_bar_tests {
         let mut s = open_with_zset(&[(b"alpha", 1.0)], 1);
         s.open.as_mut().unwrap().cursor_active = true;
         s.focus = Pane::Keys;
-        let hint = hint_bar(&s);
+        let hint = hint_bar(&s, s.cols);
         assert!(!hint.contains("score · "), "{hint}");
     }
 
@@ -2008,7 +2035,7 @@ mod zset_hint_bar_tests {
             .as_mut()
             .unwrap()
             .begin_edit(EditBuffer::zset_score(b"alpha", 1.0));
-        let hint = hint_bar(&s);
+        let hint = hint_bar(&s, s.cols);
         assert!(!hint.contains("invalid"), "{hint}");
     }
 
@@ -2021,7 +2048,7 @@ mod zset_hint_bar_tests {
         let mut buffer = EditBuffer::zset_score(b"alpha", 1.0);
         buffer.insert_char('x');
         s.open.as_mut().unwrap().begin_edit(buffer);
-        let hint = hint_bar(&s);
+        let hint = hint_bar(&s, s.cols);
         assert!(hint.contains("invalid"), "{hint}");
     }
 
@@ -2032,7 +2059,7 @@ mod zset_hint_bar_tests {
             .as_mut()
             .unwrap()
             .begin_edit(EditBuffer::new_zset_member());
-        let hint = hint_bar(&s);
+        let hint = hint_bar(&s, s.cols);
         assert!(hint.contains("score"), "{hint}");
     }
 
@@ -2044,7 +2071,7 @@ mod zset_hint_bar_tests {
         buffer.name_push('u');
         buffer.name_push('p');
         s.open.as_mut().unwrap().begin_edit(buffer);
-        let hint = hint_bar(&s);
+        let hint = hint_bar(&s, s.cols);
         assert!(hint.contains("member exists"), "{hint}");
     }
 
@@ -2056,7 +2083,7 @@ mod zset_hint_bar_tests {
         buffer.advance_to_value();
         buffer.insert_char('5');
         s.open.as_mut().unwrap().begin_edit(buffer);
-        let hint = hint_bar(&s);
+        let hint = hint_bar(&s, s.cols);
         assert!(hint.contains("stage"), "{hint}");
         assert!(!hint.contains("invalid"), "{hint}");
     }
@@ -2069,7 +2096,7 @@ mod zset_hint_bar_tests {
         buffer.advance_to_value();
         buffer.insert_str("nope");
         s.open.as_mut().unwrap().begin_edit(buffer);
-        let hint = hint_bar(&s);
+        let hint = hint_bar(&s, s.cols);
         assert!(hint.contains("invalid"), "{hint}");
     }
 }

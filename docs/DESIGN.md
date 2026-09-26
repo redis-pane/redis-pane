@@ -106,7 +106,7 @@ terminal is small and the situation is urgent.
 
 | Key | Action | Scope |
 |---|---|---|
-| `?` | Help overlay | global |
+| `?` / `F1` | Contextual help overlay (`F1` also works while typing) | global |
 | `Tab` | Move focus between the panes | global |
 | `g` + key | Jump to view | global |
 | `Ctrl-C` ×2 | Quit (single press = cancel current op) | global |
@@ -128,6 +128,18 @@ terminal is small and the situation is urgent.
 
 Bindings are user-overridable in config; the hint bar and the help overlay (`?`) both render the
 *effective* binding, so a remap is never a lie the hint bar tells.
+
+**Help is contextual** (R7.5, `crates/core/src/help.rs`). `?` — or `F1`, which also works inside
+the filter, the inline editor and the confirm dialog, where `?` is text or is swallowed — opens an
+overlay listing what the keys do *here*: a HERE block for the focused context (keys pane; value
+pane per type × value cursor; each editor target; filter; confirm), then an EVERYWHERE line of
+global keys. Labels name the target (`delete field`, `remove member`, `edit score`), not just the
+verb. A key that starts a mutation is dimmed under Read-only Mode with its reason and
+`· preview only` — it still stages the preview, which confirm then refuses; `⌃R` is omitted
+outright under the `replica` reason. Help is modal: only `Esc`, `?`, `F1` (close) and `Tab` (view
+the other pane's keys without moving focus) act while it is open, so pressing `d` to see what it
+does stages nothing. Every context fits 80×24 without scrolling. The hint bar is the same row
+list — the first rows that fit, with the help key pinned last — so the two cannot disagree.
 
 **Keymap growth rule.** The Palette was the one check against this keymap growing without limit
 (CLAUDE.md); withdrawing it (ADR-0020) replaces that check with a written rule instead of a

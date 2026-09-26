@@ -222,7 +222,9 @@ config file; a **Connection** is a live session, which may be **ad-hoc** (no Pro
 - **R7.2** Truecolor, 256-color, and no-color/monochrome fallbacks.
 - **R7.3** Mouse support: click to focus, scroll, drag to resize splits.
 - **R7.4** Errors surface as non-blocking, dismissible notifications with the failing command.
-- **R7.5** Full-app help overlay and per-pane contextual key hints always visible.
+- **R7.5** Contextual help overlay (`?`/`F1`) listing every binding in force in the focused
+  context plus global ones, dimmed with a reason where refused; the hint bar is its first N rows,
+  always visible.
 - **R7.6** Single self-contained binary, no runtime dependency.
 - **R7.7** The default layout is two panes — keyspace and current value. Anything else reaches
   the screen through a dismissible overlay, and nothing else holds columns permanently. New

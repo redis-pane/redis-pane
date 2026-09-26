@@ -169,10 +169,11 @@ fn a_different_clock_reading_does_change_the_frame() {
 
 // ── M0.11 — every readout in DESIGN §6.8 ────────────────────────────────────
 
+use redis_pane_core::help;
 use redis_pane_core::keymap::{Action, Keymap};
 use redis_pane_core::msg::{KeyCode, KeyPress};
-use redis_pane_core::render::{help_lines, hint_bar, status_readout};
-use redis_pane_core::state::{ReadOnlyReason, ServerCondition, Tracking as Tk};
+use redis_pane_core::render::{hint_bar, status_readout};
+use redis_pane_core::state::{HelpView, ReadOnlyReason, ServerCondition, Tracking as Tk};
 
 const CLOCK: FixedClock = FixedClock(74_000);
 
@@ -389,7 +390,9 @@ fn live_states_no_age_manual_states_one_and_reconnecting_states_the_countdown() 
 fn golden_help_overlay_frame() {
     let state = State {
         link: up(Tk::Armed),
-        help_open: true,
+        help: Some(HelpView {
+            pane: redis_pane_core::render::layout::Pane::Keys,
+        }),
         rows: 14,
         ..base()
     };
@@ -406,34 +409,50 @@ fn golden_help_overlay_frame() {
 
 #[test]
 fn golden_hint_bar_default_bindings() {
-    assert_golden("hint_bar_default", &hint_bar(&base()));
-}
-
-#[test]
-fn golden_help_overlay() {
-    assert_golden("help_overlay", &help_lines(&base()).join("\n"));
+    let state = base();
+    assert_golden("hint_bar_default", &hint_bar(&state, state.cols));
 }
 
 /// R7.5's proof: rebinding an action changes what the screen says.
 #[test]
 fn rebinding_quit_changes_the_hint_bar_and_the_help_overlay() {
-    let before = base();
+    // Wide enough that the bar's width-fitting (M3) never has to drop
+    // anything — this test is about the binding, not the fitting.
+    let before = State {
+        cols: 400,
+        ..base()
+    };
     assert!(
-        hint_bar(&before).contains("q quit"),
+        hint_bar(&before, before.cols).contains("q quit"),
         "{}",
-        hint_bar(&before)
+        hint_bar(&before, before.cols)
     );
 
     let mut keymap = Keymap::default();
     keymap.bind(Action::Quit, KeyPress::ctrl(KeyCode::Char('x')));
-    let after = State { keymap, ..base() };
+    let after = State {
+        cols: 400,
+        keymap,
+        ..base()
+    };
 
-    assert!(hint_bar(&after).contains("⌃X quit"), "{}", hint_bar(&after));
     assert!(
-        !hint_bar(&after).contains("q quit"),
+        hint_bar(&after, after.cols).contains("⌃X quit"),
+        "{}",
+        hint_bar(&after, after.cols)
+    );
+    assert!(
+        !hint_bar(&after, after.cols).contains("q quit"),
         "the stale label must be gone"
     );
-    assert!(help_lines(&after).iter().any(|l| l.starts_with("⌃X")));
+    // `help_lines` (the flat list of every binding) is gone with the
+    // contextual overlay — `help::everywhere`'s "quit" row is the same proof
+    // now: the rebinding shows up wherever help reads the keymap from.
+    assert!(
+        help::everywhere(&after)
+            .iter()
+            .any(|r| r.label == "quit" && r.keys == "⌃X")
+    );
 }
 
 /// The same rule, applied to the readout: a rebound Refetch must show the new
@@ -1677,11 +1696,19 @@ fn golden_copy_notice() {
 #[test]
 fn the_copy_binding_appears_in_the_help_overlay() {
     // Keybindings are data, so the overlay follows automatically (R7.5).
+    // `base()` has nothing open and Keys focused, so `help::here`'s `copy`
+    // row is the keys pane's (Copy is focus-dependent, not scoped to a
+    // value type) — this is `help_lines`'s replacement (M3: the overlay is
+    // now contextual, not a flat list of every binding).
     let mut keymap = Km::default();
     assert!(keymap.hint(Act::Copy).is_some());
     keymap.bind(Act::Copy, KeyPress::ctrl(KC::Char('y')));
     let state = State { keymap, ..base() };
-    assert!(help_lines(&state).iter().any(|l| l.starts_with("⌃Y")));
+    assert!(
+        help::here(&state, help::context(&state))
+            .iter()
+            .any(|r| r.keys == "⌃Y")
+    );
 }
 
 #[test]
@@ -1798,7 +1825,12 @@ fn golden_editor_hint_bar() {
     let editor = EditBuffer::from_value(&Value::Str(StringValue::new("v1", 65)), 0).unwrap();
     let open = state.open.as_mut().unwrap();
     open.begin_edit(editor);
-    assert_eq!(hint_bar(&state), "⌃S stage   ⌃Z undo   Esc cancel");
+    // `F1 help` is pinned last now (decision 4/5, M3): every context keeps
+    // help discoverable, including the editor, where `?` no longer opens it.
+    assert_eq!(
+        hint_bar(&state, state.cols),
+        "⌃S stage   ⌃Z undo   Esc cancel   F1 help"
+    );
 }
 
 #[test]
@@ -1944,7 +1976,13 @@ fn golden_hint_bar_names_all_three_hash_field_actions_with_a_cursor_active() {
     let mut state = opened("user:8812:session", hash_value(), 2_537);
     state.focus = Pane::Value;
     state.open.as_mut().unwrap().cursor_active = true;
-    assert_eq!(hint_bar(&state), "e edit · a add · d remove");
+    // The bar is contextual now (M3): more than three rows show, and the
+    // labels name the target (decision 6) rather than the bare verb — the
+    // meaning this test pins is still all three actions being on offer.
+    let hint = hint_bar(&state, state.cols);
+    assert!(hint.contains("e edit field"), "{hint}");
+    assert!(hint.contains("a add field"), "{hint}");
+    assert!(hint.contains("d delete field"), "{hint}");
 }
 
 /// D4: `Tab` (`Action::CyclePane`) can move focus back to the keys pane
@@ -1957,7 +1995,7 @@ fn the_hash_field_hint_does_not_claim_remove_when_the_keys_pane_is_focused() {
     let mut state = opened("user:8812:session", hash_value(), 2_537);
     state.focus = Pane::Keys;
     state.open.as_mut().unwrap().cursor_active = true;
-    let hint = hint_bar(&state);
+    let hint = hint_bar(&state, state.cols);
     assert!(
         !hint.contains("remove"),
         "keys-pane `d` stages DeleteKey, not HDEL: {hint}"
@@ -2070,7 +2108,16 @@ fn golden_hint_bar_names_only_add_and_remove_for_a_set_with_a_cursor_active() {
     let mut state = opened("user:8812:session", set_value(), 2_537);
     state.focus = Pane::Value;
     state.open.as_mut().unwrap().cursor_active = true;
-    assert_eq!(hint_bar(&state), "a add · d remove");
+    let hint = hint_bar(&state, state.cols);
+    assert!(hint.contains("a add member"), "{hint}");
+    assert!(hint.contains("d remove member"), "{hint}");
+    // "edit ttl" (`t`, M3) is on this bar too and does contain "edit" — the
+    // constraint is that `e` itself never gets a row for a Set, not that
+    // the word never appears anywhere on the bar.
+    assert!(
+        !hint.contains("e edit"),
+        "D1: e always refuses on a Set, so there is no edit row at all: {hint}"
+    );
 }
 
 // ── PLAN M2 task 8: editing List elements (D1–D8, ADR-0017) ────────────────
@@ -2213,7 +2260,10 @@ fn golden_hint_bar_names_all_three_list_element_actions_with_a_cursor_active() {
     let mut state = opened("user:8812:session", list_value(), 2_537);
     state.focus = Pane::Value;
     state.open.as_mut().unwrap().cursor_active = true;
-    assert_eq!(hint_bar(&state), "e edit · a add · d remove");
+    let hint = hint_bar(&state, state.cols);
+    assert!(hint.contains("e edit element"), "{hint}");
+    assert!(hint.contains("a add element"), "{hint}");
+    assert!(hint.contains("d delete element"), "{hint}");
 }
 
 // ── PLAN M2 task 9: editing a ZSet's score, add/remove members (D1–D8, ADR-0018) ──
@@ -2319,9 +2369,9 @@ fn golden_zset_add_form_invalid_score_shows_the_live_indicator() {
     // sibling Hash/List/Set hint-bar tests assert `hint_bar(&state)` rather
     // than searching a shorter frame that would never show it.
     assert!(
-        hint_bar(&state).contains("invalid score"),
+        hint_bar(&state, state.cols).contains("invalid score"),
         "the live indicator must be on offer: {}",
-        hint_bar(&state)
+        hint_bar(&state, state.cols)
     );
     assert_golden("zset_form_add_invalid_score", &draw(&state, 130, 22));
 }
@@ -2414,7 +2464,14 @@ fn golden_hint_bar_names_all_three_zset_actions_with_a_cursor_active() {
     let mut state = opened("user:8812:cart", zset_value(), 720);
     state.focus = Pane::Value;
     state.open.as_mut().unwrap().cursor_active = true;
-    assert_eq!(hint_bar(&state), "e score · a add · d remove");
+    let hint = hint_bar(&state, state.cols);
+    assert!(hint.contains("e score"), "{hint}");
+    assert!(
+        !hint.contains("e edit"),
+        "D1: the ZSet row says score, never edit: {hint}"
+    );
+    assert!(hint.contains("a add member"), "{hint}");
+    assert!(hint.contains("d remove member"), "{hint}");
 }
 
 /// PLAN M2 row 9's "Proves" clause, pinned directly: a score edit's dialog
@@ -3464,17 +3521,141 @@ fn golden_the_three_ttl_dialogs_are_visibly_different() {
 #[test]
 fn golden_ttl_hint_bar_is_constant_whatever_is_typed() {
     let state = open_ttl_field(opened("session:9f3a", hash_value(), 2_520));
-    let resting = render::hint_bar(&state);
-    assert_eq!(resting, "⌃S apply · never persists · Esc cancel");
+    let resting = render::hint_bar(&state, state.cols);
+    // "never persists" is `help::status`'s prefix now (M3), not a row of its
+    // own, and `F1 help` is pinned last — the meaning pinned here (the bar
+    // does not change with what's typed) is unaffected; only the layout is.
+    assert_eq!(resting, "never persists   ⌃S apply   Esc cancel   F1 help");
     for typed in ["5m", "+30m", "0", "1.5h", ""] {
         let s = retype_ttl(
             open_ttl_field(opened("session:9f3a", hash_value(), 2_520)),
             typed,
         );
         assert_eq!(
-            render::hint_bar(&s),
+            render::hint_bar(&s, s.cols),
             resting,
             "the bar must not change for {typed:?} — the resolution line carries that"
         );
     }
+}
+
+// ── M3 — contextual help overlay, per context, at 80 and 130 columns ───────
+//
+// `help_overlay.txt`/`help_overlay_frame.txt` (the old flat every-binding
+// list) are replaced by one fixture per named context, at both widths PLAN's
+// verification list asks for. Each is the whole frame — title bar, keys
+// pane, hint bar underneath, and the overlay on top — so a regression in
+// how the overlay composes with the rest of the screen shows up here too,
+// the same way `golden_help_overlay_frame` (still kept, unnamed-context)
+// already did for the old design.
+
+fn help_frame(mut state: State, cols: u16) -> String {
+    state.help = Some(HelpView { pane: state.focus });
+    draw(&state, cols, 24)
+}
+
+#[test]
+fn golden_help_keys_pane_flat() {
+    let state = many_keys();
+    assert_eq!(state.focus, Pane::Keys);
+    assert!(!state.tree_mode, "many_keys() starts flat (State::default)");
+    assert_golden("help_keys_flat_80", &help_frame(state.clone(), 80));
+    assert_golden("help_keys_flat_130", &help_frame(state, 130));
+}
+
+#[test]
+fn golden_help_keys_pane_tree() {
+    let mut state = many_keys();
+    state.tree_mode = true;
+    state.rebuild_list();
+    assert_golden("help_keys_tree_80", &help_frame(state.clone(), 80));
+    assert_golden("help_keys_tree_130", &help_frame(state, 130));
+}
+
+#[test]
+fn golden_help_value_hash_cursor_on() {
+    let mut state = opened("user:8812:session", hash_value(), 2_537);
+    state.focus = Pane::Value;
+    state.open.as_mut().unwrap().cursor_active = true;
+    assert_golden("help_value_hash_cursor_80", &help_frame(state.clone(), 80));
+    assert_golden("help_value_hash_cursor_130", &help_frame(state, 130));
+}
+
+#[test]
+fn golden_help_value_set_cursor_on() {
+    let mut state = opened("user:8812:session", set_value(), 2_537);
+    state.focus = Pane::Value;
+    state.open.as_mut().unwrap().cursor_active = true;
+    assert_golden("help_value_set_cursor_80", &help_frame(state.clone(), 80));
+    assert_golden("help_value_set_cursor_130", &help_frame(state, 130));
+}
+
+#[test]
+fn golden_help_value_zset_cursor_on() {
+    let mut state = opened("user:8812:cart", zset_value(), 720);
+    state.focus = Pane::Value;
+    state.open.as_mut().unwrap().cursor_active = true;
+    assert_golden("help_value_zset_cursor_80", &help_frame(state.clone(), 80));
+    assert_golden("help_value_zset_cursor_130", &help_frame(state, 130));
+}
+
+#[test]
+fn golden_help_value_string() {
+    let mut state = opened(
+        "user:8812:session",
+        Value::Str(StringValue::new("v1", 65)),
+        600,
+    );
+    state.focus = Pane::Value;
+    assert_golden("help_value_string_80", &help_frame(state.clone(), 80));
+    assert_golden("help_value_string_130", &help_frame(state, 130));
+}
+
+#[test]
+fn golden_help_editor_hash_field() {
+    let mut state = opened("user:8812:session", hash_value(), 2_537);
+    state.focus = Pane::Value;
+    state.open.as_mut().unwrap().cursor_active = true;
+    let (state, _) = update(state, Msg::Key(KeyPress::plain(KeyCode::Char('e'))));
+    assert!(
+        state.open.as_ref().unwrap().typing().is_some(),
+        "editor open"
+    );
+    assert_golden("help_editor_hash_field_80", &help_frame(state.clone(), 80));
+    assert_golden("help_editor_hash_field_130", &help_frame(state, 130));
+}
+
+#[test]
+fn golden_help_confirm() {
+    let mut state = opened("user:8812:session", hash_value(), 2_537);
+    state.focus = Pane::Value;
+    state.open.as_mut().unwrap().cursor_active = true;
+    let (state, _) = update(state, Msg::Key(KeyPress::plain(KeyCode::Char('d'))));
+    assert!(
+        matches!(state.confirm, Some(PendingMutation::DeleteHashField { .. })),
+        "a mutation must be staged"
+    );
+    assert_golden("help_confirm_80", &help_frame(state.clone(), 80));
+    assert_golden("help_confirm_130", &help_frame(state, 130));
+}
+
+#[test]
+fn golden_help_read_only_dimmed() {
+    let mut state = opened("user:8812:session", hash_value(), 2_537);
+    state.focus = Pane::Value;
+    state.open.as_mut().unwrap().cursor_active = true;
+    state.read_only = Some(ReadOnlyReason::Environment);
+    assert_golden("help_read_only_dimmed_80", &help_frame(state.clone(), 80));
+    assert_golden("help_read_only_dimmed_130", &help_frame(state, 130));
+}
+
+#[test]
+fn golden_help_disconnected() {
+    let mut state = many_keys();
+    state.link = Link::Reconnecting {
+        attempt: 1,
+        retry_in_ms: None,
+    };
+    assert_golden("help_disconnected_80", &help_frame(state.clone(), 80));
+    assert_golden("help_disconnected_130", &help_frame(state, 130));
 }

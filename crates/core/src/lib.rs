@@ -11,6 +11,7 @@
 pub mod clock;
 pub mod command;
 pub mod config;
+pub mod help;
 pub mod key;
 pub mod keymap;
 pub mod msg;

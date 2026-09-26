@@ -240,15 +240,35 @@ pub fn update(mut state: State, msg: Msg) -> (State, Vec<Command>) {
 /// fields that must agree are two fields that can disagree.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Mode {
+    /// The contextual help overlay is open (M3). Ranked first — above
+    /// Confirm — because help drawn over a confirm dialog is on top, so it
+    /// owns the keys: `Esc`/`?`/`F1` close it and `Tab` flips the viewed
+    /// pane, and every other keypress (`y`, a stray `d`) must be a no-op
+    /// rather than reaching the dialog underneath (decision 8,
+    /// `docs/plans/m3-contextual-help.md`: "pressing `d` to 'see what
+    /// happens' must not stage a delete").
+    Help,
     Confirm,
     Editing,
     Filtering,
     Normal,
 }
 
-/// The one place mode precedence is decided — confirm dialog, then editor,
-/// then filter, then Normal.
+/// The one place mode precedence is decided — help overlay, then confirm
+/// dialog, then editor, then filter, then Normal.
 pub(crate) fn mode(state: &State) -> Mode {
+    if state.help.is_some() {
+        return Mode::Help;
+    }
+    mode_beneath_help(state)
+}
+
+/// `mode`'s precedence with the help overlay set aside — what
+/// [`crate::help::context`] describes (help is drawn *over* a context, not
+/// instead of one: closing it must reveal exactly the mode that was showing
+/// before it opened), and what `mode` itself falls back to once Help is
+/// ruled out. Never returns [`Mode::Help`].
+pub(crate) fn mode_beneath_help(state: &State) -> Mode {
     // A staged mutation is a modal dialog: it is the only thing on screen
     // that can act on the keypress until it is confirmed or dismissed,
     // exactly as `state.filtering`, below, is the only thing capturing text.
@@ -279,7 +299,28 @@ pub(crate) fn mode(state: &State) -> Mode {
 /// The hint bar and help overlay read the same map, so what is shown is always
 /// the effective binding after user overrides (R7.5).
 fn key_press(mut state: State, key: KeyPress) -> (State, Vec<Command>) {
-    match mode(&state) {
+    let current_mode = mode(&state);
+    // `F1` opens help from every mode (decision 5) — checked here, before
+    // Confirm/Editing/Filtering get first crack at the key, since each of
+    // those hardcodes its own vocabulary rather than resolving through the
+    // keymap and would otherwise swallow it (a stray `y`, a typed
+    // character). Resolved through the keymap (`Action::Help`'s effective
+    // binding), not a hard-coded action — only the *shape* of the key
+    // (`KeyCode::F(_)`) is hard-coded, to tell it apart from `?`, which stays
+    // Normal-mode-only (`?` is a typed character in Filtering/Editing and is
+    // swallowed in Confirm — decision 5: "`?` keeps working wherever it does
+    // today (Normal mode)"). Normal mode needs no special case: `F1` already
+    // resolves to `Action::Help` there through the ordinary path below.
+    if matches!(
+        current_mode,
+        Mode::Confirm | Mode::Editing | Mode::Filtering
+    ) && matches!(key.code, KeyCode::F(_))
+        && state.keymap.action_for(&key) == Some(Action::Help)
+    {
+        return open_help(state);
+    }
+    match current_mode {
+        Mode::Help => return help_key(state, key),
         Mode::Confirm => {
             // `confirm_key` needs the `PendingMutation` by value: `mode` only
             // answers which mode is active, so the take() still happens here.
@@ -307,6 +348,50 @@ fn key_press(mut state: State, key: KeyPress) -> (State, Vec<Command>) {
     dispatch_action(state, action)
 }
 
+/// Open help, viewing whichever pane is currently focused — `HelpView::pane`
+/// starts there and `Tab` flips it (decision 7). Shared by `Action::Help`'s
+/// Normal-mode dispatch and the `F1` shortcut above, so there is exactly one
+/// place that decides what "open help" means.
+fn open_help(mut state: State) -> (State, Vec<Command>) {
+    state.help = Some(crate::state::HelpView { pane: state.focus });
+    (state, Vec::new())
+}
+
+/// Keys read while help is open (Mode::Help, ranked first): `Esc`, `?` and
+/// `F1` all close it; `Tab` flips which pane's context is viewed, but only in
+/// the two contexts that have another pane to point at
+/// (`crate::help::HelpContext::Keys`/`Value` — decision 7: "Only offered for
+/// the two pane contexts"); every other key is a no-op — help is modal
+/// (decision 8), so a stray `d` must not reach the dialog this is drawn over.
+fn help_key(mut state: State, key: KeyPress) -> (State, Vec<Command>) {
+    match key.code {
+        KeyCode::Esc => {
+            state.help = None;
+        }
+        KeyCode::Char('?') if !key.ctrl && !key.alt => {
+            state.help = None;
+        }
+        KeyCode::F(1) => {
+            state.help = None;
+        }
+        KeyCode::Tab => {
+            let ctx = crate::help::context(&state);
+            if matches!(
+                ctx,
+                crate::help::HelpContext::Keys { .. } | crate::help::HelpContext::Value(_)
+            ) && let Some(view) = &mut state.help
+            {
+                view.pane = match view.pane {
+                    Pane::Keys => Pane::Value,
+                    Pane::Value => Pane::Keys,
+                };
+            }
+        }
+        _ => {}
+    }
+    (state, Vec::new())
+}
+
 /// What a resolved `Action` actually does — the one dispatch step `key_press`
 /// (above) calls once the mode gate and the `pane_is_on_screen` gate have
 /// both passed, kept separate from `key_press` itself so a resolved `Action`
@@ -314,10 +399,11 @@ fn key_press(mut state: State, key: KeyPress) -> (State, Vec<Command>) {
 fn dispatch_action(mut state: State, action: Action) -> (State, Vec<Command>) {
     match action {
         Action::Quit => quit(state),
-        Action::Help => {
-            state.help_open = !state.help_open;
-            (state, Vec::new())
-        }
+        // Reached only from `Mode::Normal` (`key_press`'s mode match), which
+        // itself only happens when `state.help` is `None` — `mode` ranks
+        // `Mode::Help` first, so this is always an open, never a toggle-off;
+        // `help_key` is what closes it.
+        Action::Help => open_help(state),
         Action::Cancel => cancel(state),
         Action::Refetch => refetch_action(state),
         Action::CyclePane => {
@@ -440,10 +526,9 @@ fn dispatch_action(mut state: State, action: Action) -> (State, Vec<Command>) {
 /// then value-cursor mode, then an in-flight scan. One keypress, one
 /// meaning.
 fn cancel(mut state: State) -> (State, Vec<Command>) {
-    if state.help_open {
-        state.help_open = false;
-        return (state, Vec::new());
-    }
+    // Help no longer has a branch here: `Mode::Help` outranks `Mode::Normal`
+    // (`mode`'s precedence), so `Esc` while help is open never reaches
+    // `dispatch_action`/`cancel` at all — `help_key` closes it directly.
     if state.error.is_some() {
         state.error = None;
         return (state, Vec::new());
@@ -639,14 +724,67 @@ mod tests {
     }
 
     #[test]
-    fn question_mark_toggles_the_help_overlay_and_esc_closes_it() {
+    fn question_mark_opens_the_help_overlay_and_esc_closes_it() {
         let (s, _) = update(
             State::default(),
             Msg::Key(KeyPress::plain(KeyCode::Char('?'))),
         );
-        assert!(s.help_open);
+        assert!(s.help.is_some());
         let (s, _) = update(s, Msg::Key(KeyPress::plain(KeyCode::Esc)));
-        assert!(!s.help_open);
+        assert!(s.help.is_none());
+    }
+
+    #[test]
+    fn f1_opens_help_from_normal_mode_too() {
+        let (s, _) = update(State::default(), Msg::Key(KeyPress::plain(KeyCode::F(1))));
+        assert!(s.help.is_some());
+    }
+
+    #[test]
+    fn f1_opens_help_from_filter_capture_where_question_mark_only_types() {
+        let mut s = State::default();
+        (s, _) = update(s, Msg::Key(KeyPress::plain(KeyCode::Char('/'))));
+        assert!(s.filtering);
+        let (s, _) = update(s, Msg::Key(KeyPress::plain(KeyCode::F(1))));
+        assert!(s.help.is_some());
+        assert!(s.filtering, "F1 opens help without abandoning the filter");
+    }
+
+    #[test]
+    fn question_mark_only_types_in_filter_capture_it_does_not_open_help() {
+        let mut s = State::default();
+        (s, _) = update(s, Msg::Key(KeyPress::plain(KeyCode::Char('/'))));
+        let (s, _) = update(s, Msg::Key(KeyPress::plain(KeyCode::Char('?'))));
+        assert!(s.help.is_none());
+        assert_eq!(s.list.filter, "?");
+    }
+
+    #[test]
+    fn help_is_modal_a_stray_d_while_it_is_open_stages_nothing() {
+        let mut s = State::default();
+        (s, _) = update(s, Msg::Key(KeyPress::plain(KeyCode::Char('?'))));
+        assert!(s.help.is_some());
+        let (s, cmds) = update(s, Msg::Key(KeyPress::plain(KeyCode::Char('d'))));
+        assert!(s.help.is_some(), "still open — `d` is a no-op, not a close");
+        assert!(s.confirm.is_none(), "nothing staged");
+        assert!(cmds.is_empty());
+    }
+
+    #[test]
+    fn tab_flips_the_viewed_pane_in_help_without_moving_real_focus() {
+        let mut s = viewing();
+        assert_eq!(s.focus, Pane::Value);
+        (s, _) = update(s, Msg::Key(KeyPress::plain(KeyCode::Char('?'))));
+        let view = s.help.expect("help open");
+        assert_eq!(view.pane, Pane::Value);
+
+        let (s, _) = update(s, Msg::Key(KeyPress::plain(KeyCode::Tab)));
+        assert_eq!(
+            s.help.expect("still open").pane,
+            Pane::Keys,
+            "the viewed pane flipped"
+        );
+        assert_eq!(s.focus, Pane::Value, "real focus did not move");
     }
 
     /// A key open in the Viewer *and focused*, at a two-pane width — the state
@@ -1209,10 +1347,10 @@ mod stack_navigation_tests {
         // closes before backing out of the navigation underneath it.
         let mut state = browsing();
         (state, _) = update(state, Msg::Key(KeyPress::plain(KeyCode::Char('l'))));
-        state.help_open = true;
+        state.help = Some(crate::state::HelpView { pane: state.focus });
 
         let (state, _) = update(state, Msg::Key(KeyPress::plain(KeyCode::Esc)));
-        assert!(!state.help_open);
+        assert!(state.help.is_none());
         assert_eq!(
             state.focus,
             Pane::Value,

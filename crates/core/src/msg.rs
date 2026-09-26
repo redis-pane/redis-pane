@@ -34,6 +34,10 @@ pub enum KeyCode {
     PageUp,
     PageDown,
     Delete,
+    /// A function key, `F1`–`F(255)`. Added for `F1` (contextual help, M3):
+    /// a global alias for `Action::Help` that works from every mode, since
+    /// `?` is a typed character or is swallowed everywhere but Normal mode.
+    F(u8),
 }
 
 /// A keypress with its modifiers.

@@ -258,6 +258,7 @@ pub fn key_label(key: &KeyPress) -> String {
         KeyCode::PageUp => "PgUp".into(),
         KeyCode::PageDown => "PgDn".into(),
         KeyCode::Delete => "Del".into(),
+        KeyCode::F(n) => format!("F{n}"),
     };
     match (key.ctrl, key.alt) {
         (true, _) => format!("⌃{}", base.to_uppercase()),
@@ -298,6 +299,18 @@ impl Default for Keymap {
                 },
                 Binding {
                     key: KeyPress::plain(KeyCode::Char('?')),
+                    action: Action::Help,
+                },
+                // `F1`: a global alias for `Action::Help` that works from
+                // every mode (contextual help, M3) — `?` is a typed
+                // character in the filter and the inline editor and is
+                // swallowed by the confirm dialog, so it only ever opens
+                // help in Normal mode. Listed after `?` so `key_for`/`hint`
+                // keep showing the mnemonic key as the effective binding by
+                // default; a user override placed at the front still wins
+                // (`Keymap::bind`'s doc comment).
+                Binding {
+                    key: KeyPress::plain(KeyCode::F(1)),
                     action: Action::Help,
                 },
                 Binding {

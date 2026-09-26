@@ -199,8 +199,8 @@ second one.
 reading the same `Keymap` the hint bar and help overlay already read rather than a second copy of
 it. Hands-on testing found no use for it — every `Action` it listed already had a key, so it was
 only ever a slower route to the same thing — and it was removed completely. Discovery for the
-occasional on-call user moves to a contextual help overlay, a separate change
-(`docs/plans/m3-contextual-help.md`). One piece of the task's own structure survives the
+occasional on-call user moves to a contextual help overlay (`?`/`F1`, R7.5), built as its own
+change — [`m3-contextual-help.md`](plans/m3-contextual-help.md). One piece of the task's own structure survives the
 withdrawal: `key_press`'s old inline `match action { … }` stayed factored out as
 `update::dispatch_action`, since the keymap path is still its caller. The rest of the table is
 unstarted.
@@ -222,7 +222,8 @@ withdrawn (ADR-0020) — see [PRD.md §10](PRD.md) for the resolved open questio
 Each row above has its own doc under `docs/plans/`, in the shape M2's per-task docs used —
 context, approach, files touched, tests — written before any of it is built:
 [`m3-palette.md`](plans/m3-palette.md) (superseded by
-[`m3-palette-withdrawn.md`](plans/m3-palette-withdrawn.md)),
+[`m3-palette-withdrawn.md`](plans/m3-palette-withdrawn.md), then by
+[`m3-contextual-help.md`](plans/m3-contextual-help.md)),
 [`m3-feed-connection.md`](plans/m3-feed-connection.md) (task 2 — shared infrastructure Monitor
 and Pub-Sub both depend on, so it is its own doc rather than duplicated in each),
 [`m3-slowlog.md`](plans/m3-slowlog.md), [`m3-monitor.md`](plans/m3-monitor.md),

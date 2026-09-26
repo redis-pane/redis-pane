@@ -21,4 +21,4 @@
 
 
 
- Esc back   r refetch   ⌃R read-only   ? help   q quit
+ a add field   ⏎ move in value   c copy   ? F1 help

@@ -1,1 +1,1 @@
-Esc back   r reconnect   ⌃R read-only   ? help   q quit
+→ open / expand   / filter   s sort   t tree view   d delete   c copy   r rescan   ? F1 help
