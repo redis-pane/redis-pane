@@ -1,23 +1,23 @@
 ─ redis-pane ─ ● staging · from profile staging  ✕ disconnected · read 14s ago ─
 
  KEY                      TYPE      TTL │ → to open
- ● user:8812:car┌─ help · keys pane ───────────────────────────┐
- ● user:8812:pro│ →         open / expand                      │
- ● user:8812:ses│ /         filter                             │
- ● user:8813:ses│ s         sort                               │
- ● cart:91af3c9d│ t         tree view                          │
- ● feed:global:h│ d         delete                             │
-                │ c         copy                               │
-                │ r         reconnect                          │
-                │ C         copy redis-cli command             │
-                │ ↑↓ jk     move                               │
-                │ PgUp/PgDn page                               │
-                │ Home/End  top/bottom                         │
-                │                                              │
-                │ ⌃R read-only   Esc back   q quit   ? F1 help │
-                │                                              │
-                │ Tab value keys · Esc close                   │
-                └──────────────────────────────────────────────┘
+ ● user:8┌─ help · keys pane ─────────────────────────────────────────┐
+ ● user:8│ →         open / expand                                    │
+ ● user:8│ /         filter                                           │
+ ● user:8│ s         sort                                             │
+ ● cart:9│ t         tree view                                        │
+ ● feed:g│ d         delete                                           │
+         │ c         copy                                             │
+         │ r         reconnect                                        │
+         │ C         copy redis-cli command                           │
+         │ ↑↓ jk     move                                             │
+         │ PgUp/PgDn page                                             │
+         │ Home/End  top/bottom                                       │
+         │                                                            │
+         │ ⌃R read-only   g s slowlog   Esc back   q quit   ? F1 help │
+         │                                                            │
+         │ Tab value keys · Esc close                                 │
+         └────────────────────────────────────────────────────────────┘
                                         │
                                         │
 

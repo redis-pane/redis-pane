@@ -50,6 +50,16 @@ pub enum HelpContext {
     /// staged mutation is the only thing that can act on a keypress until
     /// it resolves.
     Confirm,
+    /// A `g`-chord's prefix has been pressed and is waiting on its second key
+    /// (M3, `docs/plans/m3-slowlog.md`) — checked first among the
+    /// `Mode::Normal` contexts, since a pending chord is the only thing that
+    /// can act on the very next keypress until it resolves, the same reason
+    /// `Confirm` outranks everything beneath it.
+    ChordPending,
+    /// The Slowlog view (`g s`, R6.4) — a full screen, not the two-pane
+    /// browser, so it gets one context rather than being folded into
+    /// [`HelpContext::Keys`]/[`HelpContext::Value`].
+    Slowlog,
 }
 
 /// The Viewer's per-type contexts (PLAN's decision 2): one for each of the
@@ -233,6 +243,18 @@ pub fn context(state: &State) -> HelpContext {
         Mode::Editing => HelpContext::Editor(editor_context(state)),
         Mode::Filtering => HelpContext::Filter,
         Mode::Normal => {
+            // A pending chord outranks everything else in Normal mode — the
+            // same "the very next keypress is spoken for" reasoning that
+            // ranks `Mode::Confirm` first among `mode`'s own precedence, one
+            // level down.
+            if state.pending_chord.is_some() {
+                return HelpContext::ChordPending;
+            }
+            // A full-screen view outranks the two-pane browser's own
+            // Keys/Value split — it is neither.
+            if state.screen == crate::state::View::Slowlog {
+                return HelpContext::Slowlog;
+            }
             // The pane *viewed* by help, not necessarily the one actually
             // focused — `Tab` flips `HelpView::pane` while help is open
             // without moving `State::focus` (`update::help_key`'s own
@@ -360,7 +382,43 @@ pub fn here(state: &State, ctx: HelpContext) -> Vec<HelpRow> {
         HelpContext::Value(open) => value_rows(state, open),
         HelpContext::Editor(ectx) => editor_rows(state, ectx),
         HelpContext::Confirm => confirm_rows(state),
+        HelpContext::ChordPending => chord_pending_rows(state),
+        HelpContext::Slowlog => slowlog_rows(state),
     }
+}
+
+/// Every chord's continuation, while its prefix is pending — `k keys`,
+/// `s slowlog` — read straight off [`crate::keymap::Keymap::chords`] rather
+/// than hard-coded, so a rebound second key (once chords can be rebound past
+/// phase A) shows here too (R7.5).
+fn chord_pending_rows(state: &State) -> Vec<HelpRow> {
+    state
+        .keymap
+        .chords()
+        .iter()
+        .map(|c| HelpRow::new(key_label(&c.second), c.action.label()))
+        .collect()
+}
+
+/// The Slowlog view's own rows (PLAN decision 3: movement, `s`, `r`, `c`,
+/// `d`).
+fn slowlog_rows(state: &State) -> Vec<HelpRow> {
+    vec![
+        HelpRow::new(keys_for(state, Action::Sort), "sort"),
+        // Never "reconnect" is wrong here either: a dropped link has nothing
+        // to fetch any more than the Viewer does, so this reads the same
+        // `refetch_label` every other view already shares.
+        HelpRow::new(refetch_keys(state), refetch_label(state, false)),
+        HelpRow::new(keys_for(state, Action::Copy), "copy command"),
+        // `d`: stages `SLOWLOG RESET` (M3 phase B, Decision 3) — dimmed
+        // `· preview only` under Read-only Mode exactly like every other
+        // mutation-starting key (`mutation_entry_row`'s own rule), even
+        // though this one has no key of its own to refuse a write against.
+        mutation_entry_row(state, keys_for(state, Action::Delete), "reset slowlog"),
+        HelpRow::new("↑↓ jk", "move"),
+        HelpRow::new("PgUp/PgDn", "page"),
+        HelpRow::new("Home/End", "top/bottom"),
+    ]
 }
 
 fn keys_rows(state: &State, tree: bool, filtered: bool) -> Vec<HelpRow> {
@@ -674,6 +732,21 @@ pub fn everywhere(state: &State) -> Vec<HelpRow> {
         // `everywhere` describes the context help is drawn over, exactly
         // like `context` (above) — never "what Help mode itself allows".
         Mode::Help => unreachable!("mode_beneath_help never returns Help"),
+        Mode::Normal if state.pending_chord.is_some() => {
+            // A pending chord is its own tiny mode (`HelpContext::ChordPending`
+            // above): the continuations are the whole of HERE, and EVERYWHERE
+            // shrinks to just the way out and help — the same shape
+            // Filter/Editor/Confirm give it below, one rank up. Showing the
+            // ordinary Normal-mode EVERYWHERE here would repeat `g s slowlog`
+            // right after `s slowlog` in the same breath, which reads as if
+            // the chord had two different meanings rather than one already in
+            // progress (Decision 1, `docs/plans/m3-slowlog.md`: "the hint bar
+            // and help show its continuations plus `Esc cancel` ... only").
+            vec![
+                HelpRow::new(keys_for(state, Action::Cancel), "cancel"),
+                HelpRow::new(help_keys(state), "help"),
+            ]
+        }
         Mode::Normal => {
             let mut rows = Vec::new();
             // `Tab`/`Action::CyclePane`: only worth a row when it would move
@@ -690,6 +763,19 @@ pub fn everywhere(state: &State) -> Vec<HelpRow> {
             // `dispatch_action`'s own comment on `Action::ToggleReadOnly`).
             if !matches!(state.read_only, Some(ReadOnlyReason::Replica)) {
                 rows.push(action_row(state, Action::ToggleReadOnly, "read-only"));
+            }
+            // The view chords (M3, `docs/plans/m3-slowlog.md`): reachable
+            // from anywhere in Normal mode, so they belong beside `Tab`/
+            // `⌃R`, not only inside `HelpContext::ChordPending`'s
+            // continuation list, which only shows once `g` has already been
+            // pressed.
+            if let Some(keys) = state.keymap.chord_hint(Action::OpenSlowlog) {
+                rows.push(HelpRow::new(keys, Action::OpenSlowlog.label()));
+            }
+            if state.screen == crate::state::View::Slowlog
+                && let Some(keys) = state.keymap.chord_hint(Action::OpenKeysView)
+            {
+                rows.push(HelpRow::new(keys, Action::OpenKeysView.label()));
             }
             rows.push(action_row(state, Action::Cancel, "back"));
             rows.push(action_row(state, Action::Quit, "quit"));
@@ -1114,6 +1200,8 @@ mod tests {
             ctxs.push(HelpContext::Editor(EditorContext::AddFormValue { zset }));
         }
         ctxs.push(HelpContext::Confirm);
+        ctxs.push(HelpContext::ChordPending);
+        ctxs.push(HelpContext::Slowlog);
         ctxs
     }
 
@@ -1122,8 +1210,9 @@ mod tests {
         // A change to either enum that isn't reflected in `every_context`
         // should fail loudly here rather than silently under-testing a new
         // variant — 4 (Keys) + 1 (Filter) + 1 (Value(None)) + 16 (8 types ×
-        // cursor) + 9 (5 plain Editor + 2 zset × 2 AddForm) + 1 (Confirm).
-        assert_eq!(every_context().len(), 32);
+        // cursor) + 9 (5 plain Editor + 2 zset × 2 AddForm) + 1 (Confirm) +
+        // 1 (ChordPending) + 1 (Slowlog).
+        assert_eq!(every_context().len(), 34);
     }
 
     #[test]
@@ -1152,5 +1241,90 @@ mod tests {
     #[test]
     fn status_is_none_outside_the_editor() {
         assert_eq!(status(&State::default()), None);
+    }
+
+    // ── M3: the Slowlog view and pending chords ─────────────────────────
+
+    #[test]
+    fn a_pending_chord_outranks_the_keys_context() {
+        let s = State {
+            pending_chord: Some(crate::msg::KeyPress::plain(crate::msg::KeyCode::Char('g'))),
+            ..State::default()
+        };
+        assert_eq!(context(&s), HelpContext::ChordPending);
+    }
+
+    #[test]
+    fn chord_pending_rows_name_both_continuations() {
+        let s = State {
+            pending_chord: Some(crate::msg::KeyPress::plain(crate::msg::KeyCode::Char('g'))),
+            ..State::default()
+        };
+        let rows = here(&s, context(&s));
+        assert!(
+            rows.iter().any(|r| r.keys == "k" && r.label == "keys"),
+            "{rows:?}"
+        );
+        assert!(
+            rows.iter().any(|r| r.keys == "s" && r.label == "slowlog"),
+            "{rows:?}"
+        );
+    }
+
+    #[test]
+    fn the_slowlog_view_outranks_the_keys_value_split() {
+        let s = State {
+            screen: crate::state::View::Slowlog,
+            ..State::default()
+        };
+        assert_eq!(context(&s), HelpContext::Slowlog);
+    }
+
+    #[test]
+    fn slowlog_rows_offer_d_as_reset_slowlog() {
+        let s = State {
+            screen: crate::state::View::Slowlog,
+            ..State::default()
+        };
+        let rows = here(&s, context(&s));
+        let reset = rows
+            .iter()
+            .find(|r| r.label == "reset slowlog")
+            .expect("d row");
+        assert!(reset.refused.is_none());
+    }
+
+    #[test]
+    fn read_only_dims_reset_slowlog_with_preview_only() {
+        let s = State {
+            screen: crate::state::View::Slowlog,
+            read_only: Some(ReadOnlyReason::Environment),
+            ..State::default()
+        };
+        let rows = here(&s, context(&s));
+        let reset = rows
+            .iter()
+            .find(|r| r.label == "reset slowlog")
+            .expect("d row");
+        assert_eq!(
+            reset.refused.map(|r| r.text()),
+            Some("read-only (environment) · preview only".to_string())
+        );
+    }
+
+    #[test]
+    fn everywhere_always_offers_g_s_and_only_offers_g_k_from_the_slowlog_view() {
+        let keys_view = State::default();
+        let rows = everywhere(&keys_view);
+        assert!(rows.iter().any(|r| r.keys == "g s"), "{rows:?}");
+        assert!(!rows.iter().any(|r| r.keys == "g k"), "{rows:?}");
+
+        let slowlog_view = State {
+            screen: crate::state::View::Slowlog,
+            ..State::default()
+        };
+        let rows = everywhere(&slowlog_view);
+        assert!(rows.iter().any(|r| r.keys == "g s"), "{rows:?}");
+        assert!(rows.iter().any(|r| r.keys == "g k"), "{rows:?}");
     }
 }

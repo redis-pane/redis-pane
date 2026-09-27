@@ -2,22 +2,22 @@
 
  KEY                      TYPE      TTL │ user:8812:cart
  ● user:8812:cart         zset      12m ├ zset · 3 members · 2.1 KB
- ● user:88┌─ help · value pane · zset ───────────────────────────────┐   ● live
- ● user:88│ e         score                                          │
- ● user:88│ a         add member                                     │
- ● cart:91│ d         remove member                                  │
- ● feed:gl│ c         copy                                           │
-          │ t         edit ttl                                       │
-          │ r         refetch                                        │
-          │ C         copy redis-cli command                         │
-          │ ↑↓ jk     move                                           │
-          │ PgUp/PgDn page                                           │
-          │ Home/End  top/bottom                                     │
-          │                                                          │
-          │ Tab focus   ⌃R read-only   Esc back   q quit   ? F1 help │
-          │                                                          │
-          │ Tab keys · Esc close                                     │
-          └──────────────────────────────────────────────────────────┘
+ ● ┌─ help · value pane · zset ─────────────────────────────────────────────┐ve
+ ● │ e         score                                                        │
+ ● │ a         add member                                                   │
+ ● │ d         remove member                                                │
+ ● │ c         copy                                                         │
+   │ t         edit ttl                                                     │
+   │ r         refetch                                                      │
+   │ C         copy redis-cli command                                       │
+   │ ↑↓ jk     move                                                         │
+   │ PgUp/PgDn page                                                         │
+   │ Home/End  top/bottom                                                   │
+   │                                                                        │
+   │ Tab focus   ⌃R read-only   g s slowlog   Esc back   q quit   ? F1 help │
+   │                                                                        │
+   │ Tab keys · Esc close                                                   │
+   └────────────────────────────────────────────────────────────────────────┘
                                         │
                                         │
 

@@ -10,6 +10,7 @@ pub mod editor;
 pub mod loaded;
 pub mod open;
 pub mod scan;
+pub mod slowlog;
 pub mod tree;
 pub mod ttl;
 pub mod value;
@@ -20,12 +21,34 @@ pub use editor::{EditBuffer, EditTarget, FieldPart, is_valid_zset_score};
 pub use loaded::{KeyKind, LoadedSet};
 pub use open::{Attachment, EditPhase, OpenKey, PendingRead, ReadOutcome};
 pub use scan::ScanState;
+pub use slowlog::{SlowlogEntry, SlowlogSort, SlowlogState};
 pub use tree::Tree;
 pub use ttl::{
     TtlEdit, TtlEditRefusal, TtlOutcome, format_duration, parse_ttl_edit, resolve_ttl_edit,
 };
 pub use value::{ListEnd, Value, Viewer, looks_like_json};
 pub use view::{FilterMode, KeyView, SortBy};
+
+/// The top-level screen showing (M3, `docs/plans/m3-slowlog.md`).
+///
+/// Additive to, not a replacement for, [`crate::render::layout::Pane`]:
+/// `Pane` still decides keys-vs-value focus *within* `View::Keys`; `View`
+/// (held in [`State::screen`]) decides which full-screen surface is showing
+/// at all. Switching views preserves the browser's own state (`State::open`,
+/// `State::focus`, `State::list`, `State::tree`…) untouched — `g s`/`g k`/
+/// `Esc` only ever flip `State::screen` — and in particular never disarms
+/// tracking on the Open key: there is no read, no reconnect, and no change
+/// to `State::link` anywhere in that path, so `Tracking::Armed` survives a
+/// round trip through the Slowlog view exactly as it would survive
+/// scrolling the key list.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum View {
+    /// The two-pane browser (keys, value) — the only view through M0–M2.
+    #[default]
+    Keys,
+    /// `g s`: the slowlog viewer (R6.4).
+    Slowlog,
+}
 
 /// Where a Connection's target came from (ADR-0001).
 ///
@@ -373,6 +396,17 @@ pub enum PendingMutation {
         old_ttl: i32,
         delta_seconds: i32,
     },
+    /// `SLOWLOG RESET` (R6.4, M3 phase B, `docs/plans/m3-slowlog.md`
+    /// Decision 8): the first `PendingMutation` with no key at all — staged
+    /// by `d` in the Slowlog view (view-scoped, the same one-`Action`-shape
+    /// `t` already has for tree/ttl). No guard line: it destroys only
+    /// diagnostic history, so a single `y` is the whole of R4.6's
+    /// confirmation scale for it. Confirmed through the same chokepoint
+    /// every other mutation goes through, and refused there under any
+    /// Read-only Mode reason including `replica` — this app's read-only
+    /// rule applies uniformly, with no carve-out for a write that touches no
+    /// key.
+    ResetSlowlog,
 }
 
 impl Eq for PendingMutation {}
@@ -456,6 +490,9 @@ impl PendingMutation {
                     crate::render::keys::format_duration(delta_seconds.unsigned_abs() as i32)
                 )
             }
+            // The literal command, exactly as sent — no key to interpolate
+            // (D8).
+            PendingMutation::ResetSlowlog => "SLOWLOG RESET".to_string(),
         }
     }
 
@@ -545,6 +582,12 @@ impl PendingMutation {
             PendingMutation::ShiftTtl { .. } => Some(
                 "only if the key still has an expiry · never expires it immediately".to_string(),
             ),
+            // No guard at all (Decision 8, `docs/plans/m3-slowlog.md`):
+            // `SLOWLOG RESET` cannot fail on a gone key — there is no key —
+            // and destroys only diagnostic history, which R4.6's
+            // confirmation-scales-with-destructiveness rule covers with a
+            // single `y` and no muted line explaining what it checks first.
+            PendingMutation::ResetSlowlog => None,
         }
     }
 
@@ -702,6 +745,8 @@ impl PendingMutation {
                 },
                 None,
             ),
+            // No key, no Loaded-set row to echo back (D8).
+            PendingMutation::ResetSlowlog => (Mutation::ResetSlowlog, None),
         };
         crate::Command::Execute { mutation, index }
     }
@@ -766,6 +811,26 @@ pub struct State {
     pub condition: Option<ServerCondition>,
     /// Bindings in force. Hints read from here so they show the effective key.
     pub keymap: crate::keymap::Keymap,
+    /// Which full-screen surface is showing (M3, `docs/plans/m3-slowlog.md`).
+    ///
+    /// Named `screen`, not `view`: [`State::view`] already names the keys
+    /// pane's scroll [`crate::render::keys::Viewport`], a field this crate's
+    /// existing code reads and writes pervasively — renaming it to free up
+    /// the name the plan asked for (`view: View`) would be a change with a
+    /// blast radius across `update::keys`, `render::keys` and every test that
+    /// builds a `State`, for no behavioural gain. `Pane` still decides
+    /// keys-vs-value focus *within* `View::Keys`; this decides which
+    /// full-screen surface is showing at all, and switching it touches
+    /// nothing else — not `open`, not `link`, not any pending read.
+    pub screen: View,
+    /// The `g s` view's own state — entries, sort, selection, and whether a
+    /// fetch is in flight.
+    pub slowlog: SlowlogState,
+    /// A chord's prefix key, once pressed, waiting on the next keypress to
+    /// resolve it (DESIGN §3's `g`-prefixed jump list) — no timeout; it
+    /// waits however long that takes. `Esc`, or a second key that names no
+    /// chord, clears it without doing anything else (`update::key_press`).
+    pub pending_chord: Option<crate::msg::KeyPress>,
     /// The contextual help overlay (`?`/`F1`, M3), while it is open. Not a
     /// bare `bool`: `HelpView::pane` is which pane's context is *viewed* —
     /// `Tab` flips it without moving [`State::focus`] itself (the overlay's

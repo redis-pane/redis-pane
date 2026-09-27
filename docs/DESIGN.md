@@ -1,6 +1,6 @@
 # redis-pane — UX & UI Design
 
-**Status:** Draft v0.4 · **Companion to:** [PRD.md](PRD.md) · **Last updated:** 2026-08-26
+**Status:** Draft v0.4 · **Companion to:** [PRD.md](PRD.md) · **Last updated:** 2026-09-27
 
 ## 1. Design principles
 
@@ -96,11 +96,30 @@ terminal is small and the situation is urgent.
   what is actually selected rather than the last key `Enter` was pressed on.
 - **Global jumps** use a `g`-prefixed chord: `g k` keys, `g d` dashboard, `g m` monitor,
   `g p` pub/sub, `g s` slowlog. There is no `g c` — there is only ever one Connection.
+  Implemented as keymap data, not a hard-coded key sequence
+  (`crates/core/src/keymap/mod.rs`'s `Keymap.chords: Vec<ChordBinding>`, beside the single-key
+  `bindings`): `g` arms a pending prefix (`State.pending_chord`) and waits, with **no timeout**
+  (§8: "no timing-dependent interactions"), for exactly one more keypress. `Esc`, or a second key
+  that names no chord, clears the pending prefix and does
+  nothing else — swallowed, the same way a stray keystroke is swallowed everywhere else in this
+  app rather than reinterpreted. While a chord is pending, the hint bar and the help overlay show
+  only its continuations (`k keys`, `s slowlog`) plus `Esc cancel` and the help key — not the
+  ordinary global row list, which would otherwise repeat `g s slowlog` right after `s slowlog` in
+  the same breath.
+- **A full-screen view displaces both panes** (R7.7, G7) rather than living beside them —
+  `State.screen: View` (`Keys` — the two-pane browser, default — or `Slowlog`, with `Dashboard`/
+  `Monitor`/`PubSub` to follow their own tasks). Named `screen`, not `view`: `State.view` already
+  names the keys pane's own scroll position (`crate::render::keys::Viewport`). `Pane` is unrelated
+  and unaffected — it still decides keys-vs-value focus *within* `View::Keys`; `View` decides which
+  full-screen surface is showing at all. Switching views (`g s`/`g k`/`Esc`) touches nothing else:
+  the browser's own state (the Open key, its scroll position, its filter, tree mode) is exactly as
+  it was left, and tracking on the Open key is never disarmed by leaving or returning to `Keys`.
 - **The console** (`:`) is for raw Redis commands sent straight to the server. It is not
   scheduled — R5.2–R5.4 stay a real requirement, just not built (PRD §10).
 - **`Esc` is always "back"**, and never destroys unsaved input without asking.
   It pops one thing at a time: the value cursor first if it is active, then
-  the pane stack, then an unrelated background operation.
+  a full-screen view back to the browser, then the pane stack, then an unrelated background
+  operation.
 
 ## 4. Core keymap
 
@@ -108,7 +127,9 @@ terminal is small and the situation is urgent.
 |---|---|---|
 | `?` / `F1` | Contextual help overlay (`F1` also works while typing) | global |
 | `Tab` | Move focus between the panes | global |
-| `g` + key | Jump to view | global |
+| `g k` | Jump to the Keys view (the two-pane browser) | global |
+| `g s` | Jump to the Slowlog view, fetching a fresh `SLOWLOG GET` | global |
+| `g` + `d` / `m` / `p` | Jump to Dashboard / Monitor / Pub-Sub (planned, not yet built) | global |
 | `Ctrl-C` ×2 | Quit (single press = cancel current op) | global |
 | `/` | Filter / search in pane | pane |
 | `n` / `N` | Next / previous match | pane |
@@ -122,7 +143,7 @@ terminal is small and the situation is urgent.
 | `Ctrl-S` | Stage the inline editor's buffer for confirmation | value pane, editing |
 | `t` | Edit TTL (set / persist / extend) | value pane, focused |
 | `c` / `C` | Copy key or value / copy `redis-cli` command | key list, value pane |
-| `d` | Stage delete of the Selected key (`DEL`), or (Hash, cursor on a field) of that field (`HDEL`) | key list, value pane |
+| `d` | Stage delete of the Selected key (`DEL`), (Hash, cursor on a field) of that field (`HDEL`), or (Slowlog view) `SLOWLOG RESET` | key list, value pane, slowlog view |
 | `y` | Confirm a staged mutation (`Esc` dismisses) | global, only while one is staged |
 | `Ctrl-R` | Toggle read-only mode | global |
 
@@ -478,6 +499,46 @@ a diagnostic naming the target, its Source, and the failure
 ([ADR-0009](adr/0009-connection-lifecycle.md)). Mid-session there is data worth keeping on
 screen; at startup there is nothing to show, and an app that opens to an empty error box wastes
 the reader's time.
+
+### 6.9 Slowlog
+
+Reached by `g s` (§3), a full-screen `View` — not a third pane (G7) — showing the server's own
+`SLOWLOG GET` ring buffer in the same header/list/detail-strip frame every screen in this app
+uses, so the muscle memory built browsing keys transfers here too (PLAN's "Proves: entries render
+in a type-aware-consistent frame"). `Esc` or `g k` returns to the Keys view exactly as it was
+left — nothing about the browser (the Open key, its scroll position, its filter) is touched by
+visiting Slowlog, and tracking on the Open key survives the round trip untouched.
+
+The list is four columns — AGE, DURATION, COMMAND, CLIENT — CLIENT sheds first below 80 columns
+and AGE second below 70, the same "shed the least essential first, never the reason the screen
+exists" rule §2's breakpoints apply to the keyspace browser's own columns. AGE is relative to the
+clock (`12s ago`, `3h ago`, `2d ago` — a bare `HH:MM:SS` would be ambiguous for an entry days
+old); DURATION above 100ms is colored as a warning, a threshold this screen draws for itself,
+distinct from the server's own `slowlog-log-slower-than` (which is what put the entry in the log
+at all). A detail strip under the list shows the selected entry's full command (the Viewer's own
+byte escaping — a binary argument reads the same way a binary collection member does), client
+address/name, and the exact moment as UTC with date, since the AGE column is deliberately coarse
+and relative instead.
+
+`s` cycles sort (recent → slowest), `r` refetches the whole buffer — there is no partial refresh,
+matching "there is no refresh button" everywhere else in this app (§6.4) — `c` copies the selected
+command, and `d` stages `SLOWLOG RESET`: a real mutation through the one chokepoint every other
+write goes through (§6.5), previewed as a single line with no guard (it destroys only diagnostic
+history) and confirmed with one `y`, refused at confirm under any Read-only Mode reason including
+`replica` — this app's read-only rule applies uniformly, with no carve-out for a write that
+touches no key. A successful reset refetches the view, the same "the reply is what reaches the
+screen, never what this session already knew it sent" discipline every other confirmed write
+follows.
+
+A failed fetch is never a blank screen: an R7.4 notification names the failing command, and the
+list itself explains why it has nothing to show — still fetching, the fetch failed, or the ring
+buffer is genuinely empty (a real state right after a fresh reset, or simply nothing having
+crossed the server's threshold yet) — three different reasons, three different sentences, not one
+placeholder standing in for all of them.
+
+Single-node only ([ADR-0008](adr/0008-cluster-support.md)): `SLOWLOG` is per-node, and a Cluster
+target would need a node selector this app's one-Connection premise has no room for — inherited
+scope from Cluster being out of v1 entirely, not a new limitation this screen introduces.
 
 ## 7. Interaction details that carry the product
 

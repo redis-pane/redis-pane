@@ -105,4 +105,11 @@ pub enum Command {
     /// The core has no clock of its own (ADR-0011), so it cannot date a notice
     /// it raises. This carries the words; the shell supplies the moment.
     Notify { text: String },
+    /// Fetch the server's slowlog ring buffer (R6.4, M3,
+    /// `docs/plans/m3-slowlog.md`): `SLOWLOG GET <count>`. Issued by `g s`
+    /// and by `r` while the Slowlog view is showing — there is no `CLIENT
+    /// TRACKING` equivalent for it, so unlike [`Command::ReadKey`] this
+    /// carries no arming and answers with [`crate::Msg::SlowlogLoaded`]
+    /// rather than a push.
+    FetchSlowlog { count: i64 },
 }

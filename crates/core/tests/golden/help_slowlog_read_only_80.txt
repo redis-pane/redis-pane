@@ -1,0 +1,24 @@
+─ redis-pane ─ ● staging · from profile staging ─── READ-ONLY environment ⌃R   ─
+
+ SLOWLOG · 3 entries · sort: recent
+ AGE       DURATION COMMAND                              CLIENT
+ 12s ago   185.0ms  HGETALL user:8812:session            worker-3 (10.0.0.4:5…
+ 3h┌─ help · slowlog ──────────────────────────────────────────────────────┐
+ 2d│ s         sort                                                        │5…
+   │ r         refetch                                                     │
+   │ c         copy command                                                │
+   │ d         reset slowlog  read-only (environment) · preview only       │
+   │ ↑↓ jk     move                                                        │
+   │ PgUp/PgDn page                                                        │
+   │ Home/End  top/bottom                                                  │
+   │                                                                       │
+   │ ⌃R read-only   g s slowlog   g k keys   Esc back   q quit   ? F1 help │
+   │                                                                       │
+   │ Esc close                                                             │
+   └───────────────────────────────────────────────────────────────────────┘
+
+────────────────────────────────────────────────────────────────────────────────
+ cmd    HGETALL user:8812:session
+ at 2023-11-14 22:14:22 UTC  ·  client worker-3 (10.0.0.4:51820)
+
+ s sort   r refetch   c copy command   d reset slowlog   ↑↓ jk move   ? F1 help

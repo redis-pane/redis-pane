@@ -1,0 +1,24 @@
+─ redis-pane ─ ● staging · cache-01:6379/0 · from profile staging ───── ● live ─
+
+ SLOWLOG · 0 entries · sort: recent
+ no slow commands — nothing has crossed the server's threshold since the last…
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ s sort   r refetch   c copy command   d reset slowlog   ↑↓ jk move   ? F1 help

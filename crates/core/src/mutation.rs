@@ -130,13 +130,25 @@ pub enum Mutation {
     /// ADR-0019). Needs a script rather than `EXPIRE ... GT/LT`: that syntax
     /// is 7.0+, below this app's 6.0 floor (ADR-0007).
     ShiftTtl { key: KeyName, delta_seconds: i32 },
+    /// `SLOWLOG RESET` (R6.4, M3 phase B, `docs/plans/m3-slowlog.md`
+    /// Decision 8): a server-wide mutation with no key at all — the first
+    /// [`Mutation`] this crate has had without one. No guard: it destroys
+    /// only diagnostic history (R4.6's "confirmation scales with
+    /// destructiveness" already covers this with a single `y`), and there is
+    /// no gone-key hazard to guard against since there is no key.
+    ResetSlowlog,
 }
 
 impl Eq for Mutation {}
 
 impl Mutation {
-    /// The key this writes to.
-    pub fn key(&self) -> &KeyName {
+    /// The key this writes to. `None` only for [`Mutation::ResetSlowlog`],
+    /// which is server-wide — every caller reaching this now has to decide
+    /// what "no key" means for it, rather than a `&KeyName` return silently
+    /// assuming one always exists (checked against `update::confirm` and
+    /// `crates/app/src/redis/mutate.rs`'s `execute`, the two places that used
+    /// to call this unconditionally).
+    pub fn key(&self) -> Option<&KeyName> {
         match self {
             Mutation::DeleteKey { key }
             | Mutation::SetString { key, .. }
@@ -153,7 +165,8 @@ impl Mutation {
             | Mutation::DeleteZSetMember { key, .. }
             | Mutation::SetTtl { key, .. }
             | Mutation::PersistTtl { key }
-            | Mutation::ShiftTtl { key, .. } => key,
+            | Mutation::ShiftTtl { key, .. } => Some(key),
+            Mutation::ResetSlowlog => None,
         }
     }
 
@@ -201,6 +214,9 @@ impl Mutation {
             Mutation::SetTtl { key, .. } => format!("EXPIRE {key}"),
             Mutation::PersistTtl { key } => format!("PERSIST {key}"),
             Mutation::ShiftTtl { key, .. } => format!("EXPIRE {key}"),
+            // No key to interpolate — the literal command, exactly as
+            // `PendingMutation::command_text`'s `ResetSlowlog` arm shows it.
+            Mutation::ResetSlowlog => "SLOWLOG RESET".to_string(),
         }
     }
 }
@@ -428,8 +444,14 @@ mod tests {
         ];
         for (mutation, label) in cases {
             assert_eq!(mutation.command_label(), label);
-            assert_eq!(mutation.key(), &key);
+            assert_eq!(mutation.key(), Some(&key));
         }
+    }
+
+    #[test]
+    fn reset_slowlog_has_no_key_and_a_literal_command() {
+        assert_eq!(Mutation::ResetSlowlog.key(), None);
+        assert_eq!(Mutation::ResetSlowlog.command_label(), "SLOWLOG RESET");
     }
 
     #[test]
@@ -472,16 +494,16 @@ mod tests {
                 seconds: 300
             }
             .key(),
-            &key
+            Some(&key)
         );
-        assert_eq!(Mutation::PersistTtl { key: key.clone() }.key(), &key);
+        assert_eq!(Mutation::PersistTtl { key: key.clone() }.key(), Some(&key));
         assert_eq!(
             Mutation::ShiftTtl {
                 key: key.clone(),
                 delta_seconds: -600
             }
             .key(),
-            &key
+            Some(&key)
         );
     }
 }
