@@ -1,0 +1,24 @@
+─ redis-pane ─ ● staging · cache-01:6379/0 · from profile staging ───────────────────────────── ✕ disconnected · read 14s ago  r ─
+
+ KEY                               TYPE        SIZE   TTL │ → to open
+ ● user:8812:cart                  zset  ┌─ help · keys pane ───────────────────────────┐
+ ● user:8812:profile               json  │ →         open / expand                      │
+ ● user:8812:session               hash  │ /         filter                             │
+ ● user:8813:session               hash  │ s         sort                               │
+ ● cart:91af3c9d2e                 zset  │ t         tree view                          │
+ ● feed:global:hot                 list  │ d         delete                             │
+                                         │ c         copy                               │
+                                         │ r         reconnect                          │
+                                         │ C         copy redis-cli command             │
+                                         │ ↑↓ jk     move                               │
+                                         │ PgUp/PgDn page                               │
+                                         │ Home/End  top/bottom                         │
+                                         │                                              │
+                                         │ ⌃R read-only   Esc back   q quit   ? F1 help │
+                                         │                                              │
+                                         │ Tab value keys · Esc close                   │
+                                         └──────────────────────────────────────────────┘
+                                                          │
+                                                          │
+
+ → open / expand   / filter   s sort   t tree view   d delete   c copy   r reconnect   C copy redis-cli command   ? F1 help

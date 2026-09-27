@@ -731,6 +731,17 @@ impl ServerCondition {
     }
 }
 
+/// The contextual help overlay's own view state (M3, `docs/plans/m3-contextual-help.md`).
+///
+/// `pane` starts at the focused pane when help opens and `Tab` flips it —
+/// deliberately not [`State::focus`] itself: switching which context help is
+/// *showing* must never move the reader's actual focus, or leaving help open
+/// mid-read would silently redirect the next plain keypress.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HelpView {
+    pub pane: crate::render::layout::Pane,
+}
+
 /// The whole of what the application knows.
 ///
 /// Note what is absent: any cached value for the open key. Reads always hit the
@@ -755,7 +766,11 @@ pub struct State {
     pub condition: Option<ServerCondition>,
     /// Bindings in force. Hints read from here so they show the effective key.
     pub keymap: crate::keymap::Keymap,
-    pub help_open: bool,
+    /// The contextual help overlay (`?`/`F1`, M3), while it is open. Not a
+    /// bare `bool`: `HelpView::pane` is which pane's context is *viewed* —
+    /// `Tab` flips it without moving [`State::focus`] itself (the overlay's
+    /// own pointer to the other pane, not a focus change in disguise).
+    pub help: Option<HelpView>,
     /// Every key scanned so far, columnar and capped (ADR-0010).
     pub keys: LoadedSet,
     pub scan: ScanState,

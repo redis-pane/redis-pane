@@ -1,14 +1,14 @@
-─ redis-pane ─ ● staging · cache-┌─ keys ─────────────────────────┐──────────────────────── ● live ─
-                                 │                                │
- KEY                             │ Tab     focus                  │
-                                 │ q       quit                   │
-                                 │ ⌃C      quit                   │
-                                 │ r       refetch / rescan       │
-                                 │ ⌃R      read-only              │
-                                 │ ?       help                   │
-                                 │ Esc     back                   │
-                                 │ ↓       move                   │
-                                 │ j       move                   │
-                                 │ ↑       move                   │
-                                 │ k       move                   │
-                                 └────────────────────────────────┘
+─ redis-pane ─ ● staging ·┌─ help · keys pane ───────────────────────────┐───────────────── ● live ─
+                          │ →         open / expand                      │
+ KEY                      │ /         filter                             │
+                          │ s         sort                               │
+                          │ t         tree view                          │
+                          │ d         delete                             │
+                          │ c         copy                               │
+                          │ r         rescan                             │
+                          │ C         copy redis-cli command             │
+                          │ ↑↓ jk     move                               │
+                          │ PgUp/PgDn page                               │
+                          │ Home/End  top/bottom                         │
+                          │                                              │
+                          └──────────────────────────────────────────────┘

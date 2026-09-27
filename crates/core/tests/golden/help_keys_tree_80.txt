@@ -1,0 +1,24 @@
+─ redis-pane ─ ● staging · cache-01:6379/0 · from profile staging ───── ● live ─
+
+ KEY                      TYPE      TTL │ a group is selected
+ ▾ cart:        ┌─ help · keys pane · tree ────────────────────┐
+   ● 91af3c9d2e │ →         open / expand                      │
+ ▾ feed:        │ /         filter                             │
+   ▾ global:    │ s         sort                               │
+     ● hot      │ t         flat view                          │
+ ▾ user:        │ d         delete                             │
+   ▾ 8812:      │ c         copy                               │
+     ● cart     │ r         rescan                             │
+     ● profile  │ C         copy redis-cli command             │
+     ● session  │ ↑↓ jk     move                               │
+   ▾ 8813:      │ PgUp/PgDn page                               │
+     ● session  │ Home/End  top/bottom                         │
+                │                                              │
+                │ ⌃R read-only   Esc back   q quit   ? F1 help │
+                │                                              │
+                │ Tab value keys · Esc close                   │
+                └──────────────────────────────────────────────┘
+                                        │
+                                        │
+    sorted by name
+ → open / expand   / filter   s sort   t flat view   d delete   ? F1 help

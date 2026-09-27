@@ -73,6 +73,13 @@ pub fn translate(key: KeyEvent) -> Option<Msg> {
         XKeyCode::PageUp => KeyCode::PageUp,
         XKeyCode::PageDown => KeyCode::PageDown,
         XKeyCode::Delete => KeyCode::Delete,
+        // Only `F1` has a meaning yet (contextual help, M3) — every other
+        // function key still translates, on the same "dropped rather than
+        // guessed at" principle the wildcard arm below applies to keys with
+        // no `XKeyCode` mapping at all: an unbound `F(n)` reaching the core
+        // is a no-op there (`Keymap::action_for` finds nothing), exactly
+        // like any other key nothing is bound to.
+        XKeyCode::F(n) => KeyCode::F(n),
         _ => return None,
     };
     Some(Msg::Key(KeyPress {
@@ -873,8 +880,20 @@ mod tests {
 
     #[test]
     fn an_untranslatable_key_is_dropped_rather_than_guessed_at() {
-        let ev = KeyEvent::new(XKeyCode::F(7), KeyModifiers::NONE);
+        // `F(7)` used to be this test's example, before `F1` gained a
+        // meaning (contextual help, M3) — every function key translates now,
+        // so a media key nothing in the core has a use for takes its place.
+        let ev = KeyEvent::new(XKeyCode::CapsLock, KeyModifiers::NONE);
         assert_eq!(translate(ev), None);
+    }
+
+    #[test]
+    fn f1_translates_for_the_help_alias() {
+        let ev = KeyEvent::new(XKeyCode::F(1), KeyModifiers::NONE);
+        assert_eq!(
+            translate(ev),
+            Some(Msg::Key(KeyPress::plain(KeyCode::F(1))))
+        );
     }
 
     /// M0.5's proof: synthetic events drive the core with no terminal attached.

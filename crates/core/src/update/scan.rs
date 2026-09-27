@@ -330,9 +330,9 @@ mod scan_tests {
         // Help is the nearer thing to back out of. Cancelling the scan as well
         // would make one keypress do two unrelated things.
         let mut s = started(10_000);
-        s.help_open = true;
+        s.help = Some(crate::state::HelpView { pane: s.focus });
         let (s, cmds) = update(s, Msg::Key(KeyPress::plain(KeyCode::Esc)));
-        assert!(!s.help_open);
+        assert!(s.help.is_none());
         assert!(cmds.is_empty());
         assert!(s.scan.is_running());
     }
@@ -1468,13 +1468,13 @@ mod metadata_tests {
     fn the_hint_bar_explains_filter_capture_while_it_is_open() {
         let state = browsing(10);
         assert!(
-            !crate::render::hint_bar(&state).contains("clear & exit"),
+            !crate::render::hint_bar(&state, state.cols).contains("clear & exit"),
             "the generic hint bar applies outside filter capture"
         );
 
         let state = open_filter(state);
         assert!(
-            crate::render::hint_bar(&state).contains("clear & exit"),
+            crate::render::hint_bar(&state, state.cols).contains("clear & exit"),
             "the filter hint must say what Esc does, since nothing else does"
         );
     }

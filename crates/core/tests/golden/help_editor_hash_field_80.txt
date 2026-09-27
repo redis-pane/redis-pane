@@ -1,0 +1,24 @@
+─ redis-pane ─ ● staging · cache-01:6379/0 · from profile staging ───── ● live ─
+
+ KEY                      TYPE      TTL │ user:8812:session
+ ● user:8812:cart         zset      12m │ hash · 5 fields · 2.1 KB
+ ● user:8812:profile      json        ∞ │ ttl 42m               ✎ editing field
+ ● user:8812:session      hash      42m ├
+ ● user:8813:session      hash      56m │  FIELD  id
+ ● cart:91af3c9d2e        ┌─ help · editor · field ─┐2
+ ● feed:global:hot        │ Enter     stage         │
+                          │ ⌃Z        undo          │
+                          │ Esc       cancel        │
+                          │                         │
+                          │ F1 help                 │
+                          │                         │
+                          │ Esc close               │
+                          └─────────────────────────┘
+                                        │
+                                        │
+                                        │
+                                        │
+                                        │
+                                        │
+
+ Enter stage   ⌃Z undo   Esc cancel   F1 help
