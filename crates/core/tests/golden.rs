@@ -3659,3 +3659,202 @@ fn golden_help_disconnected() {
     assert_golden("help_disconnected_80", &help_frame(state.clone(), 80));
     assert_golden("help_disconnected_130", &help_frame(state, 130));
 }
+
+// ── M3 — the Slowlog view (`g s`, R6.4, `docs/plans/m3-slowlog.md`) ────────
+
+/// A realistic wall-clock reading, unlike the shared `CLOCK`/`base()`
+/// convention's 74 seconds-since-epoch — the Slowlog view's AGE column
+/// needs entries meaningfully hours and days apart, which only makes sense
+/// against a "now" that is not itself seconds past the epoch.
+const SLOWLOG_NOW_MS: u64 = 1_700_000_074_000; // 2023-11-14 22:14:34 UTC
+const SLOWLOG_NOW_S: i64 = 1_700_000_074;
+
+fn slowlog_entry(
+    id: i64,
+    timestamp: i64,
+    duration_us: i64,
+    command: &str,
+    client_addr: &str,
+    client_name: &str,
+) -> redis_pane_core::state::SlowlogEntry {
+    redis_pane_core::state::SlowlogEntry {
+        id,
+        timestamp,
+        duration_us,
+        command: command.as_bytes().to_vec(),
+        client_addr: client_addr.as_bytes().to_vec(),
+        client_name: client_name.as_bytes().to_vec(),
+    }
+}
+
+fn slowlog_with_entries() -> State {
+    let mut state = State {
+        screen: redis_pane_core::state::View::Slowlog,
+        link: up(Tk::Armed),
+        ..base()
+    };
+    state.slowlog.set_entries(vec![
+        slowlog_entry(
+            12,
+            SLOWLOG_NOW_S - 12, // 12s ago
+            185_000,
+            "HGETALL user:8812:session",
+            "10.0.0.4:51820",
+            "worker-3",
+        ),
+        slowlog_entry(
+            11,
+            SLOWLOG_NOW_S - 3 * 3_600, // 3h ago
+            420,
+            "GET lock:checkout:8812",
+            "10.0.0.9:33012",
+            "",
+        ),
+        slowlog_entry(
+            10,
+            SLOWLOG_NOW_S - 2 * 86_400, // 2d ago
+            2_400_000,
+            "KEYS user:*",
+            "10.0.0.4:51820",
+            "worker-3",
+        ),
+    ]);
+    state
+}
+
+fn draw_at(state: &State, w: u16, h: u16, clock: &dyn Clock) -> String {
+    let buf = render::frame(
+        state,
+        &Theme::new(ColorDepth::Monochrome),
+        clock,
+        Rect::new(0, 0, w, h),
+    );
+    render::to_text(&buf)
+}
+
+#[test]
+fn golden_slowlog_80_cols_with_entries() {
+    assert_golden(
+        "slowlog_80",
+        &draw_at(&slowlog_with_entries(), 80, 24, &FixedClock(SLOWLOG_NOW_MS)),
+    );
+}
+
+#[test]
+fn golden_slowlog_130_cols_with_entries() {
+    assert_golden(
+        "slowlog_130",
+        &draw_at(
+            &slowlog_with_entries(),
+            130,
+            26,
+            &FixedClock(SLOWLOG_NOW_MS),
+        ),
+    );
+}
+
+#[test]
+fn golden_slowlog_empty() {
+    let state = State {
+        screen: redis_pane_core::state::View::Slowlog,
+        link: up(Tk::Armed),
+        ..base()
+    };
+    assert!(state.slowlog.is_empty());
+    assert_golden("slowlog_empty", &draw(&state, 80, 24));
+}
+
+#[test]
+fn golden_slowlog_error() {
+    let mut state = State {
+        screen: redis_pane_core::state::View::Slowlog,
+        link: up(Tk::Armed),
+        ..base()
+    };
+    state.slowlog.error = Some("ERR unknown command 'SLOWLOG'".to_string());
+    assert_golden("slowlog_error", &draw(&state, 80, 24));
+}
+
+#[test]
+fn golden_pending_chord_hint_bar() {
+    let mut state = many_keys();
+    state.pending_chord = Some(redis_pane_core::msg::KeyPress::plain(
+        redis_pane_core::msg::KeyCode::Char('g'),
+    ));
+    assert_golden(
+        "pending_chord_hint_bar",
+        &render::hint_bar(&state, state.cols),
+    );
+}
+
+#[test]
+fn golden_help_in_slowlog_view() {
+    // Not `help_frame` (which draws with the shared `CLOCK`, 74 seconds
+    // since the epoch): against timestamps this far in the future of that,
+    // every AGE cell would clamp to `0s ago`, which proves nothing about
+    // the column this task added. `SLOWLOG_NOW_MS` is the realistic clock
+    // `slowlog_with_entries` was built against.
+    let mut state = slowlog_with_entries();
+    state.help = Some(HelpView { pane: state.focus });
+    let clock = FixedClock(SLOWLOG_NOW_MS);
+    assert_golden("help_slowlog_80", &draw_at(&state, 80, 24, &clock));
+    assert_golden("help_slowlog_130", &draw_at(&state, 130, 24, &clock));
+}
+
+/// M3 phase B: `d reset slowlog` dims `· preview only` under Read-only Mode
+/// exactly like every other mutation-starting key (Decision 4,
+/// `docs/plans/m3-slowlog.md`).
+#[test]
+fn golden_help_in_slowlog_view_read_only() {
+    let mut state = slowlog_with_entries();
+    state.read_only = Some(ReadOnlyReason::Environment);
+    state.help = Some(HelpView { pane: state.focus });
+    let clock = FixedClock(SLOWLOG_NOW_MS);
+    assert_golden(
+        "help_slowlog_read_only_80",
+        &draw_at(&state, 80, 24, &clock),
+    );
+}
+
+/// M3 phase B: the `RESET` confirm dialog (Decision 8) — a one-line preview,
+/// no guard, no diff, over the Slowlog screen it was staged from.
+#[test]
+fn golden_confirm_reset_slowlog() {
+    let mut state = slowlog_with_entries();
+    state.confirm = Some(PendingMutation::ResetSlowlog);
+    assert_golden(
+        "confirm_reset_slowlog_80",
+        &draw_at(&state, 80, 24, &FixedClock(SLOWLOG_NOW_MS)),
+    );
+}
+
+#[test]
+fn a_duration_over_the_threshold_uses_the_warn_token_not_muted() {
+    use redis_pane_core::theme::Token;
+    let mut state = slowlog_with_entries();
+    // Row 0 defaults to selected, which paints the whole row in `Selected`
+    // regardless of duration — move off it so this checks the unselected
+    // colour a reader actually scans the list by.
+    state.slowlog.selected = 2;
+    let theme = Theme::new(ColorDepth::TrueColor);
+    let buf = render::frame(
+        &state,
+        &theme,
+        &FixedClock(SLOWLOG_NOW_MS),
+        Rect::new(0, 0, 80, 24),
+    );
+    // Body starts at y=2 (title bar), summary at y=2, column header at y=3,
+    // entries from y=4; DURATION starts at x = 1 + AGE_W (10) = 11.
+    let warn_cell = buf.cell((11, 4)).unwrap();
+    assert_eq!(
+        warn_cell.style().fg,
+        theme.style(Token::Warn).fg,
+        "185ms is over the threshold"
+    );
+    let muted_cell = buf.cell((11, 5)).unwrap();
+    assert_eq!(
+        muted_cell.style().fg,
+        theme.style(Token::Muted).fg,
+        "420µs is under the threshold"
+    );
+}

@@ -66,7 +66,16 @@ pub(super) fn mutation_settled(
         Err(detail) => failed(state, mutation.command_label(), detail, at_ms),
         Ok(MutationOutcome::Done) => match mutation {
             Mutation::DeleteKey { key } => key_deleted(state, index, key, at_ms),
-            written => write_landed(state, written.key()),
+            // No key, so none of `write_landed`'s open-key guarding applies —
+            // this refetches the Slowlog view instead (D8,
+            // `docs/plans/m3-slowlog.md`).
+            Mutation::ResetSlowlog => reset_slowlog_landed(state, at_ms),
+            written => write_landed(
+                state,
+                written
+                    .key()
+                    .expect("ResetSlowlog is handled above; every other Mutation has a key"),
+            ),
         },
         Ok(MutationOutcome::NotWritten(why)) => not_written(state, &mutation, why, at_ms),
         Ok(MutationOutcome::NothingToRemove) => nothing_to_remove(state, &mutation, at_ms),
@@ -145,11 +154,14 @@ pub(super) fn nothing_to_remove(
     mutation: &Mutation,
     at_ms: u64,
 ) -> (State, Vec<Command>) {
-    if !state
-        .open
-        .as_ref()
-        .is_some_and(|o| o.name == *mutation.key())
-    {
+    // `ResetSlowlog` never settles this way (it has no guard to trip — D8),
+    // but the match below stays exhaustive over `Mutation` rather than a
+    // wildcard, so this early-outs on the one variant with no key to check
+    // an Open key against.
+    let Some(name) = mutation.key() else {
+        return (state, Vec::new());
+    };
+    if !state.open.as_ref().is_some_and(|o| o.name == *name) {
         return (state, Vec::new());
     }
     // Exhaustive over `Mutation`, not a wildcard fallback (PLAN M2 task 8,
@@ -202,6 +214,10 @@ pub(super) fn nothing_to_remove(
         // `NothingToRemove` (PLAN M2 task 10, D5, D6, ADR-0019).
         | Mutation::SetTtl { .. }
         | Mutation::ShiftTtl { .. } => "entry",
+        // Unreachable — the early return above already caught it, since it
+        // has no key — but the match stays exhaustive over `Mutation`
+        // (PLAN M2 task 8, D8) rather than a wildcard.
+        Mutation::ResetSlowlog => "entry",
     };
     state.notice = Some((
         format!("{}: {what} already gone", mutation.command_label()),
@@ -226,7 +242,12 @@ pub(super) fn not_written(
     why: NotWritten,
     at_ms: u64,
 ) -> (State, Vec<Command>) {
-    let name = mutation.key();
+    // `ResetSlowlog` never settles this way — it has no guard to trip (D8) —
+    // but this early-outs on it rather than assuming every `Mutation` names
+    // a key.
+    let Some(name) = mutation.key() else {
+        return (state, Vec::new());
+    };
     if !state.open.as_ref().is_some_and(|o| o.name == *name) {
         return (state, Vec::new());
     }

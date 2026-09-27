@@ -7,6 +7,7 @@
 
 pub mod keys;
 pub mod layout;
+pub mod slowlog;
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -28,20 +29,38 @@ use crate::update::{Mode, mode_beneath_help};
 /// Render the whole frame into a fresh buffer of the given size.
 pub fn frame(state: &State, theme: &Theme, clock: &dyn Clock, area: Rect) -> Buffer {
     let mut buf = Buffer::empty(area);
-    let plan = layout::layout(area, state.focus, state.split_adjust);
     title_bar(state, theme, clock, area, &mut buf);
 
-    let open_row = keys::render(state, theme, clock, plan.keys, plan.density, &mut buf);
-    if let Some(value) = plan.value {
-        // Standalone below 70 columns: the value fills the whole pane with no
-        // adjacent keys pane to separate from, and the list it came from is
-        // off screen, so its own header carries a breadcrumb back to it.
-        let standalone = plan.density == layout::Density::Single;
-        value_pane(state, theme, clock, value, standalone, open_row, &mut buf);
+    // Below 24 rows the hint bar collapses into the status bar — the same
+    // rule `layout::layout` computes for the two-pane browser, read here
+    // too so the Slowlog view's own full-screen body agrees with it without
+    // asking `layout` for geometry it does not use.
+    let hint_bar_visible = area.height >= 24;
+
+    if state.screen == crate::state::View::Slowlog {
+        let bottom = if hint_bar_visible { 2 } else { 1 };
+        let body = Rect::new(
+            area.x,
+            area.y + 2,
+            area.width,
+            area.height.saturating_sub(2 + bottom),
+        );
+        slowlog::render(state, theme, clock, body, &mut buf);
+    } else {
+        let plan = layout::layout(area, state.focus, state.split_adjust);
+        let open_row = keys::render(state, theme, clock, plan.keys, plan.density, &mut buf);
+        if let Some(value) = plan.value {
+            // Standalone below 70 columns: the value fills the whole pane with
+            // no adjacent keys pane to separate from, and the list it came
+            // from is off screen, so its own header carries a breadcrumb back
+            // to it.
+            let standalone = plan.density == layout::Density::Single;
+            value_pane(state, theme, clock, value, standalone, open_row, &mut buf);
+        }
     }
     status_bar(state, theme, clock, area, &mut buf);
 
-    if plan.hint_bar && area.height >= 3 {
+    if hint_bar_visible && area.height >= 3 {
         // Drawn starting at column 1, not 0 (the `put` call below) — the
         // budget has to leave that margin, or a row `hint_bar` judged just
         // short enough clips its last character against the buffer edge
@@ -895,6 +914,8 @@ fn context_title(ctx: help::HelpContext) -> String {
             format!("editor · {target}")
         }
         HelpContext::Confirm => "confirm".to_string(),
+        HelpContext::ChordPending => "g …".to_string(),
+        HelpContext::Slowlog => "slowlog".to_string(),
     }
 }
 
@@ -1116,7 +1137,10 @@ fn confirm_overlay(
 
     let mut lines: Vec<(String, Token)> = Vec::new();
     match pending {
-        PendingMutation::DeleteKey { .. } => {
+        // No key, no guard, no diff — the same one-line shape as `DeleteKey`
+        // (D8, `docs/plans/m3-slowlog.md`): the literal command is the whole
+        // preview.
+        PendingMutation::DeleteKey { .. } | PendingMutation::ResetSlowlog => {
             lines.push((pending.command_text(), Token::Text));
         }
         PendingMutation::SetString { name, old, new, .. } => {
@@ -1968,6 +1992,73 @@ mod hint_bar_tests {
         s.open.as_mut().unwrap().begin_edit(buffer);
         let hint = hint_bar(&s, s.cols);
         assert!(hint.contains("Tab"), "{hint}");
+    }
+
+    // ── M3: hint bar rows are a prefix of help's own rows, at width, for
+    // the Slowlog view and a pending chord too (spot check; the exhaustive
+    // sweep over every `HelpContext` is `help::tests`' own budget test) ──
+
+    /// `hint_bar`'s own contract, stated where the bar is built (`hint_bar`'s
+    /// doc comment): stop at the first row that would not fit rather than
+    /// skip ahead. This checks that contract directly — every space-joined
+    /// `key label` entry actually shown must appear, in order, among what
+    /// `help::here`/`help::everywhere` would show given no width limit at
+    /// all — for the two contexts this task adds.
+    fn assert_hint_bar_is_a_prefix_of_help(s: &crate::state::State) {
+        let ctx = help::context(s);
+        let mut full_rows = help::here(s, ctx);
+        let everywhere = help::everywhere(s);
+        let (help_row, everywhere): (Vec<_>, Vec<_>) =
+            everywhere.into_iter().partition(|r| r.label == "help");
+        full_rows.extend(everywhere);
+        let full_entries: Vec<String> = full_rows
+            .iter()
+            .map(|r| format!("{} {}", r.keys, r.label))
+            .collect();
+        let help_entry = help_row.first().map(|r| format!("{} {}", r.keys, r.label));
+
+        let bar = hint_bar(s, s.cols);
+        let mut shown: Vec<&str> = bar.split(HINT_BAR_SEP).collect();
+        // `help` is pinned last regardless of the width budget (`hint_bar`'s
+        // own contract: "the `help` binding pinned last so it never scrolls
+        // out of reach") — checked separately, since it can skip straight
+        // past everywhere rows that did not fit.
+        if let Some(expected_help) = &help_entry {
+            assert_eq!(shown.last().copied(), Some(expected_help.as_str()));
+            shown.pop();
+        }
+        for (i, entry) in shown.iter().enumerate() {
+            assert_eq!(
+                Some(*entry),
+                full_entries.get(i).map(String::as_str),
+                "hint bar entry {i} ({entry:?}) is not where help's own rows put it: {full_entries:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_slowlog_views_hint_bar_is_a_prefix_of_its_help() {
+        let s = crate::state::State {
+            screen: crate::state::View::Slowlog,
+            cols: 80,
+            ..crate::state::State::default()
+        };
+        assert_hint_bar_is_a_prefix_of_help(&s);
+        let hint = hint_bar(&s, s.cols);
+        assert!(hint.contains("sort"), "{hint}");
+    }
+
+    #[test]
+    fn a_pending_chords_hint_bar_is_a_prefix_of_its_help() {
+        let s = crate::state::State {
+            pending_chord: Some(crate::msg::KeyPress::plain(crate::msg::KeyCode::Char('g'))),
+            cols: 80,
+            ..crate::state::State::default()
+        };
+        assert_hint_bar_is_a_prefix_of_help(&s);
+        let hint = hint_bar(&s, s.cols);
+        assert!(hint.contains("k keys"), "{hint}");
+        assert!(hint.contains("s slowlog"), "{hint}");
     }
 }
 

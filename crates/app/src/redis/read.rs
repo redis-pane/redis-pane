@@ -20,6 +20,7 @@
 use fred::prelude::*;
 use fred::types::CustomCommand;
 use fred::types::Value as RedisValue;
+use redis_pane_core::state::slowlog::SlowlogEntry;
 use redis_pane_core::state::value::{
     BinaryValue, IndexedValue, JsonValue, MemberValue, PairValue, ScoredValue, StreamValue,
     StringValue, Value, looks_like_json,
@@ -341,4 +342,52 @@ fn string_value(bytes: Vec<u8>) -> Value {
             bytes: e.into_bytes(),
         }),
     }
+}
+
+/// Fetch the server's slowlog ring buffer (R6.4, M3,
+/// `docs/plans/m3-slowlog.md`): `SLOWLOG GET <count>`, parsed into the
+/// core's plain-old-data [`SlowlogEntry`] — the same shell-parses/core-holds
+/// split [`fetch_metadata`](crate::redis::fetch_metadata) already uses.
+///
+/// **RESP3 does not change this reply's shape.** Unlike `HGETALL`/
+/// `CONFIG GET`, which become a `Map` reply under RESP3, `SLOWLOG GET`'s
+/// shape is not one of the ones the RESP3 spec changes — it is a flat array
+/// of entries both ways, each entry itself an array of `(id, timestamp,
+/// duration_us, args, client_addr, client_name)`, the six-element shape
+/// every server at this app's Redis 6.0 floor returns (ADR-0007); the
+/// pre-4.0 four-element shape is out of reach and is not handled here.
+/// Verified against a live 8.4 container over `fred`'s RESP3 connection
+/// (this crate's only mode, ADR-0007) as part of this task's integration
+/// test.
+///
+/// No arming: `SLOWLOG` has no `CLIENT TRACKING` equivalent, so unlike
+/// [`read_value`] this is a plain request/response with nothing to consume
+/// on the next read.
+pub async fn fetch_slowlog(client: &Client, count: i64) -> Result<Vec<SlowlogEntry>, Error> {
+    /// One raw reply entry: `(id, timestamp, duration_us, args, client_addr,
+    /// client_name)`.
+    type RawEntry = (i64, i64, i64, Vec<Vec<u8>>, Vec<u8>, Vec<u8>);
+    let raw: Vec<RawEntry> = client.slowlog_get(Some(count)).await?;
+    Ok(raw
+        .into_iter()
+        .map(
+            |(id, timestamp, duration_us, args, client_addr, client_name)| {
+                let mut command = Vec::new();
+                for (i, arg) in args.iter().enumerate() {
+                    if i > 0 {
+                        command.push(b' ');
+                    }
+                    command.extend_from_slice(arg);
+                }
+                SlowlogEntry {
+                    id,
+                    timestamp,
+                    duration_us,
+                    command,
+                    client_addr,
+                    client_name,
+                }
+            },
+        )
+        .collect())
 }

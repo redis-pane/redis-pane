@@ -312,6 +312,7 @@ impl Shell {
                 }
             }
             Command::FetchMetadata { indices } => self.fetch_metadata(state, &indices),
+            Command::FetchSlowlog { count } => self.fetch_slowlog(count),
             Command::ReadKey {
                 key,
                 index,
@@ -366,6 +367,22 @@ impl Shell {
                 },
                 Err(e) => Msg::Failed {
                     command: "fetching metadata".into(),
+                    detail: e.details().to_string(),
+                    at_ms: clock.now_epoch_ms(),
+                },
+            };
+            let _ = tx.send(msg).await;
+        });
+    }
+
+    /// Fetch the slowlog ring buffer (R6.4, M3). No arming, no liveness — a
+    /// plain request/response, unlike [`Shell::read_key`].
+    fn fetch_slowlog(&self, count: i64) {
+        let (client, tx, clock) = (self.client.clone(), self.tx.clone(), self.clock.clone());
+        tokio::spawn(async move {
+            let msg = match crate::redis::read::fetch_slowlog(&client, count).await {
+                Ok(entries) => Msg::SlowlogLoaded { entries },
+                Err(e) => Msg::SlowlogFailed {
                     detail: e.details().to_string(),
                     at_ms: clock.now_epoch_ms(),
                 },

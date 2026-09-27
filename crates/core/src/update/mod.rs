@@ -14,7 +14,7 @@ use crate::state::copy::{CopyWhat, redis_cli_command, value_text};
 use crate::state::value::Value;
 use crate::state::{
     Attachment, EditBuffer, EditTarget, FieldPart, Link, OpenKey, PendingMutation, PendingRead,
-    ReadOnlyReason, ScanState, Tracking, is_valid_zset_score,
+    ReadOnlyReason, ScanState, Tracking, View, is_valid_zset_score,
 };
 use crate::{Command, Msg, State};
 
@@ -24,6 +24,7 @@ mod keys;
 mod link;
 mod mouse;
 mod scan;
+mod slowlog;
 mod viewer;
 
 // Every submodule is `pub(super)`, never `pub`: `update()` stays the only way
@@ -38,6 +39,7 @@ use self::keys::*;
 use self::link::*;
 use self::mouse::*;
 use self::scan::*;
+use self::slowlog::*;
 use self::viewer::*;
 
 /// Mint the token for a read about to be issued, superseding any in flight.
@@ -233,6 +235,8 @@ pub fn update(mut state: State, msg: Msg) -> (State, Vec<Command>) {
             at_ms,
         } => mutation_settled(state, mutation, index, result, at_ms),
         Msg::Quit => quit(state),
+        Msg::SlowlogLoaded { entries } => slowlog_loaded(state, entries),
+        Msg::SlowlogFailed { detail, at_ms } => slowlog_failed(state, detail, at_ms),
     }
 }
 
@@ -331,6 +335,27 @@ fn key_press(mut state: State, key: KeyPress) -> (State, Vec<Command>) {
         Mode::Filtering => return filter_key(state, key),
         Mode::Normal => {}
     }
+    // `g`-chords (DESIGN §3's jump list, M3): a pending prefix waits, with no
+    // timeout, for exactly one more keypress. `Esc` or a second key that
+    // names no chord clears it and does nothing else — the same "swallowed,
+    // not reinterpreted" rule every other modal capture in this app follows
+    // (Filter's `Esc`, Confirm's stray keys). Checked only in `Mode::Normal`:
+    // Filtering/Editing/Confirm each hardcode their own vocabulary and reach
+    // `g` before this ever would, so a pending chord can never coexist with
+    // one of them.
+    if let Some(prefix) = state.pending_chord.take() {
+        if key.code == KeyCode::Esc {
+            return (state, Vec::new());
+        }
+        return match state.keymap.chord_action(&prefix, &key) {
+            Some(action) => dispatch_action(state, action),
+            None => (state, Vec::new()),
+        };
+    }
+    if state.keymap.is_chord_prefix(&key) {
+        state.pending_chord = Some(key);
+        return (state, Vec::new());
+    }
     let Some(action) = state.keymap.action_for(&key) else {
         return (state, Vec::new());
     };
@@ -397,8 +422,42 @@ fn help_key(mut state: State, key: KeyPress) -> (State, Vec<Command>) {
 /// both passed, kept separate from `key_press` itself so a resolved `Action`
 /// has exactly one place that decides what it does.
 fn dispatch_action(mut state: State, action: Action) -> (State, Vec<Command>) {
+    // The Slowlog view is a full screen, not the two-pane browser: only the
+    // actions it gives its own meaning to (movement, sort, refetch, copy,
+    // `d` staging `RESET` — PLAN decision 3) and the handful that are the
+    // app's, not a pane's (Quit/Help/ToggleReadOnly/Cancel/the two view
+    // chords) do anything while it is showing. Every keys/value-pane action
+    // — Edit, Add, Filter, ToggleTree, CyclePane, the split-resize pair,
+    // EnterValueCursor, the editor-scoped four — would otherwise reach
+    // straight into `State::keys`/`State::open` underneath a screen that is
+    // not showing either of them, which is exactly the kind of invisible
+    // action `key_press`'s `pane_is_on_screen` gate exists to rule out one
+    // level up.
+    if state.screen == View::Slowlog {
+        return match action {
+            Action::Quit => quit(state),
+            Action::Help => open_help(state),
+            Action::Cancel => cancel(state),
+            Action::ToggleReadOnly => toggle_read_only(state),
+            Action::OpenKeysView => open_keys_view(state),
+            Action::OpenSlowlog => open_slowlog(state),
+            Action::MoveDown
+            | Action::MoveUp
+            | Action::PageDown
+            | Action::PageUp
+            | Action::Top
+            | Action::Bottom
+            | Action::Sort
+            | Action::Refetch
+            | Action::Copy
+            | Action::Delete => slowlog_dispatch(state, action),
+            _ => (state, Vec::new()),
+        };
+    }
     match action {
         Action::Quit => quit(state),
+        Action::OpenKeysView => open_keys_view(state),
+        Action::OpenSlowlog => open_slowlog(state),
         // Reached only from `Mode::Normal` (`key_press`'s mode match), which
         // itself only happens when `state.help` is `None` — `mode` ranks
         // `Mode::Help` first, so this is always an open, never a toggle-off;
@@ -509,17 +568,22 @@ fn dispatch_action(mut state: State, action: Action) -> (State, Vec<Command>) {
         Action::ToggleTree if state.keys_pane_focused() => toggle_tree(state),
         Action::ToggleTree => open_ttl_editor(state),
         Action::CollapseGroup => collapse_group(state),
-        Action::ToggleReadOnly => {
-            // A replica will refuse writes whatever we believe, so this is not
-            // a toggle the user gets to win (ADR-0009).
-            match state.read_only {
-                Some(ReadOnlyReason::Replica) => {}
-                Some(_) => state.read_only = None,
-                None => state.read_only = Some(ReadOnlyReason::User),
-            }
-            (state, Vec::new())
-        }
+        Action::ToggleReadOnly => toggle_read_only(state),
     }
+}
+
+/// `⌃R`: lift or impose Read-only Mode — shared by the ordinary dispatch
+/// above and the Slowlog view's restricted one, since a replica guard must
+/// refuse to be lifted (ADR-0009) regardless of which screen is showing.
+fn toggle_read_only(mut state: State) -> (State, Vec<Command>) {
+    // A replica will refuse writes whatever we believe, so this is not
+    // a toggle the user gets to win (ADR-0009).
+    match state.read_only {
+        Some(ReadOnlyReason::Replica) => {}
+        Some(_) => state.read_only = None,
+        None => state.read_only = Some(ReadOnlyReason::User),
+    }
+    (state, Vec::new())
 }
 
 /// `Esc`: back out of the nearest thing first — an overlay, then an error,
@@ -531,6 +595,14 @@ fn cancel(mut state: State) -> (State, Vec<Command>) {
     // `dispatch_action`/`cancel` at all — `help_key` closes it directly.
     if state.error.is_some() {
         state.error = None;
+        return (state, Vec::new());
+    }
+    // A full-screen view pops back to the browser before anything about the
+    // browser's own stack navigation (below) is considered — the same
+    // "nearest thing first" rule this whole function follows, one level up
+    // from the two-pane split.
+    if state.screen == View::Slowlog {
+        state.screen = View::Keys;
         return (state, Vec::new());
     }
     // The "pop" half of stack navigation: back to the list you were

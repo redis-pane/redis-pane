@@ -1,8 +1,50 @@
 # M3 task 3: Slowlog viewer (`g s`)
 
-Status: **planning — not started.** No code, no ADR. DESIGN.md has no prose for this screen at
-all today — only the `g s` chord in §3's jump list and ADR-0008's single-node caveat. This doc is
-the first design pass.
+Status: **done (2026-09-27).** Pulled ahead of task 2 (feed plumbing): Slowlog
+is request/response on the existing connection and does not need it. No ADR. This doc was the
+first design pass; the Decisions section below records what was settled when the build started,
+and three phase-A review fixes plus the phase-B `RESET` build both landed against it.
+
+## Decisions (2026-09-27) — these override the body below where they differ
+
+1. **`g`-chords are keymap data.** `Keymap.chords: Vec<ChordBinding { prefix, second, action }>`
+   beside the single-key bindings; `State.pending_chord` holds the prefix. **No timeout** (DESIGN
+   §8: no timing-dependent interactions). `Esc` or an unbound second key clears it and is
+   swallowed. Only `g k` and `g s` are bound here; `g d`/`g m`/`g p` land with their views. While
+   a chord is pending, the hint bar and help show its continuations plus `Esc cancel` only.
+2. **Slowlog is a full-screen view that displaces both panes** (R7.7). `State.screen: View`
+   (`Keys` default, `Slowlog`) — named `screen` because `State.view` already names the keys
+   pane's `Viewport`. `Esc` or `g k` returns to the browser exactly as it was left; tracking on
+   the Open key is never touched by switching views.
+3. **Keys follow the keymap growth rule — reuse, scoped to the view.** Movement, `s` sort
+   (recent → slowest), `r` refetch, `c` copy the selected command, `d` stages `SLOWLOG RESET`
+   (label `reset slowlog`; reuses `Action::Delete`, dispatched by view — the one-Action-two-verbs
+   shape `t` already has). No new bare keys.
+4. **Help:** `HelpContext::Slowlog` and a pending-chord context; `d reset slowlog` dimmed
+   `· preview only` under Read-only Mode like every mutation-starting key; EVERYWHERE lists the
+   view chords. Every context fits 80×24.
+5. **Rows:** age relative to the injected clock (`12s ago`, `3h ago`, `2d ago` — HH:MM:SS alone
+   is ambiguous for an entry days old), duration, truncated command, client. The **detail strip**
+   under the list shows the full argument list (Viewer byte escaping), client addr/name, and the
+   exact timestamp as UTC with date.
+6. **Reading:** `SLOWLOG GET 256` (`SLOWLOG_FETCH_COUNT`), not `-1` and not `CONFIG GET` (commonly
+   disabled on managed Redis). Reply shape is the same under RESP3. A refusal surfaces as an R7.4
+   notification with the command plus an in-view error state — never a blank screen.
+7. **Duration colouring:** `Token::Warn` above 100ms (`WARN_DURATION_US`).
+8. **`RESET`** is a server-wide mutation with no key: single `y` confirm (R4.6 — it destroys only
+   diagnostic history), refused at confirm under any Read-only Mode reason including `replica`
+   (the app's rule applies uniformly), view refetches after success. Verified against a live
+   server: `SLOWLOG RESET` is itself logged when the threshold is 0, so "empty after reset" means
+   "only the reset remains" in that test setup.
+
+**Build order:** A — views, chords, read path, render, sort, help, goldens (done, three review
+fixes applied: pending-chord EVERYWHERE no longer repeats `g s slowlog`, AGE replaced UTC
+`HH:MM:SS` with clock-relative age (exact UTC-with-date moved to the detail strip), and `i-config`
+dropped from the app crate's `fred` features since only the integration test needs `CONFIG SET`,
+issued there via `custom()` instead). B — `RESET` through the mutation chokepoint, confirm arm,
+read-only refusal (including `replica`), refetch on success, CONTEXT.md **Slowlog**, DESIGN §3
+(`View`/`screen`, chords) and a Slowlog screen section (§6.9), DESIGN §4 keymap rows, PLAN §6
+progress (done).
 
 ## Context
 

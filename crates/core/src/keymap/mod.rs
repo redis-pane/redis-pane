@@ -105,6 +105,15 @@ pub enum Action {
     EditorUndo,
     /// Redo the last undone edit inside the inline editor.
     EditorRedo,
+    /// `g k`: switch to the Keys view — the two-pane browser (M3, DESIGN §3's
+    /// `g`-prefixed jump list, `docs/plans/m3-slowlog.md`). A no-op if
+    /// already there. Reached only through a chord, never a plain binding —
+    /// see [`Keymap::chord_action`].
+    OpenKeysView,
+    /// `g s`: switch to the Slowlog view and issue a fresh
+    /// `Command::FetchSlowlog` (M3, R6.4, DESIGN §3's jump list). Reached
+    /// only through a chord — see [`Keymap::chord_action`].
+    OpenSlowlog,
 }
 
 impl Action {
@@ -206,6 +215,8 @@ impl Action {
             Action::EditorStage => "stage",
             Action::EditorUndo => "undo",
             Action::EditorRedo => "redo",
+            Action::OpenKeysView => "keys",
+            Action::OpenSlowlog => "slowlog",
         }
     }
 
@@ -240,6 +251,20 @@ pub struct Binding {
     pub action: Action,
 }
 
+/// A two-key chord: a prefix, then a second key (DESIGN §3's `g`-prefixed
+/// jump list, M3, `docs/plans/m3-slowlog.md`). Kept as its own table rather
+/// than folded into [`Binding`]'s single-key list: a chord's prefix does
+/// nothing on its own (it only arms [`crate::state::State::pending_chord`]),
+/// so a plain `action_for` lookup on the prefix alone must keep answering
+/// `None`, the way it always has for every key that is not bound to
+/// anything.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ChordBinding {
+    pub prefix: KeyPress,
+    pub second: KeyPress,
+    pub action: Action,
+}
+
 /// How a key is written on screen. Kept next to the keymap so the hint bar and
 /// the help overlay cannot disagree about how to spell a chord.
 pub fn key_label(key: &KeyPress) -> String {
@@ -271,11 +296,24 @@ pub fn key_label(key: &KeyPress) -> String {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Keymap {
     bindings: Vec<Binding>,
+    chords: Vec<ChordBinding>,
 }
 
 impl Default for Keymap {
     fn default() -> Self {
         Self {
+            chords: vec![
+                ChordBinding {
+                    prefix: KeyPress::plain(KeyCode::Char('g')),
+                    second: KeyPress::plain(KeyCode::Char('k')),
+                    action: Action::OpenKeysView,
+                },
+                ChordBinding {
+                    prefix: KeyPress::plain(KeyCode::Char('g')),
+                    second: KeyPress::plain(KeyCode::Char('s')),
+                    action: Action::OpenSlowlog,
+                },
+            ],
             bindings: vec![
                 Binding {
                     key: KeyPress::plain(KeyCode::Tab),
@@ -475,6 +513,57 @@ impl Keymap {
     pub fn bindings(&self) -> &[Binding] {
         &self.bindings
     }
+
+    /// Whether `key` starts a chord (DESIGN §3's `g`-prefixed jump list) —
+    /// what `update::key_press` checks before arming
+    /// [`crate::state::State::pending_chord`].
+    pub fn is_chord_prefix(&self, key: &KeyPress) -> bool {
+        self.chords.iter().any(|c| c.prefix == *key)
+    }
+
+    /// The action `prefix`+`second` names, if any. `None` means the second
+    /// key was not bound under this prefix — `update::key_press` clears the
+    /// pending chord and swallows the keystroke either way, the same
+    /// "second key clears it" rule an unbound key gets everywhere else.
+    pub fn chord_action(&self, prefix: &KeyPress, second: &KeyPress) -> Option<Action> {
+        self.chords
+            .iter()
+            .find(|c| c.prefix == *prefix && c.second == *second)
+            .map(|c| c.action)
+    }
+
+    /// The effective chord for an action, spelled the way [`key_label`]
+    /// spells a plain binding — `"g k"`, not `"gk"` — for the help overlay
+    /// and hint bar's EVERYWHERE row (R7.5: the effective binding, not the
+    /// default, though phase A ships no way to rebind one).
+    pub fn chord_hint(&self, action: Action) -> Option<String> {
+        self.chords
+            .iter()
+            .find(|c| c.action == action)
+            .map(|c| format!("{} {}", key_label(&c.prefix), key_label(&c.second)))
+    }
+
+    /// Rebind a chord's second key under `prefix` — the same
+    /// override-wins-and-displaces convention [`Keymap::bind`] uses for a
+    /// plain key.
+    pub fn bind_chord(&mut self, action: Action, prefix: KeyPress, second: KeyPress) {
+        self.chords
+            .retain(|c| !(c.prefix == prefix && c.second == second));
+        self.chords.insert(
+            0,
+            ChordBinding {
+                prefix,
+                second,
+                action,
+            },
+        );
+    }
+
+    /// Every chord, for the help overlay's continuation list while one is
+    /// pending (`help::HelpContext::ChordPending`).
+    pub fn chords(&self) -> &[ChordBinding] {
+        &self.chords
+    }
 }
 
 #[cfg(test)]
@@ -653,6 +742,70 @@ mod tests {
         ] {
             assert!(k.key_for(action).is_some(), "{action:?} has no binding");
         }
+    }
+}
+
+#[cfg(test)]
+mod chord_tests {
+    use super::*;
+
+    #[test]
+    fn g_is_a_chord_prefix_and_nothing_else_is() {
+        let k = Keymap::default();
+        assert!(k.is_chord_prefix(&KeyPress::plain(KeyCode::Char('g'))));
+        assert!(!k.is_chord_prefix(&KeyPress::plain(KeyCode::Char('k'))));
+        assert!(!k.is_chord_prefix(&KeyPress::plain(KeyCode::Char('s'))));
+    }
+
+    #[test]
+    fn g_alone_resolves_to_no_plain_action() {
+        // The prefix key does nothing by itself — only arms the pending
+        // chord (`update::key_press`), which reads `is_chord_prefix`, not
+        // `action_for`.
+        let k = Keymap::default();
+        assert_eq!(k.action_for(&KeyPress::plain(KeyCode::Char('g'))), None);
+    }
+
+    #[test]
+    fn g_k_and_g_s_resolve_to_their_actions() {
+        let k = Keymap::default();
+        let g = KeyPress::plain(KeyCode::Char('g'));
+        assert_eq!(
+            k.chord_action(&g, &KeyPress::plain(KeyCode::Char('k'))),
+            Some(Action::OpenKeysView)
+        );
+        assert_eq!(
+            k.chord_action(&g, &KeyPress::plain(KeyCode::Char('s'))),
+            Some(Action::OpenSlowlog)
+        );
+    }
+
+    #[test]
+    fn an_unbound_second_key_names_no_action() {
+        let k = Keymap::default();
+        let g = KeyPress::plain(KeyCode::Char('g'));
+        assert_eq!(
+            k.chord_action(&g, &KeyPress::plain(KeyCode::Char('z'))),
+            None
+        );
+    }
+
+    #[test]
+    fn chord_hint_spells_the_two_keys_space_separated() {
+        let k = Keymap::default();
+        assert_eq!(k.chord_hint(Action::OpenSlowlog).as_deref(), Some("g s"));
+        assert_eq!(k.chord_hint(Action::OpenKeysView).as_deref(), Some("g k"));
+    }
+
+    #[test]
+    fn rebinding_a_chords_second_key_takes_effect_and_frees_the_old_one() {
+        let mut k = Keymap::default();
+        let g = KeyPress::plain(KeyCode::Char('g'));
+        k.bind_chord(Action::OpenSlowlog, g, KeyPress::plain(KeyCode::Char('x')));
+        assert_eq!(
+            k.chord_action(&g, &KeyPress::plain(KeyCode::Char('x'))),
+            Some(Action::OpenSlowlog)
+        );
     }
 }
 

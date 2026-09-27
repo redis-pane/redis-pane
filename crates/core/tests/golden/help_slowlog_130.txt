@@ -1,0 +1,24 @@
+─ redis-pane ─ ● staging · cache-01:6379/0 · from profile staging ─────────────────────────────────────────────────────── ● live ─
+
+ SLOWLOG · 3 entries · sort: recent
+ AGE       DURATION COMMAND                                                                                CLIENT
+ 12s ago   185.0ms  HGETALL user:8812:session                                                              worker-3 (10.0.0.4:5…
+ 3h ago    420µs    GET lock┌─ help · slowlog ──────────────────────────────────────────────────────┐      10.0.0.9:33012
+ 2d ago    2.40s    KEYS use│ s         sort                                                        │      worker-3 (10.0.0.4:5…
+                            │ r         refetch                                                     │
+                            │ c         copy command                                                │
+                            │ d         reset slowlog                                               │
+                            │ ↑↓ jk     move                                                        │
+                            │ PgUp/PgDn page                                                        │
+                            │ Home/End  top/bottom                                                  │
+                            │                                                                       │
+                            │ ⌃R read-only   g s slowlog   g k keys   Esc back   q quit   ? F1 help │
+                            │                                                                       │
+                            │ Esc close                                                             │
+                            └───────────────────────────────────────────────────────────────────────┘
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ cmd    HGETALL user:8812:session
+ at 2023-11-14 22:14:22 UTC  ·  client worker-3 (10.0.0.4:51820)
+
+ s sort   r refetch   c copy command   d reset slowlog   ↑↓ jk move   PgUp/PgDn page   Home/End top/bottom   ? F1 help

@@ -18,6 +18,7 @@ use std::time::Duration;
 
 use fred::interfaces::ClientLike;
 use fred::prelude::*;
+use fred::types::CustomCommand;
 use redis_pane_core::state::value::Viewer;
 use testcontainers::core::{ContainerPort, WaitFor};
 use testcontainers::runners::AsyncRunner;
@@ -3563,4 +3564,113 @@ async fn a_silently_dead_connection_frees_the_read_gate_within_the_configured_ti
     let _ = client.quit().await;
     let _ = writer.quit().await;
     let _ = fresh.quit().await;
+}
+
+// ── M3 — the Slowlog read path (R6.4, `docs/plans/m3-slowlog.md`) ───────────
+
+/// `CONFIG SET parameter value`, issued through fred's raw-command escape
+/// hatch rather than `ConfigInterface`: the shipped binary never sends
+/// `CONFIG SET` (there is no requirement for it — R6.4 is read-and-reset
+/// only, `docs/plans/m3-slowlog.md`'s "Out of scope"), so `i-config` is not
+/// a feature the app crate carries; only this test needs it, and it can ask
+/// for exactly this one command without it.
+async fn config_set(client: &Client, parameter: &str, value: &str) {
+    let _: () = client
+        .custom(
+            CustomCommand::new("CONFIG", parameter.as_bytes(), false),
+            vec![
+                Value::from("SET"),
+                Value::from(parameter.to_string()),
+                Value::from(value.to_string()),
+            ],
+        )
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+#[ignore = "needs docker"]
+async fn the_slowlog_read_path_fetches_entries_then_reset_via_the_mutate_chokepoint_empties_it() {
+    let (_c, url) = start("redis", "7-alpine").await;
+    let writer = Builder::from_config(Config::from_url(&url).unwrap())
+        .build()
+        .unwrap();
+    writer.init().await.unwrap();
+
+    // Every command qualifies — a standard technique for testing this
+    // reliably rather than trying to time a real slow command.
+    config_set(&writer, "slowlog-log-slower-than", "0").await;
+    config_set(&writer, "slowlog-max-len", "128").await;
+    let _: () = writer.slowlog_reset().await.unwrap();
+
+    let _: () = writer
+        .set("slowlog:probe", "value", None, None, false)
+        .await
+        .unwrap();
+    let _: String = writer.get("slowlog:probe").await.unwrap();
+
+    let (client, _) = redis_pane::redis::connect(&url).await.unwrap();
+    let entries = redis_pane::redis::read::fetch_slowlog(&client, 256)
+        .await
+        .unwrap();
+    assert!(
+        entries.len() >= 2,
+        "both the SET and the GET should have logged: {entries:?}"
+    );
+    let commands: Vec<String> = entries
+        .iter()
+        .map(|e| String::from_utf8_lossy(&e.command).into_owned())
+        .collect();
+    assert!(
+        commands.iter().any(|c| c.starts_with("SET slowlog:probe")),
+        "{commands:?}"
+    );
+    assert!(
+        commands.iter().any(|c| c.starts_with("GET slowlog:probe")),
+        "{commands:?}"
+    );
+    // Every entry has a real id, a plausible timestamp, and a client address
+    // — the six-element shape this app's Redis 6.0 floor guarantees
+    // (ADR-0007), parsed without falling back to a default on a short reply.
+    for entry in &entries {
+        assert!(entry.id >= 0, "{entry:?}");
+        assert!(entry.timestamp > 0, "{entry:?}");
+        assert!(!entry.client_addr.is_empty(), "{entry:?}");
+    }
+
+    // `SLOWLOG RESET` (M3 phase B, `docs/plans/m3-slowlog.md` Decision 8) —
+    // through the real mutation chokepoint (`redis_pane::redis::mutate::execute`),
+    // not `writer.slowlog_reset()` directly, so this pins the same
+    // `crates/app/src/redis/mutate.rs` code path the confirm dialog's `y`
+    // actually dispatches — the point of this task's "run it through the
+    // real mutate path" ask.
+    //
+    // `SLOWLOG RESET` is not itself exempt from being logged — with the
+    // threshold at 0 it logs *itself*, so the surviving ring buffer is not
+    // empty but contains exactly that one entry. A real discovery this test
+    // caught on its first run: an earlier draft asserted `is_empty()` and
+    // failed against a live 7-alpine container.
+    let outcome = redis_pane::redis::mutate::execute(
+        &client,
+        &redis_pane_core::mutation::Mutation::ResetSlowlog,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        outcome,
+        redis_pane_core::mutation::MutationOutcome::Done,
+        "RESET has no guard to trip (D8) — it always settles Done"
+    );
+    let after_reset = redis_pane::redis::read::fetch_slowlog(&client, 256)
+        .await
+        .unwrap();
+    assert!(
+        after_reset
+            .iter()
+            .all(|e| String::from_utf8_lossy(&e.command).starts_with("SLOWLOG")),
+        "everything but the reset's own entry must be gone: {after_reset:?}"
+    );
+
+    let _ = client.quit().await;
+    let _ = writer.quit().await;
 }

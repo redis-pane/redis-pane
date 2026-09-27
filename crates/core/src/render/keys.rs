@@ -496,7 +496,10 @@ fn fill_row(buf: &mut Buffer, area: Rect, y: u16, style: ratatui::style::Style) 
 /// Truncate from the right with an ellipsis. Key names share long prefixes, so
 /// the distinguishing part is at the end — but a name that has been cut must
 /// say so, or the reader will believe they are looking at the whole key.
-fn truncate(s: &str, width: usize) -> String {
+///
+/// `pub(crate)`: the Slowlog screen (`render::slowlog`) reuses this for its
+/// COMMAND column rather than keeping a second copy of the same rule.
+pub(crate) fn truncate(s: &str, width: usize) -> String {
     let width = width.saturating_sub(1);
     if s.chars().count() <= width {
         return s.to_string();

@@ -278,4 +278,15 @@ pub enum Msg {
     },
     /// The user asked to leave.
     Quit,
+    /// `Command::FetchSlowlog` answered (R6.4, M3).
+    SlowlogLoaded {
+        entries: Vec<crate::state::SlowlogEntry>,
+    },
+    /// `Command::FetchSlowlog` failed. Produces both the R7.4 notification
+    /// naming the failing command and the Slowlog view's own in-screen empty
+    /// state — two readers of the same fact (`update::slowlog::slowlog_failed`).
+    SlowlogFailed {
+        detail: String,
+        at_ms: u64,
+    },
 }

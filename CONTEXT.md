@@ -139,4 +139,10 @@ Staged mutation only when the reader asks — `Ctrl-S` — never on its own. Onc
 screen, taking no more keys, until the write is read back or the edit ends. If the key is gone by
 the time it would be written, nothing is written — the key is never recreated — and the buffer is
 handed back to be typed into.
+
+**Slowlog**:
+The server's own ring buffer of commands that took longer than its configured threshold to run —
+what `SLOWLOG GET` answers. It is the server's fact, not something this app measures or infers;
+the app only reads and, on request, clears it (`SLOWLOG RESET`).
+_Avoid_: Query log, slow query list, performance log
 _Avoid_: Draft, scratch value, cache

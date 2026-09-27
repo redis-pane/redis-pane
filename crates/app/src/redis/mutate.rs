@@ -19,7 +19,18 @@ use redis_pane_core::state::value::ListEnd;
 /// re-reads through the one read path afterward, never trusting what it just
 /// wrote (ADR-0006).
 pub async fn execute(client: &Client, mutation: &Mutation) -> Result<MutationOutcome, Error> {
-    let key = mutation.key().as_bytes();
+    // `ResetSlowlog` is the one `Mutation` with no key at all (M3 phase B,
+    // `docs/plans/m3-slowlog.md` Decision 8) — handled before `mutation.key()`
+    // is ever called, rather than teaching that call an `Option` every other
+    // arm below would then have to unwrap for no reason.
+    if matches!(mutation, Mutation::ResetSlowlog) {
+        let _: () = client.slowlog_reset().await?;
+        return Ok(MutationOutcome::Done);
+    }
+    let key = mutation
+        .key()
+        .expect("ResetSlowlog returned above; every other Mutation has a key")
+        .as_bytes();
     Ok(match mutation {
         Mutation::DeleteKey { .. } => {
             delete_key(client, key).await?;
@@ -132,6 +143,8 @@ pub async fn execute(client: &Client, mutation: &Mutation) -> Result<MutationOut
                 ShiftTtlWrite::KeyGone => MutationOutcome::NotWritten(NotWritten::KeyGone),
             }
         }
+        // Handled above, before `key` was ever computed — never reached.
+        Mutation::ResetSlowlog => unreachable!("returned above"),
     })
 }
 
