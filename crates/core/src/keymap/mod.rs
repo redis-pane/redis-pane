@@ -114,6 +114,19 @@ pub enum Action {
     /// `Command::FetchSlowlog` (M3, R6.4, DESIGN §3's jump list). Reached
     /// only through a chord — see [`Keymap::chord_action`].
     OpenSlowlog,
+    /// `g m`: switch to the Monitor view (M3 phase B, R6.1,
+    /// `docs/plans/m3-monitor.md`), staging a cost-confirmation first in
+    /// `prod`/`unknown` (decision 3). Reached only through a chord, and — the
+    /// same rule `OpenSlowlog` already follows — always starts a fresh feed
+    /// connection, even when pressed again from inside the view itself
+    /// (decision 2: "every `g m` opens a fresh connection; nothing is
+    /// resumed").
+    OpenMonitor,
+    /// `p`, scoped to the Monitor view alone (keymap growth rule, decision 5):
+    /// pause/resume consuming the feed. A bare binding because it is a single
+    /// key like `d`/`e`/`t`/`c`, but — like those — it means nothing outside
+    /// the view that gives it meaning; everywhere else it is a no-op.
+    TogglePause,
 }
 
 impl Action {
@@ -217,6 +230,8 @@ impl Action {
             Action::EditorRedo => "redo",
             Action::OpenKeysView => "keys",
             Action::OpenSlowlog => "slowlog",
+            Action::OpenMonitor => "monitor",
+            Action::TogglePause => "pause / resume",
         }
     }
 
@@ -312,6 +327,11 @@ impl Default for Keymap {
                     prefix: KeyPress::plain(KeyCode::Char('g')),
                     second: KeyPress::plain(KeyCode::Char('s')),
                     action: Action::OpenSlowlog,
+                },
+                ChordBinding {
+                    prefix: KeyPress::plain(KeyCode::Char('g')),
+                    second: KeyPress::plain(KeyCode::Char('m')),
+                    action: Action::OpenMonitor,
                 },
             ],
             bindings: vec![
@@ -470,6 +490,10 @@ impl Default for Keymap {
                 Binding {
                     key: KeyPress::ctrl(KeyCode::Char('y')),
                     action: Action::EditorRedo,
+                },
+                Binding {
+                    key: KeyPress::plain(KeyCode::Char('p')),
+                    action: Action::TogglePause,
                 },
             ],
         }

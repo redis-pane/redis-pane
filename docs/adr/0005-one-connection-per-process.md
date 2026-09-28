@@ -60,3 +60,11 @@ purpose-built feature rather than as general multi-connection support.
   logical target. Routing stays hidden; if that proves untenable, this ADR is what to revisit.
 - Adding multi-connection back is expensive by design. That is the point: the cost is being paid
   once, now, in exchange for everything else staying small.
+- **A feed connection is not a second Connection.** Monitor and Pub/Sub (`docs/plans/
+  m3-feed-connection.md`) each open a second TCP socket to the *same* resolved target while their
+  view is open, because `MONITOR` and a subscribed connection cannot share the wire with ordinary
+  reads/writes without starving them. It carries no credentials of its own beyond the ones this
+  Connection already resolved, appears nowhere in the title bar, and is closed the moment its view
+  is left — it is transport plumbing behind one Viewer, not a second logical target a reader could
+  point at a different server or database. Checked against this ADR before it was built, and
+  recorded here so a future reader does not mistake it for the thing this ADR rejected.

@@ -3858,3 +3858,151 @@ fn a_duration_over_the_threshold_uses_the_warn_token_not_muted() {
         "420µs is under the threshold"
     );
 }
+
+// ── Monitor (`g m`, M3 phase B, `docs/plans/m3-monitor.md`) ────────────────
+
+use redis_pane_core::command::FeedKindMsg;
+use redis_pane_core::state::FeedStatus;
+
+const MONITOR_NOW_MS: u64 = 1_339_518_083_500;
+
+fn monitor_line(at_ms: u64, raw: &str) -> (u64, String) {
+    (at_ms, raw.to_string())
+}
+
+/// A live, open feed with three lines already in the tail — the shape most
+/// Monitor goldens start from.
+fn monitor_with_lines() -> State {
+    let mut state = State {
+        screen: redis_pane_core::state::View::Monitor,
+        link: up(Tk::Armed),
+        ..base()
+    };
+    state.monitor.status = FeedStatus::Open;
+    state.monitor.following = true;
+    for (at_ms, raw) in [
+        monitor_line(
+            MONITOR_NOW_MS,
+            r#"1339518083.107412 [0 10.0.0.4:51820] "GET" "user:8812:session""#,
+        ),
+        monitor_line(
+            MONITOR_NOW_MS + 1,
+            r#"1339518083.208511 [0 10.0.0.9:33012] "SET" "lock:checkout:8812" "1""#,
+        ),
+        monitor_line(
+            MONITOR_NOW_MS + 2,
+            r#"1339518083.309876 [0 10.0.0.4:51820] "EXPIRE" "user:8812:session" "1800""#,
+        ),
+    ] {
+        state.monitor.push_monitor_line(at_ms, raw);
+    }
+    state
+}
+
+#[test]
+fn golden_monitor_80_live_tail() {
+    assert_golden(
+        "monitor_80",
+        &draw_at(&monitor_with_lines(), 80, 24, &FixedClock(MONITOR_NOW_MS)),
+    );
+}
+
+#[test]
+fn golden_monitor_130_live_tail() {
+    assert_golden(
+        "monitor_130",
+        &draw_at(&monitor_with_lines(), 130, 26, &FixedClock(MONITOR_NOW_MS)),
+    );
+}
+
+/// Decision 10: the warning banner survives all the way down to the
+/// single-pane floor — never one of the things narrowing sheds.
+#[test]
+fn the_monitor_banner_survives_at_single_pane_width() {
+    let text = draw_at(&monitor_with_lines(), 60, 24, &FixedClock(MONITOR_NOW_MS));
+    assert!(
+        text.lines().nth(2).is_some_and(|l| l.contains("MONITOR")),
+        "{text}"
+    );
+}
+
+#[test]
+fn golden_monitor_paused() {
+    let mut state = monitor_with_lines();
+    state.monitor.toggle_pause();
+    for i in 0..340 {
+        state
+            .monitor
+            .push_monitor_line(MONITOR_NOW_MS + 3 + i, format!("dropped {i}"));
+    }
+    assert_golden(
+        "monitor_paused_80",
+        &draw_at(&state, 80, 24, &FixedClock(MONITOR_NOW_MS)),
+    );
+}
+
+#[test]
+fn golden_monitor_filtered() {
+    let mut state = monitor_with_lines();
+    state.monitor.filter = "SET".to_string();
+    assert_golden(
+        "monitor_filtered_80",
+        &draw_at(&state, 80, 24, &FixedClock(MONITOR_NOW_MS)),
+    );
+}
+
+#[test]
+fn golden_monitor_empty_connecting() {
+    let mut state = State {
+        screen: redis_pane_core::state::View::Monitor,
+        link: up(Tk::Armed),
+        ..base()
+    };
+    state.monitor.status = FeedStatus::Connecting;
+    state.monitor.following = true;
+    assert!(state.monitor.is_empty());
+    assert_golden(
+        "monitor_connecting_80",
+        &draw_at(&state, 80, 24, &FixedClock(MONITOR_NOW_MS)),
+    );
+}
+
+#[test]
+fn golden_monitor_feed_closed() {
+    let mut state = monitor_with_lines();
+    state.monitor.status = FeedStatus::Closed {
+        reason: Some("the feed connection closed".to_string()),
+    };
+    assert_golden(
+        "monitor_closed_80",
+        &draw_at(&state, 80, 24, &FixedClock(MONITOR_NOW_MS)),
+    );
+}
+
+/// Decision 3: `g m` in `prod`/`unknown` stages this instead of opening —
+/// drawn over whatever screen it was staged from (`state.screen` is still
+/// `View::Keys` here, since nothing has opened yet).
+#[test]
+fn golden_monitor_prod_confirm() {
+    let mut state = State {
+        connection: Connection {
+            environment: Environment::Prod,
+            ..base().connection
+        },
+        ..base()
+    };
+    state.pending_feed = Some(FeedKindMsg::Monitor);
+    assert_golden(
+        "monitor_prod_confirm_80",
+        &draw_at(&state, 80, 24, &FixedClock(MONITOR_NOW_MS)),
+    );
+}
+
+#[test]
+fn golden_help_in_monitor_view() {
+    let mut state = monitor_with_lines();
+    state.help = Some(HelpView { pane: state.focus });
+    let clock = FixedClock(MONITOR_NOW_MS);
+    assert_golden("help_monitor_80", &draw_at(&state, 80, 24, &clock));
+    assert_golden("help_monitor_130", &draw_at(&state, 130, 24, &clock));
+}

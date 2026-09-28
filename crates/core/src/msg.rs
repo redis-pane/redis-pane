@@ -289,4 +289,37 @@ pub enum Msg {
         detail: String,
         at_ms: u64,
     },
+    /// A feed connection (`Command::OpenFeed`) finished dialing and is
+    /// streaming (`docs/plans/m3-feed-connection.md`). `token` is the one the
+    /// `OpenFeed` that started it carried; a token that does not name the feed
+    /// currently open is stale and ignored (a reader who left the view, or
+    /// opened a newer feed, before this landed).
+    FeedOpened {
+        token: crate::command::FeedToken,
+    },
+    /// A feed connection ended: closed by the reader (`Command::CloseFeed`),
+    /// by the server, or by the network going silent. `reason` is `None` for a
+    /// close the reader asked for, `Some(_)` for anything they did not
+    /// (`m3-monitor.md` decision 9: the view keeps its buffer, the header
+    /// says why, and `r` reopens — no automatic reconnect). Guarded by `token`
+    /// exactly like [`Msg::FeedOpened`].
+    FeedClosed {
+        token: crate::command::FeedToken,
+        reason: Option<String>,
+    },
+    /// One line from an open `MONITOR` feed, translated by the shell's read
+    /// loop. `at_ms` is receipt time from the injected `Clock` (ADR-0011):
+    /// `MONITOR`'s own server-side timestamp is carried in `raw`, parsed for
+    /// display by `MonitorLine::columns` (`m3-monitor.md` decision 8), but
+    /// local buffer ordering stays a pure function of injected state, never
+    /// of the server's clock. `token` guards against a line from a feed the
+    /// reader has already left arriving after a newer `g m` reset the tail —
+    /// the same discipline `Msg::FeedOpened`/`Msg::FeedClosed` follow, and
+    /// necessary here for the same reason: `MonitorLine` carries no other
+    /// identity a stale line could be told apart by.
+    MonitorLine {
+        token: crate::command::FeedToken,
+        at_ms: u64,
+        raw: String,
+    },
 }

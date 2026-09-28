@@ -1,8 +1,49 @@
 # M3 task 4: Monitor (`g m`)
 
-Status: **planning — not started.** No code, no ADR. DESIGN §6.7 has two sentences, shared with
-Pub/Sub: "Live tail with a filter box, pause/resume, and a persistent warning banner on `MONITOR`
-explaining its cost. Buffers are bounded with a visible cap." This doc designs the rest.
+Status: **done, 2026-09-28.** Built in one PR with task 2's feed plumbing
+([`m3-feed-connection.md`](m3-feed-connection.md)) as phase A and this doc as phase B. No ADR.
+DESIGN §6.7 has been expanded with the built shape (banner, columns, pause/following, filter,
+closed-feed/reopen, cost confirmation) rather than the two placeholder sentences this doc
+originally quoted. CONTEXT.md's proposed **Monitor** entry (below) has been added.
+
+## Decisions (2026-09-27) — these override the body below where they differ
+
+1. **View state is `state.screen`** (`View::Monitor`), not `state.view` — see the Slowlog task.
+   `g m` is a chord in `Keymap.chords`, beside `g k`/`g s`.
+2. **Leaving the Monitor view by any route closes the feed** — `Esc`, `g k`, `g s`, quitting. A
+   `MONITOR` left running behind another view costs the server with nothing on screen to say so.
+   Every `g m` opens a fresh connection; nothing is resumed.
+3. **Confirmation on `prod` and `unknown`.** In those Environments `g m` first shows a confirm
+   dialog naming `MONITOR` and its cost; `y` opens the view, `Esc` does nothing. `local` and
+   `staging` open straight away. This is **not a mutation**: Read-only Mode does not refuse it,
+   and it must not be modelled as a `Mutation`/`PendingMutation` that confirm's read-only check
+   would reject. Reuse the confirm overlay's rendering and `y`/`Esc` handling with a distinct
+   pending kind; choose the least invasive shape the code allows and say why in the PR.
+4. **Line cap and byte cap.** `MONITOR_CAP` = 5000 lines, and each line's raw text is truncated
+   to `MONITOR_LINE_MAX` = 4 KiB on arrival (marked as truncated) — a single `SET` with a 10MB
+   value would otherwise make one line bigger than the whole buffer is meant to be. Worst case is
+   ~20MB. Both caps are applied in `push_monitor_line`, the one function that appends.
+5. **Pause is `p`**, scoped to the Monitor view (keymap growth rule: view-scoped, not a new bare
+   key). Paused lines are counted, not buffered (`paused · 340 skipped`); resume does not
+   backfill. The socket stays open while paused.
+6. **Filter is `/`**, reusing the keys pane's filter capture and matching semantics — display
+   only, never changes what is buffered.
+7. **Following the tail:** the view follows new lines while the selection is on the last line.
+   Moving up stops following (the header says so, e.g. `following off · End to resume`) without
+   pausing consumption; `End`/`G`-equivalent resumes. If the selected line is evicted by the cap,
+   the selection clamps to the oldest line.
+8. **Columns:** the server's own timestamp from the `MONITOR` line, shown as UTC
+   `HH:MM:SS.mmm`, then db, client and the command. Lines are shown with the Viewer's byte
+   escaping, never raw. `c` copies the selected line's command.
+9. **Feed closed** (server closed it, network drop, `-NOPERM` under ACLs): the view keeps the
+   buffer on screen, the header says `feed closed: <reason>`, an R7.4 notification carries the
+   command, and `r` reopens (label `reopen`). No automatic reconnect.
+10. **Banner:** a warning-token line at the top of the view whenever it is open, at every width
+    down to single-pane — not dismissible.
+
+Help gets a `Monitor` context (with the `p`/`/`/`r` rows and `c`), and EVERYWHERE lists `g m`.
+ADR-0005 gets a Consequences line: a feed connection is a second socket to the same target, not a
+second Connection.
 
 Depends on `docs/plans/m3-feed-connection.md` (the dedicated second connection `MONITOR` needs)
 and the `View` enum introduced in `docs/plans/m3-slowlog.md` (the full-screen-view state machine).

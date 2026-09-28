@@ -3674,3 +3674,447 @@ async fn the_slowlog_read_path_fetches_entries_then_reset_via_the_mutate_chokepo
     let _ = client.quit().await;
     let _ = writer.quit().await;
 }
+
+// ── M3 task 2 phase A — feed-connection plumbing
+// (`docs/plans/m3-feed-connection.md`) ──────────────────────────────────────
+//
+// `MONITOR` puts a connection into a mode that accepts nothing else until it
+// closes, so it must never share the main connection (`connect_with`'s own
+// read/write path). These prove the plumbing that keeps it off that path: the
+// main connection keeps answering while a feed is open, a feed actually
+// receives what `MONITOR` promises, a server-side kill of the feed surfaces
+// as `Msg::FeedClosed` rather than a hang, and `Command::CloseFeed`'s
+// teardown really does disconnect — not just stop reading.
+
+mod feed {
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use fred::prelude::*;
+    use redis_pane::redis::feed::{FeedKind, open_feed};
+    use redis_pane_core::Msg;
+    use redis_pane_core::clock::Clock;
+    use redis_pane_core::command::FeedToken;
+    use redis_pane_core::resolve::Credentials;
+    use testcontainers::ContainerAsync;
+    use testcontainers::GenericImage;
+    use testcontainers::core::{ContainerPort, WaitFor};
+    use testcontainers::runners::AsyncRunner;
+
+    const REDIS_PORT: ContainerPort = ContainerPort::Tcp(6379);
+
+    async fn start() -> (ContainerAsync<GenericImage>, String) {
+        let container = GenericImage::new("redis", "7-alpine")
+            .with_exposed_port(REDIS_PORT)
+            .with_wait_for(WaitFor::message_on_stdout("Ready to accept connections"))
+            .start()
+            .await
+            .expect("docker must be running for the integration suite");
+        let port = container.get_host_port_ipv4(REDIS_PORT).await.unwrap();
+        (container, format!("redis://127.0.0.1:{port}"))
+    }
+
+    /// A plain second connection, credentials-free like the suite's other
+    /// `writer` helpers — for issuing commands the feed should observe, and
+    /// for administering the server (`CLIENT LIST`/`CLIENT KILL`) from
+    /// outside the connection under test.
+    async fn plain_client(url: &str) -> Client {
+        let client = Builder::from_config(Config::from_url(url).unwrap())
+            .build()
+            .unwrap();
+        client.init().await.unwrap();
+        client
+    }
+
+    /// The client id of the (single, by construction in these tests)
+    /// connection currently in `MONITOR` mode, read off `CLIENT LIST` from a
+    /// connection that is not itself monitoring — a monitoring connection
+    /// accepts no commands of its own, so it cannot be asked directly.
+    async fn monitor_client_id(admin: &Client) -> Option<String> {
+        let list: String = admin
+            .client_list::<String, String>(None, None)
+            .await
+            .unwrap();
+        list.lines().find_map(|line| {
+            if !line.contains("cmd=monitor") {
+                return None;
+            }
+            line.split_whitespace()
+                .find_map(|field| field.strip_prefix("id="))
+                .map(str::to_string)
+        })
+    }
+
+    #[tokio::test]
+    #[ignore = "needs docker"]
+    async fn an_ordinary_read_on_the_main_connection_does_not_wait_on_an_open_feed() {
+        let (_c, url) = start().await;
+        let (main, _) = redis_pane::redis::connect(&url).await.unwrap();
+        let _: () = main
+            .set("probe", "before", None, None, false)
+            .await
+            .unwrap();
+
+        let (tx, _rx) = tokio::sync::mpsc::channel(16);
+        let clock: Arc<dyn Clock> = Arc::new(redis_pane::SystemClock);
+        let _feed = open_feed(
+            &url,
+            &Credentials::default(),
+            FeedKind::Monitor,
+            FeedToken::default(),
+            tx,
+            clock,
+            &main,
+        )
+        .await
+        .expect("MONITOR should be available on a fresh 7-alpine container");
+
+        // The literal claim this task's PLAN row makes: the main connection's
+        // own read/write path is untouched by a feed connection being open.
+        // Bounded so a regression that *does* couple them fails as a timeout
+        // rather than hanging the test suite.
+        let value: String = tokio::time::timeout(Duration::from_secs(5), main.get("probe"))
+            .await
+            .expect("a read on the main connection must not wait on the feed")
+            .unwrap();
+        assert_eq!(value, "before");
+
+        let _ = main.quit().await;
+    }
+
+    #[tokio::test]
+    #[ignore = "needs docker"]
+    async fn a_monitor_feed_receives_a_line_for_a_command_on_another_connection() {
+        let (_c, url) = start().await;
+        let writer = plain_client(&url).await;
+
+        let (tx, mut rx) = tokio::sync::mpsc::channel(16);
+        let clock: Arc<dyn Clock> = Arc::new(redis_pane::SystemClock);
+        let _feed = open_feed(
+            &url,
+            &Credentials::default(),
+            FeedKind::Monitor,
+            FeedToken::default(),
+            tx,
+            clock,
+            &writer,
+        )
+        .await
+        .unwrap();
+
+        let _: () = writer
+            .set("feed:probe", "seen", None, None, false)
+            .await
+            .unwrap();
+
+        let raw = tokio::time::timeout(Duration::from_secs(5), async {
+            match rx
+                .recv()
+                .await
+                .expect("the feed task must not exit silently")
+            {
+                Msg::MonitorLine { raw, .. } => raw,
+                other => panic!("expected a MonitorLine, got {other:?}"),
+            }
+        })
+        .await
+        .expect("a line for the SET issued above must arrive");
+
+        assert!(raw.contains("SET"), "{raw}");
+        assert!(raw.contains("feed:probe"), "{raw}");
+
+        let _ = writer.quit().await;
+    }
+
+    #[tokio::test]
+    #[ignore = "needs docker"]
+    async fn killing_the_feeds_server_side_connection_closes_it_rather_than_hanging() {
+        let (_c, url) = start().await;
+        let admin = plain_client(&url).await;
+
+        let (tx, mut rx) = tokio::sync::mpsc::channel(16);
+        let clock: Arc<dyn Clock> = Arc::new(redis_pane::SystemClock);
+        let token = FeedToken::default();
+        let feed = open_feed(
+            &url,
+            &Credentials::default(),
+            FeedKind::Monitor,
+            token,
+            tx,
+            clock,
+            &admin,
+        )
+        .await
+        .unwrap();
+
+        let id = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if let Some(id) = monitor_client_id(&admin).await {
+                    return id;
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await
+        .expect("the MONITOR connection must show up in CLIENT LIST");
+
+        let _: () = admin
+            .client_kill(vec![fred::types::client::ClientKillFilter::ID(id)])
+            .await
+            .unwrap();
+
+        let msg = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+            .await
+            .expect("a killed feed connection must surface Msg::FeedClosed, never hang")
+            .expect("the feed task must send before its channel closes");
+        match msg {
+            Msg::FeedClosed { token: got, reason } => {
+                assert_eq!(got, token);
+                assert!(
+                    reason.is_some(),
+                    "a drop the reader did not ask for names why"
+                );
+            }
+            other => panic!("expected FeedClosed, got {other:?}"),
+        }
+
+        // The read loop's own task exits on the same event; nothing left to
+        // cancel, but closing is still safe to call (mirrors the shell always
+        // calling it on `Command::CloseFeed` regardless of how the feed
+        // already ended).
+        feed.close();
+        let _ = admin.quit().await;
+    }
+
+    #[tokio::test]
+    #[ignore = "needs docker"]
+    async fn close_feed_actually_disconnects_the_monitor_connection() {
+        let (_c, url) = start().await;
+        let admin = plain_client(&url).await;
+
+        let (tx, _rx) = tokio::sync::mpsc::channel(16);
+        let clock: Arc<dyn Clock> = Arc::new(redis_pane::SystemClock);
+        let feed = open_feed(
+            &url,
+            &Credentials::default(),
+            FeedKind::Monitor,
+            FeedToken::default(),
+            tx,
+            clock,
+            &admin,
+        )
+        .await
+        .unwrap();
+
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while monitor_client_id(&admin).await.is_none() {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await
+        .expect("the MONITOR connection must show up in CLIENT LIST before it can be closed");
+
+        // `Command::CloseFeed`'s handler: `token.cancel(); drop(...)`, nothing
+        // cleverer (`docs/plans/m3-feed-connection.md`).
+        feed.close();
+
+        // `fred::monitor::run` hands back a bare `Stream`, not a `Client` —
+        // there is nothing to `.quit()` synchronously, so its internal
+        // forwarding task only notices our end is gone (and drops the
+        // socket) when it next tries to forward a line. Issuing ordinary
+        // traffic is what gives it that next line to fail on; polling with a
+        // bound is the honest shape of "eventually disconnects" this
+        // limitation leaves, documented in `open_feed`'s own doc comment.
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let _: () = admin.set("nudge", "1", None, None, false).await.unwrap();
+                if monitor_client_id(&admin).await.is_none() {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        })
+        .await
+        .expect("CLIENT LIST must stop showing the feed client once it is closed");
+
+        let _ = admin.quit().await;
+    }
+
+    // ── M3 phase B — Monitor against a real server
+    // (`docs/plans/m3-monitor.md`) ──────────────────────────────────────────
+
+    use redis_pane_core::state::{FeedStatus, MONITOR_CAP, View};
+    use redis_pane_core::{State, update};
+
+    /// A Monitor view already `Open` on `token`, ready to fold
+    /// `Msg::MonitorLine`s in via `update()` — the shape `open_monitor_view`
+    /// (`crates/core/src/update/monitor.rs`) leaves the core in, built
+    /// directly here since these tests drive a real feed by hand rather than
+    /// through a keypress.
+    fn monitor_state_open(token: FeedToken) -> State {
+        let mut state = State {
+            screen: View::Monitor,
+            ..State::default()
+        };
+        state.monitor.feed_token = token;
+        state.monitor.status = FeedStatus::Open;
+        state.monitor.following = true;
+        state
+    }
+
+    #[tokio::test]
+    #[ignore = "needs docker"]
+    async fn a_real_monitor_line_parses_end_to_end() {
+        let (_c, url) = start().await;
+        let writer = plain_client(&url).await;
+
+        let (tx, mut rx) = tokio::sync::mpsc::channel(16);
+        let clock: Arc<dyn Clock> = Arc::new(redis_pane::SystemClock);
+        let token = FeedToken::default();
+        let _feed = open_feed(
+            &url,
+            &Credentials::default(),
+            FeedKind::Monitor,
+            token,
+            tx,
+            clock,
+            &writer,
+        )
+        .await
+        .unwrap();
+
+        let _: () = writer
+            .set("monitor:probe", "1", None, None, false)
+            .await
+            .unwrap();
+
+        let msg = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        let mut state = monitor_state_open(token);
+        (state, _) = update(state, msg);
+
+        assert_eq!(state.monitor.len(), 1);
+        let line = state.monitor.lines().back().unwrap();
+        let cols = line.columns();
+        assert_eq!(cols.db, "0");
+        assert!(cols.command.contains("SET"), "{}", cols.command);
+        assert!(cols.command.contains("monitor:probe"), "{}", cols.command);
+
+        let _ = writer.quit().await;
+    }
+
+    #[tokio::test]
+    #[ignore = "needs docker"]
+    async fn a_paused_feed_stays_connected_while_the_buffer_does_not_grow() {
+        let (_c, url) = start().await;
+        let writer = plain_client(&url).await;
+
+        let (tx, mut rx) = tokio::sync::mpsc::channel(16);
+        let clock: Arc<dyn Clock> = Arc::new(redis_pane::SystemClock);
+        let token = FeedToken::default();
+        let _feed = open_feed(
+            &url,
+            &Credentials::default(),
+            FeedKind::Monitor,
+            token,
+            tx,
+            clock,
+            &writer,
+        )
+        .await
+        .unwrap();
+
+        let mut state = monitor_state_open(token);
+        state.monitor.toggle_pause();
+        assert!(state.monitor.paused);
+
+        for i in 0..5 {
+            let _: () = writer
+                .set(format!("paused:probe:{i}"), "1", None, None, false)
+                .await
+                .unwrap();
+        }
+        // Drain whatever the real feed delivered for those five writes —
+        // exactly the proof PLAN's row for this task asks for: the
+        // connection is still alive and readable (these `Msg::MonitorLine`s
+        // really arrived), but folding them through `update()` while paused
+        // must not grow `MonitorState.lines`.
+        let mut received = 0;
+        while received < 5 {
+            let msg = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+                .await
+                .expect("the feed must still be delivering lines while paused")
+                .unwrap();
+            received += 1;
+            (state, _) = update(state, msg);
+        }
+
+        assert_eq!(
+            state.monitor.len(),
+            0,
+            "pausing stops consuming the feed, not just hides it"
+        );
+        assert_eq!(state.monitor.dropped_while_paused, 5);
+
+        let _ = writer.quit().await;
+    }
+
+    #[tokio::test]
+    #[ignore = "needs docker"]
+    async fn the_buffer_stays_bounded_against_a_real_stream_past_the_cap() {
+        let (_c, url) = start().await;
+        let writer = plain_client(&url).await;
+
+        let (tx, mut rx) = tokio::sync::mpsc::channel(256);
+        let clock: Arc<dyn Clock> = Arc::new(redis_pane::SystemClock);
+        let token = FeedToken::default();
+        let _feed = open_feed(
+            &url,
+            &Credentials::default(),
+            FeedKind::Monitor,
+            token,
+            tx,
+            clock,
+            &writer,
+        )
+        .await
+        .unwrap();
+
+        // One pipeline, so the cap-exceeding traffic reaches the server (and
+        // the feed) fast rather than paying a round trip per command.
+        let total = MONITOR_CAP + 200;
+        let pipeline = writer.pipeline();
+        for i in 0..total {
+            let _: () = pipeline
+                .set(format!("bound:probe:{i}"), "1", None, None, false)
+                .await
+                .unwrap();
+        }
+        let _: Vec<()> = pipeline.all().await.unwrap();
+
+        let mut state = monitor_state_open(token);
+        let mut seen = 0usize;
+        // Real `MONITOR` traffic includes more than the `SET`s themselves
+        // (the pipeline's own framing can surface as `MULTI`-adjacent
+        // bookkeeping on some server versions), so this drains until either
+        // the cap is unmistakably exceeded or the feed goes quiet for a
+        // beat, rather than counting exactly `total` lines.
+        while let Ok(Some(msg)) = tokio::time::timeout(Duration::from_secs(3), rx.recv()).await {
+            seen += 1;
+            (state, _) = update(state, msg);
+            assert!(
+                state.monitor.len() <= MONITOR_CAP,
+                "grew past the cap after {seen} real lines"
+            );
+        }
+        assert!(
+            seen >= total,
+            "expected at least {total} lines from a real stream, saw {seen}"
+        );
+        assert_eq!(state.monitor.len(), MONITOR_CAP);
+
+        let _ = writer.quit().await;
+    }
+}

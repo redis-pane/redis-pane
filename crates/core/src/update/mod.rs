@@ -20,8 +20,10 @@ use crate::{Command, Msg, State};
 
 mod confirm;
 mod editor;
+mod feed;
 mod keys;
 mod link;
+mod monitor;
 mod mouse;
 mod scan;
 mod slowlog;
@@ -35,8 +37,10 @@ mod viewer;
 // below) can see a private `use` in its parent, so nothing here needs `pub`.
 use self::confirm::*;
 use self::editor::*;
+use self::feed::*;
 use self::keys::*;
 use self::link::*;
+use self::monitor::*;
 use self::mouse::*;
 use self::scan::*;
 use self::slowlog::*;
@@ -237,6 +241,9 @@ pub fn update(mut state: State, msg: Msg) -> (State, Vec<Command>) {
         Msg::Quit => quit(state),
         Msg::SlowlogLoaded { entries } => slowlog_loaded(state, entries),
         Msg::SlowlogFailed { detail, at_ms } => slowlog_failed(state, detail, at_ms),
+        Msg::FeedOpened { token } => feed_opened(state, token),
+        Msg::FeedClosed { token, reason } => feed_closed(state, token, reason),
+        Msg::MonitorLine { token, at_ms, raw } => monitor_line(state, token, at_ms, raw),
     }
 }
 
@@ -280,7 +287,11 @@ pub(crate) fn mode_beneath_help(state: &State) -> Mode {
     // that staged the mutation — so the preview always shows the real
     // command and its blast radius before the reader learns whether they
     // are allowed to run it (R4.4, DESIGN §6.5).
-    if state.confirm.is_some() {
+    // `pending_feed` is Monitor's own confirmation (decision 3,
+    // `docs/plans/m3-monitor.md`) — a distinct kind from `PendingMutation`,
+    // never routed through the mutation chokepoint below, but the same modal
+    // "only this captures the keypress" rule applies.
+    if state.confirm.is_some() || state.pending_feed.is_some() {
         return Mode::Confirm;
     }
     // The inline editor is a mode of its own too (ADR-0014), ranked above the
@@ -326,6 +337,14 @@ fn key_press(mut state: State, key: KeyPress) -> (State, Vec<Command>) {
     match current_mode {
         Mode::Help => return help_key(state, key),
         Mode::Confirm => {
+            // Monitor's own confirmation (`pending_feed`) is checked first:
+            // the two pending kinds are mutually exclusive in practice (a
+            // mutation preview and the `MONITOR` cost dialog have no shared
+            // trigger), but checking here rather than assuming keeps that
+            // true by construction instead of by convention.
+            if let Some(kind) = state.pending_feed.take() {
+                return feed_confirm_key(state, kind, key);
+            }
             // `confirm_key` needs the `PendingMutation` by value: `mode` only
             // answers which mode is active, so the take() still happens here.
             let pending = state.confirm.take().expect("Mode::Confirm implies confirm");
@@ -441,6 +460,7 @@ fn dispatch_action(mut state: State, action: Action) -> (State, Vec<Command>) {
             Action::ToggleReadOnly => toggle_read_only(state),
             Action::OpenKeysView => open_keys_view(state),
             Action::OpenSlowlog => open_slowlog(state),
+            Action::OpenMonitor => open_monitor(state),
             Action::MoveDown
             | Action::MoveUp
             | Action::PageDown
@@ -454,10 +474,42 @@ fn dispatch_action(mut state: State, action: Action) -> (State, Vec<Command>) {
             _ => (state, Vec::new()),
         };
     }
+    // The Monitor view (M3 phase B, `docs/plans/m3-monitor.md`) is the same
+    // shape one level over: a full screen, not the two-pane browser, so only
+    // the actions it gives its own meaning to (movement/following, pause,
+    // reopen, copy, filter — decisions 5–9) and the app-level handful do
+    // anything while it is showing.
+    if state.screen == View::Monitor {
+        return match action {
+            Action::Quit => quit(state),
+            Action::Help => open_help(state),
+            Action::Cancel => cancel(state),
+            Action::ToggleReadOnly => toggle_read_only(state),
+            Action::OpenKeysView => open_keys_view(state),
+            Action::OpenSlowlog => open_slowlog(state),
+            Action::OpenMonitor => open_monitor(state),
+            Action::MoveDown
+            | Action::MoveUp
+            | Action::PageDown
+            | Action::PageUp
+            | Action::Top
+            | Action::Bottom
+            | Action::TogglePause
+            | Action::Refetch
+            | Action::Copy
+            | Action::Filter => monitor_dispatch(state, action),
+            _ => (state, Vec::new()),
+        };
+    }
     match action {
         Action::Quit => quit(state),
         Action::OpenKeysView => open_keys_view(state),
         Action::OpenSlowlog => open_slowlog(state),
+        Action::OpenMonitor => open_monitor(state),
+        // Scoped to the Monitor view alone — see the block above. A no-op
+        // everywhere else, the same as `Action::Sort`'s bare `s` is a no-op
+        // wherever nothing gives it a meaning.
+        Action::TogglePause => (state, Vec::new()),
         // Reached only from `Mode::Normal` (`key_press`'s mode match), which
         // itself only happens when `state.help` is `None` — `mode` ranks
         // `Mode::Help` first, so this is always an open, never a toggle-off;
@@ -605,6 +657,13 @@ fn cancel(mut state: State) -> (State, Vec<Command>) {
         state.screen = View::Keys;
         return (state, Vec::new());
     }
+    // Monitor's own way back — every route out closes the feed first
+    // (decision 2, `docs/plans/m3-monitor.md`).
+    if state.screen == View::Monitor {
+        let commands = leave_monitor(&mut state);
+        state.screen = View::Keys;
+        return (state, commands);
+    }
     // The "pop" half of stack navigation: back to the list you were
     // just looking at, before an unrelated background scan. Also
     // exits value-cursor mode if it was active — the same keypress,
@@ -709,8 +768,14 @@ fn clear_editing(state: &mut State) {
 }
 
 fn quit(mut state: State) -> (State, Vec<Command>) {
+    // Quitting is a route out of the Monitor view too (decision 2): a
+    // `MONITOR` left running behind a process that is about to exit costs the
+    // server with nothing left to say so, which is exactly the scenario
+    // decision 2 exists to rule out.
+    let mut commands = leave_monitor(&mut state);
     state.quitting = true;
-    (state, vec![Command::Quit])
+    commands.push(Command::Quit);
+    (state, commands)
 }
 
 #[cfg(test)]

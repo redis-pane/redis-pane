@@ -97,7 +97,20 @@ pub(super) fn after_move(mut state: State) -> (State, Vec<Command>) {
 }
 
 /// Keys typed while the filter is capturing.
-pub(super) fn filter_key(mut state: State, key: KeyPress) -> (State, Vec<Command>) {
+///
+/// Screen-routed: the Monitor view (`docs/plans/m3-monitor.md` decision 6)
+/// reuses this same `/`-opens-filter-capture UX and the same
+/// [`crate::state::view::matches`] predicate, but narrows its own
+/// [`crate::state::MonitorState::filter`] rather than rebuilding the Loaded
+/// set's `KeyView` — see `update::monitor::monitor_filter_key`.
+pub(super) fn filter_key(state: State, key: KeyPress) -> (State, Vec<Command>) {
+    if state.screen == crate::state::View::Monitor {
+        return monitor_filter_key(state, key);
+    }
+    filter_key_keys_pane(state, key)
+}
+
+fn filter_key_keys_pane(mut state: State, key: KeyPress) -> (State, Vec<Command>) {
     match key.code {
         KeyCode::Esc => {
             // Esc abandons the filter entirely rather than keeping a partial

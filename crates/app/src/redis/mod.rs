@@ -15,6 +15,7 @@
 //! cannot return `Live` without an arming having been reported. This module is
 //! responsible for the other half: actually doing it.
 
+pub mod feed;
 pub mod mutate;
 pub mod read;
 pub mod scan;
@@ -100,16 +101,16 @@ pub async fn connect(url: &str) -> Result<(Client, Established), ConnectError> {
     connect_with(url, &Credentials::default()).await
 }
 
-/// Connect, authenticating with the credentials a Profile or the environment
-/// supplied.
+/// Build a `fred` `Config` for the resolved target, credentials and all.
 ///
-/// Without this, a Profile's `passwordEnv` is parsed, validated, and then
-/// dropped — which makes the whole config file work on localhost and nowhere
-/// else (ADR-0002).
-pub async fn connect_with(
-    url: &str,
-    credentials: &Credentials,
-) -> Result<(Client, Established), ConnectError> {
+/// The one place a URL and a `Credentials` become a dial-ready `Config` —
+/// [`connect_with`] uses it for the main connection, and
+/// [`crate::redis::feed::open_feed`] uses it for a second one, so a feed
+/// connection resolves credentials through the exact path `connect_with`
+/// does rather than re-parsing flags or, worse, falling back to the
+/// credential-less [`connect`] (`docs/plans/m3-feed-connection.md`: "the same
+/// credential path `connect_with` already resolves").
+pub(crate) fn build_config(url: &str, credentials: &Credentials) -> Result<Config, ConnectError> {
     // Redacted, because this string is printed. A URL that fails to parse is
     // exactly the one someone pasted by hand with a real password in it, and
     // the next thing they do with a startup diagnostic is paste it into a bug
@@ -142,6 +143,20 @@ pub async fn connect_with(
     // RESP2 is not spoken at all (ADR-0007): one reply shape per command, and
     // one code path per Viewer.
     config.version = RespVersion::RESP3;
+    Ok(config)
+}
+
+/// Connect, authenticating with the credentials a Profile or the environment
+/// supplied.
+///
+/// Without this, a Profile's `passwordEnv` is parsed, validated, and then
+/// dropped — which makes the whole config file work on localhost and nowhere
+/// else (ADR-0002).
+pub async fn connect_with(
+    url: &str,
+    credentials: &Credentials,
+) -> Result<(Client, Established), ConnectError> {
+    let config = build_config(url, credentials)?;
 
     let mut builder = Builder::from_config(config);
     // Bound how long a silently dead socket can hide, on both the connection
@@ -310,7 +325,7 @@ fn rejected_hello(detail: &str) -> bool {
     lower.contains("unknown command") && lower.contains("hello")
 }
 
-fn describe(e: &Error) -> String {
+pub(crate) fn describe(e: &Error) -> String {
     match e.details().is_empty() {
         true => format!("{e}"),
         false => format!("{:?}: {}", e.kind(), e.details()),

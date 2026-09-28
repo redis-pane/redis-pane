@@ -20,17 +20,18 @@ use ratatui::backend::CrosstermBackend;
 use fred::interfaces::EventInterface;
 use fred::prelude::Client;
 use redis_pane_core::clock::Clock;
-use redis_pane_core::command::ReadToken;
+use redis_pane_core::command::{Command, FeedKindMsg, FeedToken, ReadToken};
 use redis_pane_core::key::KeyName;
 use redis_pane_core::msg::{KeyCode, KeyPress, MouseAction};
 use redis_pane_core::mutation::Mutation;
 use redis_pane_core::resolve::Credentials;
 use redis_pane_core::theme::{ColorDepth, Theme};
-use redis_pane_core::{Command, Msg, State, render, update};
+use redis_pane_core::{Msg, State, render, update};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use crate::redis::Established;
+use crate::redis::feed::{FeedHandle, FeedKind};
 use crate::redis::read::{Arming, ReadGate};
 
 /// Restores the terminal on drop, including when the process is unwinding.
@@ -203,6 +204,7 @@ pub async fn run(
     );
 
     let (landed_tx, mut landed_rx) = mpsc::channel::<(Client, Established)>(1);
+    let (feed_landed_tx, mut feed_landed_rx) = mpsc::channel(1);
     let mut shell = Shell {
         client,
         tx,
@@ -215,6 +217,11 @@ pub async fn run(
             attempt: 0,
             cancel: None,
             landed: landed_tx,
+        },
+        feed: Feed {
+            handle: None,
+            dialing: None,
+            landed: feed_landed_tx,
         },
     };
     shell.start_scan(None);
@@ -238,6 +245,16 @@ pub async fn run(
             msg = rx.recv() => msg,
             Some((client, established)) = landed_rx.recv() => {
                 Some(shell.reconnected(client, &established))
+            },
+            Some((token, result)) = feed_landed_rx.recv() => {
+                match shell.feed_landed(token, result) {
+                    Some(msg) => Some(msg),
+                    // A dial superseded by a newer `Command::OpenFeed` or
+                    // abandoned by `Command::CloseFeed` before it landed —
+                    // already torn down inside `feed_landed`, nothing for
+                    // `update()` to hear about.
+                    None => continue,
+                }
             },
             () = tokio::time::sleep(std::time::Duration::from_secs(1)) => continue,
         };
@@ -273,6 +290,28 @@ struct Shell {
     read_gate: ReadGate,
     scan_cancel: Option<CancellationToken>,
     reconnect: Reconnect,
+    /// The single open feed connection, if any (`docs/plans/m3-feed-connection.md`).
+    /// Never in `State` — the core holds no `fred` types (ADR-0011). Only one
+    /// at a time: the same two-pane screen budget that keeps this a single
+    /// slot in the core (`crate::state::FeedStatus`) keeps it a single slot
+    /// here too.
+    feed: Feed,
+}
+
+/// A feed connection's shell-local lifecycle: the dial resolves
+/// asynchronously (network I/O, so it must not block the render loop), but
+/// the resulting [`FeedHandle`] has to land back on `Shell` — owned by the
+/// loop in `run` — before anything can cancel it. `landed` is that handoff,
+/// the same shape [`Reconnect::landed`] already uses for the main
+/// connection's own async dial.
+struct Feed {
+    handle: Option<FeedHandle>,
+    /// The token of the dial currently in flight, if any — compared against
+    /// a landed result so a dial superseded by a newer `Command::OpenFeed` (or
+    /// abandoned by a `Command::CloseFeed`) before it finished is torn down on
+    /// arrival rather than silently becoming the feed nobody asked for anymore.
+    dialing: Option<FeedToken>,
+    landed: mpsc::Sender<(FeedToken, Result<FeedHandle, crate::redis::ConnectError>)>,
 }
 
 /// Retrying a dropped link (ADR-0009).
@@ -328,6 +367,8 @@ impl Shell {
             Command::Reconnect { after_ms } => {
                 self.reconnect.schedule(after_ms, &self.tx, &self.clock)
             }
+            Command::OpenFeed { kind, token } => self.open_feed(kind, token),
+            Command::CloseFeed => self.close_feed(),
         }
         ControlFlow::Continue(())
     }
@@ -542,6 +583,90 @@ impl Shell {
             },
         };
         let _ = self.tx.send(msg).await;
+    }
+
+    /// `Command::OpenFeed`: dial a second connection to the same resolved
+    /// target and start streaming from it (`docs/plans/m3-feed-connection.md`).
+    ///
+    /// Every `g m`/`g p` reopens a fresh connection rather than resuming a
+    /// stale one (the plan's own rule) — so an already-open feed is closed
+    /// first, exactly like [`Shell::start_scan`] supersedes an in-flight scan
+    /// before starting a new one. The dial itself is network I/O and must not
+    /// block the render loop (CLAUDE.md), so it runs on its own task and the
+    /// result lands back on `self.feed.landed`, the same handoff
+    /// [`Reconnect::landed`] uses for the main connection's own async dial.
+    fn open_feed(&mut self, kind: FeedKindMsg, token: FeedToken) {
+        if let Some(handle) = self.feed.handle.take() {
+            handle.close();
+        }
+        self.feed.dialing = Some(token);
+
+        let kind = match kind {
+            FeedKindMsg::Monitor => FeedKind::Monitor,
+        };
+        let (dial, credentials) = (
+            self.reconnect.dial.clone(),
+            self.reconnect.credentials.clone(),
+        );
+        let (tx, clock, landed) = (
+            self.tx.clone(),
+            self.clock.clone(),
+            self.feed.landed.clone(),
+        );
+        let main = self.client.clone();
+        tokio::spawn(async move {
+            let result =
+                crate::redis::feed::open_feed(&dial, &credentials, kind, token, tx, clock, &main)
+                    .await;
+            let _ = landed.send((token, result)).await;
+        });
+    }
+
+    /// `Command::CloseFeed`: tear down whatever feed connection is open.
+    /// `Command::CancelScan`'s sibling for the second connection — cancel and
+    /// drop, nothing cleverer. A no-op if none is open, including one still
+    /// mid-dial: clearing `dialing` here is what makes [`Shell::feed_landed`]
+    /// close a dial that finishes after the reader already left the view,
+    /// rather than silently reopening it.
+    fn close_feed(&mut self) {
+        self.feed.dialing = None;
+        if let Some(handle) = self.feed.handle.take() {
+            handle.close();
+        }
+    }
+
+    /// A feed dial finished, successfully or not. Applied here, in the loop's
+    /// own task rather than the spawned one, for the same reason
+    /// [`Shell::reconnected`] is: `self.feed.handle` must be current before
+    /// any `Msg` this returns reaches `update()`.
+    ///
+    /// Returns `None` for a dial that is no longer the one anybody is waiting
+    /// on — superseded by a newer `Command::OpenFeed`, or abandoned by a
+    /// `Command::CloseFeed` before it landed — after tearing down whatever it
+    /// produced rather than leaking it or resurrecting a feed the reader
+    /// already left.
+    fn feed_landed(
+        &mut self,
+        token: FeedToken,
+        result: Result<crate::redis::feed::FeedHandle, crate::redis::ConnectError>,
+    ) -> Option<Msg> {
+        if self.feed.dialing != Some(token) {
+            if let Ok(handle) = result {
+                handle.close();
+            }
+            return None;
+        }
+        self.feed.dialing = None;
+        match result {
+            Ok(handle) => {
+                self.feed.handle = Some(handle);
+                Some(Msg::FeedOpened { token })
+            }
+            Err(err) => Some(Msg::FeedClosed {
+                token,
+                reason: Some(err.to_string()),
+            }),
+        }
     }
 
     /// A reconnect that landed.

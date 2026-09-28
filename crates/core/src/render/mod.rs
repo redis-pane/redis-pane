@@ -7,6 +7,7 @@
 
 pub mod keys;
 pub mod layout;
+pub mod monitor;
 pub mod slowlog;
 
 use ratatui::buffer::Buffer;
@@ -46,6 +47,15 @@ pub fn frame(state: &State, theme: &Theme, clock: &dyn Clock, area: Rect) -> Buf
             area.height.saturating_sub(2 + bottom),
         );
         slowlog::render(state, theme, clock, body, &mut buf);
+    } else if state.screen == crate::state::View::Monitor {
+        let bottom = if hint_bar_visible { 2 } else { 1 };
+        let body = Rect::new(
+            area.x,
+            area.y + 2,
+            area.width,
+            area.height.saturating_sub(2 + bottom),
+        );
+        monitor::render(state, theme, body, &mut buf);
     } else {
         let plan = layout::layout(area, state.focus, state.split_adjust);
         let open_row = keys::render(state, theme, clock, plan.keys, plan.density, &mut buf);
@@ -80,6 +90,8 @@ pub fn frame(state: &State, theme: &Theme, clock: &dyn Clock, area: Rect) -> Buf
     // help is also open — `PendingMutation` is read straight off `State`.
     if let Some(pending) = &state.confirm {
         confirm_overlay(state, pending, theme, area, &mut buf);
+    } else if state.pending_feed.is_some() {
+        feed_confirm_overlay(state, theme, area, &mut buf);
     }
     // Help draws last, over everything — including a confirm dialog
     // (decision 8, `docs/plans/m3-contextual-help.md`: "help drawn over a
@@ -916,6 +928,7 @@ fn context_title(ctx: help::HelpContext) -> String {
         HelpContext::Confirm => "confirm".to_string(),
         HelpContext::ChordPending => "g …".to_string(),
         HelpContext::Slowlog => "slowlog".to_string(),
+        HelpContext::Monitor => "monitor".to_string(),
     }
 }
 
@@ -1375,12 +1388,40 @@ fn confirm_overlay(
     } else {
         Token::Text
     };
-    // Kept separate from `lines` rather than pushed onto the end: the hint is
-    // how the dialog is dismissed or confirmed, so it must always be the last
-    // thing drawn, never a line a tall diff pushes past the bottom of a short
-    // terminal.
-    let hint_line = (hint, hint_token);
+    let border_token = if refused.is_some() {
+        Token::Danger
+    } else {
+        Token::Warn
+    };
+    draw_confirm_box(
+        lines,
+        (hint, hint_token),
+        border_token,
+        " confirm ",
+        theme,
+        area,
+        buf,
+    );
+}
 
+/// The confirm dialog's frame — border, title, content lines, and the hint
+/// row that is always the last thing drawn. Shared by [`confirm_overlay`]
+/// (a staged [`PendingMutation`]) and [`feed_confirm_overlay`] (M3,
+/// `docs/plans/m3-monitor.md` decision 3: confirming `MONITOR` on `prod`/
+/// `unknown` — not a mutation, so it needs its own pending kind, but the same
+/// box, the same `y`/Esc reading, and the same "compose first, ask permission
+/// second" shape). One drawing function for both, so a future third kind of
+/// confirmation (there is no reason to expect one, but the shape is now
+/// here) costs a `Vec<(String, Token)>` and a hint line, not a second frame.
+fn draw_confirm_box(
+    lines: Vec<(String, Token)>,
+    hint_line: (String, Token),
+    border_token: Token,
+    title: &str,
+    theme: &Theme,
+    area: Rect,
+    buf: &mut Buffer,
+) {
     // Capped well short of the frame, so one long JSON line never turns the
     // dialog into the whole screen — width and line count are both bounded,
     // so render cost here is a function of the cap, not of the value.
@@ -1397,11 +1438,7 @@ fn confirm_overlay(
     let x0 = (area.width as usize - w) / 2;
     let y0 = (area.height as usize - h) / 2;
 
-    let border = theme.style(if refused.is_some() {
-        Token::Danger
-    } else {
-        Token::Warn
-    });
+    let border = theme.style(border_token);
     for y in 0..h {
         let row = (y0 + y) as u16;
         let line = if y == 0 || y == h - 1 {
@@ -1420,7 +1457,7 @@ fn confirm_overlay(
         buf,
         x0 as u16 + 2,
         y0 as u16,
-        " confirm ",
+        title,
         theme.style(Token::Text),
     );
     // The box may be shorter than there are lines to show (a value taller
@@ -1450,6 +1487,59 @@ fn confirm_overlay(
         &hint_text,
         theme.style(hint_line.1),
     );
+}
+
+/// The `MONITOR` cost-confirmation dialog (M3, `docs/plans/m3-monitor.md`
+/// decision 3): shown instead of opening the view directly when the
+/// Connection's Environment is `prod` or `unknown`. Not a mutation preview —
+/// there is nothing to diff, no Read-only Mode to ask, and `y` opens a *view*
+/// rather than running a write — so it gets its own content built here
+/// rather than a `PendingMutation` variant Read-only Mode's chokepoint would
+/// then have to specially ignore.
+///
+/// Names the actual Environment in the title (`prod`/`unknown`, whichever it
+/// is — never a generic "are you sure"), and wraps the cost explanation
+/// across as many lines as it needs at the box's own width rather than
+/// truncating it: a dialog whose whole purpose is naming a cost must not
+/// itself lose half a sentence to an `…`.
+fn feed_confirm_overlay(state: &State, theme: &Theme, area: Rect, buf: &mut Buffer) {
+    let env_label = state.connection.environment.label();
+    let wrap_width = (area.width as usize).saturating_sub(6).clamp(20, 76);
+    let mut lines: Vec<(String, Token)> =
+        vec![(format!("Open MONITOR on {env_label}?"), Token::Warn)];
+    for line in wrap_words(
+        "MONITOR streams every command the server runs — it costs the server for as long as this stays open.",
+        wrap_width,
+    ) {
+        lines.push((line, Token::Text));
+    }
+    let hint = ("y open · Esc cancel".to_string(), Token::Text);
+    draw_confirm_box(lines, hint, Token::Warn, " confirm ", theme, area, buf);
+}
+
+/// Greedy word-wrap: never splits a word, and never produces a line over
+/// `width` characters. Distinct from `state::value`'s own `wrap` (a hard
+/// character-width cut, right for an arbitrary byte value) — this is prose,
+/// and a dialog naming a cost reads better whole-word.
+fn wrap_words(text: &str, width: usize) -> Vec<String> {
+    let width = width.max(10);
+    let mut lines = Vec::new();
+    let mut current = String::new();
+    for word in text.split_whitespace() {
+        if current.is_empty() {
+            current.push_str(word);
+        } else if current.chars().count() + 1 + word.chars().count() <= width {
+            current.push(' ');
+            current.push_str(word);
+        } else {
+            lines.push(std::mem::take(&mut current));
+            current.push_str(word);
+        }
+    }
+    if !current.is_empty() {
+        lines.push(current);
+    }
+    lines
 }
 
 /// The title bar: what we are connected to, and where that came from.

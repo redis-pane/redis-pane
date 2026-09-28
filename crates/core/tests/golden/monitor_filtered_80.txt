@@ -1,0 +1,24 @@
+─ redis-pane ─ ● staging · cache-01:6379/0 · from profile staging ───── ● live ─
+
+ ⚠ MONITOR is running — the server pays for every command it streams here
+ ● live                                                                 3 lines
+ / SET                                                                   1 of 3
+ TIME         DB  COMMAND
+ 16:21:23.209 0   "SET" "lock:checkout:8812" "1"
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ p pause   / change filter   c copy command   ↑↓ jk move   ? F1 help

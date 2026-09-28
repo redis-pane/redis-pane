@@ -8,6 +8,7 @@
 pub mod copy;
 pub mod editor;
 pub mod loaded;
+pub mod monitor;
 pub mod open;
 pub mod scan;
 pub mod slowlog;
@@ -19,6 +20,9 @@ pub mod view;
 pub use copy::CopyWhat;
 pub use editor::{EditBuffer, EditTarget, FieldPart, is_valid_zset_score};
 pub use loaded::{KeyKind, LoadedSet};
+pub use monitor::{
+    FeedStatus, MONITOR_CAP, MONITOR_LINE_MAX, MonitorColumns, MonitorLine, MonitorState,
+};
 pub use open::{Attachment, EditPhase, OpenKey, PendingRead, ReadOutcome};
 pub use scan::ScanState;
 pub use slowlog::{SlowlogEntry, SlowlogSort, SlowlogState};
@@ -48,6 +52,8 @@ pub enum View {
     Keys,
     /// `g s`: the slowlog viewer (R6.4).
     Slowlog,
+    /// `g m`: the `MONITOR` tail (R6.1, M3 phase B, `docs/plans/m3-monitor.md`).
+    Monitor,
 }
 
 /// Where a Connection's target came from (ADR-0001).
@@ -826,6 +832,23 @@ pub struct State {
     /// The `g s` view's own state — entries, sort, selection, and whether a
     /// fetch is in flight.
     pub slowlog: SlowlogState,
+    /// The `g m` view's own state — the bounded tail, the feed connection's
+    /// status, pause/filter/following (M3 phase B,
+    /// `docs/plans/m3-monitor.md`). Holds the [`FeedStatus`] and
+    /// [`crate::command::FeedToken`] `docs/plans/m3-feed-connection.md`
+    /// originally put directly on `State` — moved here once there was a real
+    /// feature to embed them in, per that doc's own note that each feature
+    /// holds its own.
+    pub monitor: MonitorState,
+    /// `MONITOR`'s confirm dialog, staged on `g m` in `prod`/`unknown`
+    /// (`docs/plans/m3-monitor.md` decision 3) — a distinct kind from
+    /// [`State::confirm`], never a [`PendingMutation`]: opening a view is not
+    /// a write, so it must not pass through the chokepoint that refuses a
+    /// mutation under Read-only Mode. `y` opens the view; `Esc` discards it;
+    /// everything else is swallowed, not reinterpreted — the same "stray
+    /// keystroke never throws away what's staged" rule `confirm` itself
+    /// follows.
+    pub pending_feed: Option<crate::command::FeedKindMsg>,
     /// A chord's prefix key, once pressed, waiting on the next keypress to
     /// resolve it (DESIGN §3's `g`-prefixed jump list) — no timeout; it
     /// waits however long that takes. `Esc`, or a second key that names no

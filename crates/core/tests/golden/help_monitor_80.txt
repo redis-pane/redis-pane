@@ -1,0 +1,24 @@
+─ redis-pane ─ ● staging · cache-01:6379/0 · from profile staging ───── ● live ─
+
+ ⚠ MONITOR is running — the server pays for every command it streams here
+ ● live                                                                 3 lines
+ TIME         DB  COMMAND
+ 16:21:23.107 0   "GET" "user:8812:session"
+┌─ help · monitor ─────────────────────────────────────────────────────────────┐
+│ p         pause                                                              │
+│ /         filter                                                             │
+│ c         copy command                                                       │
+│ ↑↓ jk     move                                                               │
+│ PgUp/PgDn page                                                               │
+│ Home/End  top/bottom (End resumes follow)                                    │
+│                                                                              │
+│ ⌃R read-only   g s slowlog   g m monitor   g k keys   Esc back   q quit   ? F1
+│                                                                              │
+│ Esc close                                                                    │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+
+
+
+
+ p pause   / filter   c copy command   ↑↓ jk move   PgUp/PgDn page   ? F1 help

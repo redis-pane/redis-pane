@@ -27,6 +27,41 @@ impl ReadToken {
     }
 }
 
+/// Which feed connection a [`crate::Msg::FeedOpened`]/[`crate::Msg::FeedClosed`]
+/// reports on (`docs/plans/m3-feed-connection.md`).
+///
+/// Mirrors [`ReadToken`] for the same reason: a feed is opened and closed by
+/// the reader entering and leaving a view (`g m`, `Esc`), but the shell's read
+/// loop only discovers the server side of a close asynchronously. A message
+/// about a feed the reader has already replaced — `Esc` then `g m` again
+/// before the old feed's teardown was reported — must not be mistaken for one
+/// about the feed currently open. Only an identity that changes on every
+/// [`Command::OpenFeed`] tells the two apart.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct FeedToken(u64);
+
+impl FeedToken {
+    /// The identity for the next feed. Crate-private, for the same reason as
+    /// [`ReadToken::next`]: only [`crate::update::update`] mints one — here,
+    /// `g m` (`docs/plans/m3-monitor.md`, phase B).
+    pub(crate) fn next(self) -> Self {
+        Self(self.0.wrapping_add(1))
+    }
+}
+
+/// Which feed to open (`docs/plans/m3-feed-connection.md`). A core-only
+/// description with no `fred` type in it, mirroring how [`Command::ReadKey`]
+/// names a key by bytes rather than by a shell-side handle.
+///
+/// `Subscribe` is deliberately not modelled yet — Pub/Sub's own task will
+/// widen this (`Subscribe`/`Unsubscribe`/`PSubscribe` as the reader edits the
+/// subscription list) without touching `Monitor`'s arm, rather than being
+/// designed speculatively here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FeedKindMsg {
+    Monitor,
+}
+
 /// Work the core cannot perform itself. A shell executes these and reports back
 /// as a [`crate::Msg`].
 ///
@@ -112,4 +147,18 @@ pub enum Command {
     /// carries no arming and answers with [`crate::Msg::SlowlogLoaded`]
     /// rather than a push.
     FetchSlowlog { count: i64 },
+    /// Open a second, dedicated connection to the same resolved target and
+    /// start streaming from it (`docs/plans/m3-feed-connection.md`) — `MONITOR`
+    /// today, Pub/Sub later widens [`FeedKindMsg`]. The render loop never does
+    /// I/O (CLAUDE.md); this only ever asks a shell to.
+    ///
+    /// `token` is minted the same way [`Command::ReadKey`]'s is: it names
+    /// *this* feed, so a shell reply about a feed the reader has already left
+    /// (`Esc`, `g m` again) can be told apart from one about the feed
+    /// currently open.
+    OpenFeed { kind: FeedKindMsg, token: FeedToken },
+    /// Tear down whatever feed connection is open: cancel its token, drop its
+    /// handle — [`Command::CancelScan`]'s sibling for the second connection
+    /// (`docs/plans/m3-feed-connection.md`). A no-op if none is open.
+    CloseFeed,
 }

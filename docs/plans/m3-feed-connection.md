@@ -1,6 +1,18 @@
 # M3 task 2: dedicated-connection plumbing for push/poll feeds
 
-Status: **planning — not started.** No code, no ADR. This is infrastructure PLAN.md M3 tasks 4
+Status: **done, 2026-09-28 — built together with Monitor** (task 4) in one PR, as its phase A:
+plumbing with no consumer has nothing to drive it by hand. Both open questions at the end of this
+doc are settled as their leans: no reconnect (a closed feed shows why and `r` reopens it), and no
+`UpdateSubscription` until Pub/Sub needs it. Where this doc says `state.view`, read `state.screen`
+(`View`, from the Slowlog task). `FeedStatus`/`FeedToken` were built on `State` directly in phase
+A and moved onto `MonitorState` once phase B gave them a real, single consumer to embed in — see
+`crates/core/src/state/monitor.rs`. Sentinel (ADR-0008, a v1 target): `fred::monitor::run` only
+accepts `ServerConfig::Centralized`, so `open_monitor` rewrites a Sentinel config to Centralized
+against the primary the main connection already resolved (`main.active_connections()`) rather than
+leaving Sentinel silently unsupported; Cluster is refused outright with a reason, since it is not
+a v1 target at all. Monitor's own decisions are in [`m3-monitor.md`](m3-monitor.md).
+
+No ADR. This is infrastructure PLAN.md M3 tasks 4
 (Monitor) and 5 (Pub/Sub) both depend on and neither should reinvent — see those two docs for how
 they use what this one builds. Slowlog and Dashboard do not need this; they are request/response
 (`SLOWLOG GET`, `INFO`) against the existing connection, same as every M1/M2 read.
