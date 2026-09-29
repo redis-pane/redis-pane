@@ -80,12 +80,25 @@ Once you're in:
 - `c` to copy the key name or the value, whichever pane is focused; `C` to copy a `redis-cli`
   command for the open key (locally this uses the system clipboard directly; over SSH it relies
   on OSC 52 — see [ALPHA.md](ALPHA.md#copying) if a paste comes back empty)
-- `?` for help with your actual keybindings
+- `?` (or `F1`, which works even while typing) for help with what the keys do right where you are
 
 ![Folding a tree group with Left/Right, filtering down to one key, and moving a real cursor through its value with Enter and the arrow keys](navigation-demo.gif)
 
 *`←`/`→` fold and step through the tree; `Enter` drops a cursor into the open value so you can move
 through a long list without the mouse, and `Esc` takes you back to the key list.*
+
+Beyond the keyspace, two views show what the server itself is doing:
+
+- `g m` opens **Monitor**, a live tail of every command the server runs. `p` pauses it, `/`
+  filters it, and leaving the view shuts the feed down so it never keeps running out of sight
+- `g s` opens the **Slowlog**, the server's own list of commands that ran too long, sortable by
+  time or duration
+
+![The Monitor view: a live tail of commands streaming in under a warning banner, paused while the skipped count climbs, then filtered down to HSET commands](monitor-demo.gif)
+
+*`g m` and every command the server runs streams in as it happens. Pause it without losing your
+place, filter it down to what you're chasing, and the banner never lets you forget that MONITOR
+costs the server while it's open.*
 
 ## Trying it out
 
