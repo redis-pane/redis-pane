@@ -3926,6 +3926,25 @@ fn the_monitor_banner_survives_at_single_pane_width() {
     );
 }
 
+/// The status bar's scan readout, sort and `Esc cancel` describe the key
+/// browser; off it they would describe a list the reader cannot see (and
+/// `Esc` would do something else). Only the app's own notice follows.
+#[test]
+fn the_status_bar_leaves_the_key_browser_behind_in_another_view() {
+    let mut state = monitor_with_lines();
+    state.scan = redis_pane_core::state::ScanState::Running {
+        scanned: 41_203,
+        estimated_total: 180_000,
+    };
+    let text = draw_at(&state, 80, 24, &FixedClock(MONITOR_NOW_MS));
+    assert!(!text.contains("scanning"), "{text}");
+    assert!(!text.contains("cancel"), "{text}");
+
+    state.screen = redis_pane_core::state::View::Keys;
+    let text = draw_at(&state, 80, 24, &FixedClock(MONITOR_NOW_MS));
+    assert!(text.contains("scanning 41,203"), "{text}");
+}
+
 #[test]
 fn golden_monitor_paused() {
     let mut state = monitor_with_lines();

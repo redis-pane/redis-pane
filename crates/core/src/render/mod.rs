@@ -831,9 +831,24 @@ fn clip(s: &str, width: usize) -> String {
 
 /// The status bar: scan progress and its cancel affordance (DESIGN §6.2).
 fn status_bar(state: &State, theme: &Theme, clock: &dyn Clock, area: Rect, buf: &mut Buffer) {
-    let readout = state.scan.readout();
+    // The scan readout, the sort and the scan's `Esc cancel` all describe the
+    // key browser. Another view has its own header saying what it holds, and
+    // there `Esc` leaves the view rather than cancelling a scan — so only the
+    // notice and the error (R7.4), which belong to the app, follow the reader
+    // off the browser.
+    let on_keys = state.screen == crate::state::View::Keys;
+    let readout = if on_keys {
+        state.scan.readout()
+    } else {
+        String::new()
+    };
+    let sort_readout = if on_keys {
+        state.list.sort_readout()
+    } else {
+        None
+    };
     let quiet = readout.is_empty()
-        && state.list.sort_readout().is_none()
+        && sort_readout.is_none()
         && state.notice_now(clock.now_epoch_ms()).is_none()
         && state.error_text().is_none();
     if quiet || area.height < 2 {
@@ -853,7 +868,7 @@ fn status_bar(state: &State, theme: &Theme, clock: &dyn Clock, area: Rect, buf: 
         }
     };
     let mut line = readout;
-    if let Some(sort) = state.list.sort_readout() {
+    if let Some(sort) = sort_readout {
         line = format!("{line}   {sort}");
     }
     // A copy confirmation displaces the scan readout for a moment rather than
@@ -870,7 +885,8 @@ fn status_bar(state: &State, theme: &Theme, clock: &dyn Clock, area: Rect, buf: 
         line = format!("✕ {error}   {dismiss} dismiss");
     }
     let x = put(buf, 1, y, &line, theme.style(token));
-    if state.scan.is_running()
+    if on_keys
+        && state.scan.is_running()
         && let Some(hint) = state.keymap.hint(crate::keymap::Action::Cancel)
     {
         put(
