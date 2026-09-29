@@ -129,7 +129,8 @@ terminal is small and the situation is urgent.
 | `Tab` | Move focus between the panes | global |
 | `g k` | Jump to the Keys view (the two-pane browser) | global |
 | `g s` | Jump to the Slowlog view, fetching a fresh `SLOWLOG GET` | global |
-| `g` + `d` / `m` / `p` | Jump to Dashboard / Monitor / Pub-Sub (planned, not yet built) | global |
+| `g m` | Jump to the Monitor view, opening a `MONITOR` feed on its own connection (confirmed first on `prod`/`unknown`) | global |
+| `g` + `d` / `p` | Jump to Dashboard / Pub-Sub (planned, not yet built) | global |
 | `Ctrl-C` ×2 | Quit (single press = cancel current op) | global |
 | `/` | Filter / search in pane | pane |
 | `n` / `N` | Next / previous match | pane |
@@ -145,6 +146,7 @@ terminal is small and the situation is urgent.
 | `c` / `C` | Copy key or value / copy `redis-cli` command | key list, value pane |
 | `d` | Stage delete of the Selected key (`DEL`), (Hash, cursor on a field) of that field (`HDEL`), or (Slowlog view) `SLOWLOG RESET` | key list, value pane, slowlog view |
 | `y` | Confirm a staged mutation (`Esc` dismisses) | global, only while one is staged |
+| `p` | Pause / resume consuming the `MONITOR` feed (the socket stays open; paused lines are counted, not buffered) | Monitor view |
 | `Ctrl-R` | Toggle read-only mode | global |
 
 Bindings are user-overridable in config; the hint bar and the help overlay (`?`) both render the
@@ -175,8 +177,10 @@ value pane and rescan in the keys pane, `t` is tree in the keys pane and edit-tt
 
 Derived from the default keymap in `crates/core/src/keymap/mod.rs` (not from the table above,
 which includes keys this document plans but this codebase has not built yet): the free single
-lowercase keys, unclaimed by any default binding, are `b f i m n o p u v w x z`. `g` is free too,
-but is reserved as the view-jump chord prefix above rather than as a lone binding.
+lowercase keys, unclaimed by any default binding, are `b f i m n o u v w x z`. `g` is free too,
+but is reserved as the view-jump chord prefix above rather than as a lone binding. `p` is no longer
+free — it is `Action::TogglePause`, scoped to the Monitor view alone (Monitor's own keymap growth
+rule: a bare key whose meaning nothing outside that view gives it, exactly like `d`/`e`/`t`/`c`).
 
 **Focus is one concept at every width.** Below 70 columns it decides which pane is *drawn*
 (§2's stack navigation); at or above it, both panes are drawn and focus decides only which one a
@@ -454,8 +458,67 @@ connected/blocked clients, replication role and lag, and eviction/expiry counter
 alarming is colored, and every tile can be expanded into the raw `INFO` section behind it.
 
 ### 6.7 Monitor / Pub-Sub
-Live tail with a filter box, pause/resume, and a persistent warning banner on `MONITOR`
-explaining its cost. Buffers are bounded with a visible cap.
+
+**Monitor (`g m`, built — R6.1, M3).** A live, unfiltered tail of every command the server
+executes, driven by `MONITOR` on its own dedicated connection (`docs/plans/m3-feed-connection.md`)
+— never the main one, which stays free for ordinary reads/writes and the Open key's `CLIENT
+TRACKING` arming the whole time the tail is open. The feed is opened fresh on every `g m` and
+closed on every way out of the view — `Esc`, `g k`, `g s`, quitting — never left running behind a
+screen with nothing on it to say so.
+
+```
+┌─ g m · Monitor ──────────────────────────────────────────────────────────────┐
+│ ⚠ MONITOR is running — the server pays for every command it streams here     │
+│ ● live                                                             1,204 lines│
+│ TIME         DB  CLIENT                COMMAND                              │
+│ 16:21:23.107 0   10.0.0.4:51820        "GET" "user:8812:session"            │
+│ 16:21:23.209 0   10.0.0.9:33012        "SET" "lock:checkout:8812" "1"       │
+│ 16:21:23.310 0   10.0.0.4:51820        "EXPIRE" "user:8812:session" "1800"  │
+└────────────────────────────────────────────────────────────────────────────┘
+```
+
+- **The warning banner is persistent, and never truncated** — a fixed row at the top of the view,
+  present at every width down to the single-pane floor, dismissible only by leaving the view.
+  `MONITOR` costs the server for every connection watching it, server-wide, for as long as it stays
+  open; a banner that faded would misstate that as a moment's notice rather than a standing cost,
+  and one cut off with an `…` would half-miss it the same way. Two fixed wordings, not one
+  truncated to fit: the full sentence above down to the 80-column floor (R7.1), and
+  `⚠ MONITOR running — costs the server` below it, at the single-pane width. Once the feed has
+  closed the warning would be false, so the same row turns muted and says
+  `MONITOR stopped — the server is no longer streaming to this view` instead, keeping the layout
+  still.
+- **The buffer is bounded and the cap is visible**: 5,000 lines, each truncated to 4 KiB on arrival
+  (so one oversized value cannot make a single line bigger than the buffer is meant to be — worst
+  case is bytes, not gigabytes). Enforced in exactly one function, the same discipline the Loaded
+  set's own cap follows (ADR-0010).
+- **Pause (`p`) stops consuming, not just hides.** The socket stays open; a paused line is counted
+  (`paused · 340 skipped`) and discarded, never queued — resuming does not backfill what was
+  dropped. A naive pause that only stopped rendering would still grow the buffer underneath it,
+  trading a visible freeze for an invisible leak. Offered only while the feed is actually `Open` —
+  with no feed streaming (connecting, or closed) `p` would be a keypress that did nothing, so it is
+  hidden rather than dimmed; the closed/connecting hint bar offers `r reopen` in its place.
+- **Following.** The view tracks new lines while the selection sits on the last one; moving up
+  stops following (the header says so — `following off · End to resume`) without pausing the feed;
+  `End` jumps back to the tail and resumes.
+- **Filter (`/`)** reuses the keys pane's own filter capture and glob/substring matching, narrowing
+  what's *displayed* only — a filtered-out line still occupies its slot in the bounded buffer, so
+  clearing the filter shows exactly what would have been there anyway.
+- **Columns**: the server's own timestamp (UTC `HH:MM:SS.mmm`, preferred over receipt time — the
+  question a reader has is "when did this run"), then DB, CLIENT, and COMMAND, shed narrowest-first
+  in that order as the terminal narrows. `c` copies the selected line's command.
+- **A closed feed keeps its buffer on screen.** The header reads `feed closed: <reason>`, an R7.4
+  notification names it too, and `r` reopens — no automatic reconnect, the same "secondary view,
+  not the always-on Viewer" posture ADR-0006's liveness guarantee is scoped away from.
+- **Cost confirmation.** On `prod`/`unknown`, `g m` shows a confirm dialog naming the actual
+  Environment (`Open MONITOR on prod?`, not a generic "are you sure") and wrapping the cost
+  explanation across as many lines as it needs rather than truncating it — a dialog whose whole
+  purpose is naming a cost must not itself lose half a sentence to an `…`. `y` opens, `Esc` cancels.
+  This is not a mutation preview — opening a view is not a write — so Read-only Mode never sees it
+  and never refuses it.
+
+**Pub-Sub (`g p`, planned).** The other feed-plumbing consumer — not yet built. Expected to share
+the same dedicated-connection machinery Monitor uses, widened for a dynamic subscribe/unsubscribe
+list rather than Monitor's fire-and-forget `MONITOR`.
 
 ### 6.8 Connection states and degradation
 

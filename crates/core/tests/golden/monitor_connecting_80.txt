@@ -1,0 +1,24 @@
+─ redis-pane ─ ● staging · cache-01:6379/0 · from profile staging ───── ● live ─
+
+ ⚠ MONITOR is running — the server pays for every command it streams here
+ connecting…                                                            0 lines
+ connecting…
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ / filter   c copy command   ↑↓ jk move   PgUp/PgDn page   ? F1 help

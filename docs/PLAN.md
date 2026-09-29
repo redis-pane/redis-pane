@@ -205,15 +205,21 @@ withdrawal: `key_press`'s old inline `match action { … }` stayed factored out 
 `update::dispatch_action`, since the keymap path is still its caller. Task 3 (Slowlog) is done,
 pulled ahead of task 2 since it needs no feed connection — see
 [`m3-slowlog.md`](plans/m3-slowlog.md) for the full build, including the `View`/`State.screen`
-state machine and the `g`-prefixed chord machinery Dashboard/Monitor/Pub-Sub will reuse. The rest
-of the table is unstarted.
+state machine and the `g`-prefixed chord machinery Dashboard/Monitor/Pub-Sub will reuse. Tasks 2
+and 4 are done together, in one PR — [`m3-feed-connection.md`](plans/m3-feed-connection.md)'s own
+framing ("plumbing with no consumer to drive it by hand") — phase A built the dedicated-connection
+plumbing, phase B built Monitor on top of it. `fred::monitor::run` only accepts a Centralized
+`ServerConfig`; Sentinel (a v1 target, ADR-0008) is handled by rewriting the feed's Config to
+Centralized against the primary the main connection already resolved, rather than either failing
+with fred's own generic Config error or leaving Sentinel silently unsupported — see
+`crates/app/src/redis/feed.rs`'s `monitor_config`. Pub-Sub and Dashboard remain unstarted.
 
 | # | Task | Proves |
 |---|---|---|
 | 1 | ~~Palette (`Ctrl-K`): fuzzy list over every app action, reading the same keymap-as-data source the hint bar uses (CLAUDE.md's "Keybindings are data")~~ | done in alpha.14, then withdrawn (ADR-0020) |
-| 2 | Dedicated-connection plumbing for push/poll feeds: a second `fred::Client` (or equivalent) the shell can hand to Monitor/Pub-Sub without starving the main read/write path | The main connection keeps answering ordinary reads/writes while a feed connection is open; closing the feed view tears down its connection cleanly |
+| 2 | ~~Dedicated-connection plumbing for push/poll feeds: a second `fred::Client` (or equivalent) the shell can hand to Monitor/Pub-Sub without starving the main read/write path~~ | done — proven both by the plumbing's own integration tests and by Monitor (task 4) actually using it: an ordinary read on the main connection completes without waiting on an open feed; a killed feed connection surfaces `Msg::FeedClosed` rather than hanging; `Command::CloseFeed` really disconnects |
 | 3 | ~~Slowlog viewer (`g s`): `SLOWLOG GET`/`RESET`, sort, single-node (ADR-0008)~~ | done — entries render in a type-aware-consistent frame; `RESET` is a real mutation (confirm dialog, read-only refusal including `replica`) |
-| 4 | Monitor (`g m`): live tail, filter box, pause/resume, bounded buffer with a visible cap, persistent cost-warning banner | Buffer never grows unbounded; pausing stops consuming the feed, not just hides it; the warning is impossible to miss |
+| 4 | ~~Monitor (`g m`): live tail, filter box, pause/resume, bounded buffer with a visible cap, persistent cost-warning banner~~ | done — the buffer never grows past its cap over a long synthetic run and against a real stream; pausing stops consuming the feed (proven against a real connection, not a mock) rather than hiding it; the banner survives to the single-pane floor |
 | 5 | Pub/Sub (`g p`): subscribe to channels and patterns, live tail | Distinct from Monitor's layout (not just "Monitor with a different source"); unsubscribing on view-close leaves no orphaned subscription |
 | 6 | Dashboard (`g d`): `INFO`-based tiles — memory used/peak/maxmemory bar, hit ratio, ops/sec sparkline, clients, replication role/lag, eviction/expiry counters, single-node (ADR-0008) | Alarming values are colored; every tile expands to its raw `INFO` section; refreshes on an interval, not static — **flag at the top of this task's plan doc**: the documented alternative (skip the Dashboard, add a memory figure to the status bar, rely on the Slowlog for triage) is still on the table and should be re-decided before work starts, not assumed away by this plan existing |
 

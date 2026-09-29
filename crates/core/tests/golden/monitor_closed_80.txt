@@ -1,0 +1,24 @@
+─ redis-pane ─ ● staging · cache-01:6379/0 · from profile staging ───── ● live ─
+
+ MONITOR stopped — the server is no longer streaming to this view
+ feed closed: the feed connection closed                                3 lines
+ TIME         DB  COMMAND
+ 16:21:23.107 0   "GET" "user:8812:session"
+ 16:21:23.209 0   "SET" "lock:checkout:8812" "1"
+ 16:21:23.310 0   "EXPIRE" "user:8812:session" "1800"
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ / filter   r reopen   c copy command   ↑↓ jk move   PgUp/PgDn page   ? F1 help

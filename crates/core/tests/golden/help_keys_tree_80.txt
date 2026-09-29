@@ -1,23 +1,23 @@
 ─ redis-pane ─ ● staging · cache-01:6379/0 · from profile staging ───── ● live ─
 
  KEY                      TYPE      TTL │ a group is selected
- ▾ cart: ┌─ help · keys pane · tree ──────────────────────────────────┐
-   ● 91af│ →         open / expand                                    │
- ▾ feed: │ /         filter                                           │
-   ▾ glob│ s         sort                                             │
-     ● ho│ t         flat view                                        │
- ▾ user: │ d         delete                                           │
-   ▾ 8812│ c         copy                                             │
-     ● ca│ r         rescan                                           │
-     ● pr│ C         copy redis-cli command                           │
-     ● se│ ↑↓ jk     move                                             │
-   ▾ 8813│ PgUp/PgDn page                                             │
-     ● se│ Home/End  top/bottom                                       │
-         │                                                            │
-         │ ⌃R read-only   g s slowlog   Esc back   q quit   ? F1 help │
-         │                                                            │
-         │ Tab value keys · Esc close                                 │
-         └────────────────────────────────────────────────────────────┘
+ ▾┌─ help · keys pane · tree ────────────────────────────────────────────────┐
+  │ →         open / expand                                                  │
+ ▾│ /         filter                                                         │
+  │ s         sort                                                           │
+  │ t         flat view                                                      │
+ ▾│ d         delete                                                         │
+  │ c         copy                                                           │
+  │ r         rescan                                                         │
+  │ C         copy redis-cli command                                         │
+  │ ↑↓ jk     move                                                           │
+  │ PgUp/PgDn page                                                           │
+  │ Home/End  top/bottom                                                     │
+  │                                                                          │
+  │ ⌃R read-only   g s slowlog   g m monitor   Esc back   q quit   ? F1 help │
+  │                                                                          │
+  │ Tab value keys · Esc close                                               │
+  └──────────────────────────────────────────────────────────────────────────┘
                                         │
                                         │
     sorted by name

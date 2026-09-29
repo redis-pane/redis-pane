@@ -15,13 +15,14 @@ refresh needed.*
 ## Status
 
 This is an early alpha. It handles browsing a keyspace, viewing every Redis type, and live updates
-when a value changes on the server. Mutation is arriving type by type: you can delete a key, edit a
-String value, or edit/add/remove a Hash field today (`d` to stage a delete, `e` to open a value —
-or, on a Hash, the field under the cursor — for editing right in the value pane, `a` to add a Hash
-field, `Ctrl-S` to stage the edit, `y` to confirm — every mutation previews the exact command
-first, and Read-only Mode still refuses it where it should). Editing happens inline, so a value
-that reads as JSON stays visible while you type; List, Set, Sorted set, TTLs, rename and copy are
-coming next.
+when a value changes on the server. You can edit every core type in place — a String value, Hash
+fields, List elements, Set members, Sorted set scores — change a key's TTL, and delete a key (`e`
+to edit, `a` to add, `d` to delete, `t` for the TTL, `y` to confirm). Every change previews the
+exact command before it runs, and Read-only Mode refuses it where it should. Editing happens
+inline, so a value that reads as JSON stays visible while you type.
+
+It can also watch the server itself: a live Monitor tail and the Slowlog, each a keystroke away.
+Rename, copy, and bulk operations across several keys are coming next.
 
 Requires Redis 6.0 or newer (Valkey works too).
 
@@ -80,12 +81,25 @@ Once you're in:
 - `c` to copy the key name or the value, whichever pane is focused; `C` to copy a `redis-cli`
   command for the open key (locally this uses the system clipboard directly; over SSH it relies
   on OSC 52 — see [ALPHA.md](ALPHA.md#copying) if a paste comes back empty)
-- `?` for help with your actual keybindings
+- `?` (or `F1`, which works even while typing) for help with what the keys do right where you are
 
 ![Folding a tree group with Left/Right, filtering down to one key, and moving a real cursor through its value with Enter and the arrow keys](navigation-demo.gif)
 
 *`←`/`→` fold and step through the tree; `Enter` drops a cursor into the open value so you can move
 through a long list without the mouse, and `Esc` takes you back to the key list.*
+
+Beyond the keyspace, two views show what the server itself is doing:
+
+- `g m` opens **Monitor**, a live tail of every command the server runs. `p` pauses it, `/`
+  filters it, and leaving the view shuts the feed down so it never keeps running out of sight
+- `g s` opens the **Slowlog**, the server's own list of commands that ran too long, sortable by
+  time or duration
+
+![The Monitor view: a live tail of commands streaming in under a warning banner, paused while the skipped count climbs, then filtered down to HSET commands](monitor-demo.gif)
+
+*`g m` and every command the server runs streams in as it happens. Pause it without losing your
+place, filter it down to what you're chasing, and the banner never lets you forget that MONITOR
+costs the server while it's open.*
 
 ## Trying it out
 
@@ -100,5 +114,6 @@ docs live under `docs/` if you want the full history behind a decision.
 
 ## Not planning to build
 
-Not a server manager, not a monitoring tool, and not a replacement for `redis-cli` in scripts. No
+Not a server manager, not a metrics or alerting tool — Monitor and the Slowlog are for looking, not
+for dashboards or paging — and not a replacement for `redis-cli` in scripts. No
 multi-server workspace, no plugins, no export/import — one connection at a time, kept simple.

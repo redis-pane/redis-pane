@@ -2,22 +2,22 @@
 
  KEY                      TYPE      TTL │ user:8812:session
  ● user:8812:cart         zset      12m │ hash · 5 fields · 2.1 KB
- ● ┌─ help · value pane · hash ─────────────────────────────────────────────┐ve
- ● │ e         edit field  read-only (environment) · preview only           │
- ● │ a         add field  read-only (environment) · preview only            │
- ● │ d         delete field  read-only (environment) · preview only         │
- ● │ c         copy                                                         │
-   │ t         edit ttl  read-only (environment) · preview only             │
-   │ r         refetch                                                      │
-   │ C         copy redis-cli command                                       │
-   │ ↑↓ jk     move                                                         │
-   │ PgUp/PgDn page                                                         │
-   │ Home/End  top/bottom                                                   │
-   │                                                                        │
-   │ Tab focus   ⌃R read-only   g s slowlog   Esc back   q quit   ? F1 help │
-   │                                                                        │
-   │ Tab keys · Esc close                                                   │
-   └────────────────────────────────────────────────────────────────────────┘
+┌─ help · value pane · hash ───────────────────────────────────────────────────┐
+│ e         edit field  read-only (environment) · preview only                 │
+│ a         add field  read-only (environment) · preview only                  │
+│ d         delete field  read-only (environment) · preview only               │
+│ c         copy                                                               │
+│ t         edit ttl  read-only (environment) · preview only                   │
+│ r         refetch                                                            │
+│ C         copy redis-cli command                                             │
+│ ↑↓ jk     move                                                               │
+│ PgUp/PgDn page                                                               │
+│ Home/End  top/bottom                                                         │
+│                                                                              │
+│ Tab focus   ⌃R read-only   g s slowlog   g m monitor   Esc back   q quit   ? F
+│                                                                              │
+│ Tab keys · Esc close                                                         │
+└──────────────────────────────────────────────────────────────────────────────┘
                                         │
                                         │
 

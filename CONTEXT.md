@@ -146,3 +146,10 @@ what `SLOWLOG GET` answers. It is the server's fact, not something this app meas
 the app only reads and, on request, clears it (`SLOWLOG RESET`).
 _Avoid_: Query log, slow query list, performance log
 _Avoid_: Draft, scratch value, cache
+
+**Monitor**:
+A live, unfiltered-by-Redis tail of every command the server executes, driven by `MONITOR` on its
+own dedicated connection (never the main one — see `docs/plans/m3-feed-connection.md`). Expensive
+by nature, which is why the view carries a persistent warning rather than a dismissible one, and
+why its buffer is capped rather than retained in full like the Loaded set.
+_Avoid_: Log, command log, trace, tail (ambiguous with the app's own filtered display of it)

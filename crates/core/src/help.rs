@@ -60,6 +60,10 @@ pub enum HelpContext {
     /// browser, so it gets one context rather than being folded into
     /// [`HelpContext::Keys`]/[`HelpContext::Value`].
     Slowlog,
+    /// The Monitor view (`g m`, R6.1, M3 phase B, `docs/plans/m3-monitor.md`)
+    /// — the same "a full screen, not the two-pane browser" reasoning as
+    /// [`HelpContext::Slowlog`], one context of its own.
+    Monitor,
 }
 
 /// The Viewer's per-type contexts (PLAN's decision 2): one for each of the
@@ -255,6 +259,9 @@ pub fn context(state: &State) -> HelpContext {
             if state.screen == crate::state::View::Slowlog {
                 return HelpContext::Slowlog;
             }
+            if state.screen == crate::state::View::Monitor {
+                return HelpContext::Monitor;
+            }
             // The pane *viewed* by help, not necessarily the one actually
             // focused — `Tab` flips `HelpView::pane` while help is open
             // without moving `State::focus` (`update::help_key`'s own
@@ -384,6 +391,7 @@ pub fn here(state: &State, ctx: HelpContext) -> Vec<HelpRow> {
         HelpContext::Confirm => confirm_rows(state),
         HelpContext::ChordPending => chord_pending_rows(state),
         HelpContext::Slowlog => slowlog_rows(state),
+        HelpContext::Monitor => monitor_rows(state),
     }
 }
 
@@ -419,6 +427,50 @@ fn slowlog_rows(state: &State) -> Vec<HelpRow> {
         HelpRow::new("PgUp/PgDn", "page"),
         HelpRow::new("Home/End", "top/bottom"),
     ]
+}
+
+/// The Monitor view's own rows (M3 phase B, `docs/plans/m3-monitor.md`
+/// decisions 5, 6, 8, 9): pause/resume, filter, reopen (only worth a row
+/// once the feed actually needs it), copy, and movement — `End` doubles as
+/// "resume following" (decision 7), worth saying here since it is not
+/// otherwise obvious from the label `Action::Bottom` carries everywhere
+/// else.
+fn monitor_rows(state: &State) -> Vec<HelpRow> {
+    let mut rows = Vec::new();
+    // Pause/resume means nothing with no feed actually streaming — offered
+    // only while `Open`, matching the guard `update::monitor::monitor_dispatch`
+    // puts on the keypress itself (connecting or closed, `p` is a no-op, so
+    // the hint bar must not advertise it as though it did something).
+    if state.monitor.status == crate::state::FeedStatus::Open {
+        let pause_label = if state.monitor.paused {
+            "resume"
+        } else {
+            "pause"
+        };
+        rows.push(HelpRow::new(
+            keys_for(state, Action::TogglePause),
+            pause_label,
+        ));
+    }
+    rows.push(HelpRow::new(
+        keys_for(state, Action::Filter),
+        if state.monitor.filter.is_empty() {
+            "filter"
+        } else {
+            "change filter"
+        },
+    ));
+    if !matches!(
+        state.monitor.status,
+        crate::state::FeedStatus::Connecting | crate::state::FeedStatus::Open
+    ) {
+        rows.push(HelpRow::new(keys_for(state, Action::Refetch), "reopen"));
+    }
+    rows.push(HelpRow::new(keys_for(state, Action::Copy), "copy command"));
+    rows.push(HelpRow::new("↑↓ jk", "move"));
+    rows.push(HelpRow::new("PgUp/PgDn", "page"));
+    rows.push(HelpRow::new("Home/End", "top/bottom (End resumes follow)"));
+    rows
 }
 
 fn keys_rows(state: &State, tree: bool, filtered: bool) -> Vec<HelpRow> {
@@ -772,8 +824,13 @@ pub fn everywhere(state: &State) -> Vec<HelpRow> {
             if let Some(keys) = state.keymap.chord_hint(Action::OpenSlowlog) {
                 rows.push(HelpRow::new(keys, Action::OpenSlowlog.label()));
             }
-            if state.screen == crate::state::View::Slowlog
-                && let Some(keys) = state.keymap.chord_hint(Action::OpenKeysView)
+            if let Some(keys) = state.keymap.chord_hint(Action::OpenMonitor) {
+                rows.push(HelpRow::new(keys, Action::OpenMonitor.label()));
+            }
+            if matches!(
+                state.screen,
+                crate::state::View::Slowlog | crate::state::View::Monitor
+            ) && let Some(keys) = state.keymap.chord_hint(Action::OpenKeysView)
             {
                 rows.push(HelpRow::new(keys, Action::OpenKeysView.label()));
             }

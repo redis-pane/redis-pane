@@ -1,14 +1,14 @@
-─ redis-pane ─ ● st┌─ help · keys pane ─────────────────────────────────────────┐────────── ● live ─
-                   │ →         open / expand                                    │
- KEY               │ /         filter                                           │
-                   │ s         sort                                             │
-                   │ t         tree view                                        │
-                   │ d         delete                                           │
-                   │ c         copy                                             │
-                   │ r         rescan                                           │
-                   │ C         copy redis-cli command                           │
-                   │ ↑↓ jk     move                                             │
-                   │ PgUp/PgDn page                                             │
-                   │ Home/End  top/bottom                                       │
-                   │                                                            │
-                   └────────────────────────────────────────────────────────────┘
+─ redis-pane┌─ help · keys pane ───────────────────────────────────────────────────────┐─── ● live ─
+            │ →         open / expand                                                  │
+ KEY        │ /         filter                                                         │
+            │ s         sort                                                           │
+            │ t         tree view                                                      │
+            │ d         delete                                                         │
+            │ c         copy                                                           │
+            │ r         rescan                                                         │
+            │ C         copy redis-cli command                                         │
+            │ ↑↓ jk     move                                                           │
+            │ PgUp/PgDn page                                                           │
+            │ Home/End  top/bottom                                                     │
+            │                                                                          │
+            └──────────────────────────────────────────────────────────────────────────┘

@@ -912,6 +912,7 @@ dependencies = [
  "fred-macros",
  "futures",
  "log",
+ "nom",
  "parking_lot",
  "rand 0.8.8",
  "redis-protocol",
