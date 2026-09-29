@@ -15,13 +15,14 @@ refresh needed.*
 ## Status
 
 This is an early alpha. It handles browsing a keyspace, viewing every Redis type, and live updates
-when a value changes on the server. Mutation is arriving type by type: you can delete a key, edit a
-String value, or edit/add/remove a Hash field today (`d` to stage a delete, `e` to open a value —
-or, on a Hash, the field under the cursor — for editing right in the value pane, `a` to add a Hash
-field, `Ctrl-S` to stage the edit, `y` to confirm — every mutation previews the exact command
-first, and Read-only Mode still refuses it where it should). Editing happens inline, so a value
-that reads as JSON stays visible while you type; List, Set, Sorted set, TTLs, rename and copy are
-coming next.
+when a value changes on the server. You can edit every core type in place — a String value, Hash
+fields, List elements, Set members, Sorted set scores — change a key's TTL, and delete a key (`e`
+to edit, `a` to add, `d` to delete, `t` for the TTL, `y` to confirm). Every change previews the
+exact command before it runs, and Read-only Mode refuses it where it should. Editing happens
+inline, so a value that reads as JSON stays visible while you type.
+
+It can also watch the server itself: a live Monitor tail and the Slowlog, each a keystroke away.
+Rename, copy, and bulk operations across several keys are coming next.
 
 Requires Redis 6.0 or newer (Valkey works too).
 
@@ -113,5 +114,6 @@ docs live under `docs/` if you want the full history behind a decision.
 
 ## Not planning to build
 
-Not a server manager, not a monitoring tool, and not a replacement for `redis-cli` in scripts. No
+Not a server manager, not a metrics or alerting tool — Monitor and the Slowlog are for looking, not
+for dashboards or paging — and not a replacement for `redis-cli` in scripts. No
 multi-server workspace, no plugins, no export/import — one connection at a time, kept simple.
