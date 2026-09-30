@@ -4117,4 +4117,329 @@ mod feed {
 
         let _ = writer.quit().await;
     }
+
+    // ── M3 task 5 phase A — Pub/Sub's `SubscriberClient` feed
+    // (`docs/plans/m3-pubsub.md`) ────────────────────────────────────────────
+    //
+    // Mirrors the `MONITOR` feed tests above: a channel and a pattern message
+    // arrive correctly attributed, a mid-session subscribe keeps the first
+    // subscription flowing, a server-side `CLIENT KILL` surfaces as
+    // `Msg::FeedClosed` rather than a hang, and — the load-bearing one for
+    // this task's "Proves" column — closing the feed really does leave no
+    // subscription behind on the server's own accounting (`PUBSUB
+    // CHANNELS`/`PUBSUB NUMPAT`), not just in this app's bookkeeping.
+
+    use redis_pane_core::state::Subscription;
+
+    /// The client id of a connection currently subscribed to at least one
+    /// channel or pattern (`sub=`/`psub=` counts in `CLIENT LIST`) — the
+    /// Pub/Sub analogue of `monitor_client_id`. Unlike a `MONITOR`'d
+    /// connection, a subscriber still answers `CLIENT LIST` about itself in
+    /// principle (RESP3 pubsub connections are not exclusive the way
+    /// `MONITOR` is), but asking from a second, uninvolved connection keeps
+    /// this test symmetric with the `MONITOR` ones above and needs no
+    /// special-casing for which client is "self".
+    async fn subscriber_client_id(admin: &Client) -> Option<String> {
+        let list: String = admin
+            .client_list::<String, String>(None, None)
+            .await
+            .unwrap();
+        list.lines().find_map(|line| {
+            let subscribed = line.split_whitespace().any(|field| {
+                field
+                    .strip_prefix("sub=")
+                    .or_else(|| field.strip_prefix("psub="))
+                    .is_some_and(|n| n != "0")
+            });
+            if !subscribed {
+                return None;
+            }
+            line.split_whitespace()
+                .find_map(|field| field.strip_prefix("id="))
+                .map(str::to_string)
+        })
+    }
+
+    #[tokio::test]
+    #[ignore = "needs docker"]
+    async fn a_channel_and_a_pattern_message_arrive_correctly_attributed() {
+        let (_c, url) = start().await;
+        let writer = plain_client(&url).await;
+
+        let (tx, mut rx) = tokio::sync::mpsc::channel(16);
+        let clock: Arc<dyn Clock> = Arc::new(redis_pane::SystemClock);
+        let subs = vec![
+            Subscription::Channel("feed:chan".into()),
+            Subscription::Pattern("feed:pat:*".into()),
+        ];
+        let _feed = open_feed(
+            &url,
+            &Credentials::default(),
+            FeedKind::Subscribe(subs),
+            FeedToken::default(),
+            tx,
+            clock,
+            &writer,
+        )
+        .await
+        .expect("a SubscriberClient should dial and subscribe on a fresh container");
+
+        // Give the subscription a moment to actually land server-side before
+        // publishing — `open_feed` awaits `SUBSCRIBE`/`PSUBSCRIBE`'s own
+        // reply, so this is a belt-and-suspenders wait, not load-bearing.
+        let _: i64 = writer.publish("feed:chan", "direct").await.unwrap();
+        let _: i64 = writer.publish("feed:pat:42", "via-pattern").await.unwrap();
+
+        let first = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+            .await
+            .expect("the direct-channel message must arrive")
+            .unwrap();
+        match first {
+            Msg::PubSubMessage {
+                channel,
+                via,
+                payload,
+                ..
+            } => {
+                assert_eq!(channel, b"feed:chan");
+                assert_eq!(via, None, "a direct SUBSCRIBE carries no pattern");
+                assert_eq!(payload, b"direct");
+            }
+            other => panic!("expected a PubSubMessage, got {other:?}"),
+        }
+
+        let second = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+            .await
+            .expect("the pattern-matched message must arrive")
+            .unwrap();
+        match second {
+            Msg::PubSubMessage {
+                channel,
+                via,
+                payload,
+                ..
+            } => {
+                assert_eq!(channel, b"feed:pat:42");
+                assert_eq!(via.as_deref(), Some(b"feed:pat:*".as_slice()));
+                assert_eq!(payload, b"via-pattern");
+            }
+            other => panic!("expected a PubSubMessage, got {other:?}"),
+        }
+
+        let _ = writer.quit().await;
+    }
+
+    #[tokio::test]
+    #[ignore = "needs docker"]
+    async fn adding_a_subscription_mid_session_keeps_the_first_one_flowing() {
+        let (_c, url) = start().await;
+        let writer = plain_client(&url).await;
+
+        let (tx, mut rx) = tokio::sync::mpsc::channel(16);
+        let clock: Arc<dyn Clock> = Arc::new(redis_pane::SystemClock);
+        let feed = open_feed(
+            &url,
+            &Credentials::default(),
+            FeedKind::Subscribe(vec![Subscription::Channel("mid:first".into())]),
+            FeedToken::default(),
+            tx.clone(),
+            clock.clone(),
+            &writer,
+        )
+        .await
+        .unwrap();
+
+        let _: i64 = writer.publish("mid:first", "one").await.unwrap();
+        let before = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+            .await
+            .expect("the first subscription must already be receiving")
+            .unwrap();
+        assert!(matches!(before, Msg::PubSubMessage { .. }));
+
+        // `Command::UpdateSubscription`'s shell-side execution
+        // (`FeedHandle::update_subscription`): add a second channel on the
+        // *same* connection — never a close-then-reopen, which would risk
+        // dropping a message on `mid:first` in the gap.
+        feed.update_subscription(
+            vec![Subscription::Channel("mid:second".into())],
+            vec![],
+            tx,
+            clock,
+        );
+
+        // Give the ADD a moment to land, then prove both channels still
+        // deliver — `mid:first` first, to show the add did not disturb it.
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        let _: i64 = writer.publish("mid:first", "two").await.unwrap();
+        let _: i64 = writer.publish("mid:second", "three").await.unwrap();
+
+        let mut seen_first_again = false;
+        let mut seen_second = false;
+        for _ in 0..2 {
+            let msg = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+                .await
+                .expect("both messages must arrive")
+                .unwrap();
+            match msg {
+                Msg::PubSubMessage { channel, .. } if channel == b"mid:first" => {
+                    seen_first_again = true;
+                }
+                Msg::PubSubMessage { channel, .. } if channel == b"mid:second" => {
+                    seen_second = true;
+                }
+                other => panic!("unexpected message: {other:?}"),
+            }
+        }
+        assert!(
+            seen_first_again,
+            "the first subscription must keep receiving after the add"
+        );
+        assert!(seen_second, "the newly added subscription must receive");
+
+        let _ = writer.quit().await;
+    }
+
+    #[tokio::test]
+    #[ignore = "needs docker"]
+    async fn closing_the_feed_leaves_no_subscription_on_the_server() {
+        let (_c, url) = start().await;
+        let admin = plain_client(&url).await;
+
+        let (tx, _rx) = tokio::sync::mpsc::channel(16);
+        let clock: Arc<dyn Clock> = Arc::new(redis_pane::SystemClock);
+        let subs = vec![
+            Subscription::Channel("orphan:chan".into()),
+            Subscription::Pattern("orphan:pat:*".into()),
+        ];
+        let feed = open_feed(
+            &url,
+            &Credentials::default(),
+            FeedKind::Subscribe(subs),
+            FeedToken::default(),
+            tx,
+            clock,
+            &admin,
+        )
+        .await
+        .unwrap();
+
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let channels: Vec<String> = admin.pubsub_channels("orphan:*").await.unwrap();
+                let numpat: i64 = admin.pubsub_numpat().await.unwrap();
+                if !channels.is_empty() && numpat > 0 {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await
+        .expect("the subscription must show up in PUBSUB CHANNELS/NUMPAT before it can close");
+
+        // `Command::CloseFeed`'s handler for a Pub/Sub feed: cancel the
+        // reader and send `QUIT` (`FeedHandle::close`) — the "unsubscribing
+        // cleanly" requirement this task's PLAN row names: even without an
+        // explicit `UNSUBSCRIBE`, disconnecting drops every subscription
+        // server-side.
+        feed.close();
+
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let channels: Vec<String> = admin.pubsub_channels("orphan:*").await.unwrap();
+                let numpat: i64 = admin.pubsub_numpat().await.unwrap();
+                if channels.is_empty() && numpat == 0 {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        })
+        .await
+        .expect(
+            "PUBSUB CHANNELS/NUMPAT must show nothing of ours once the feed has closed — an \
+             orphaned server-side subscription is exactly what this test guards against",
+        );
+
+        let _ = admin.quit().await;
+    }
+
+    #[tokio::test]
+    #[ignore = "needs docker"]
+    async fn killing_the_subscribers_server_side_connection_closes_it_rather_than_hanging() {
+        let (_c, url) = start().await;
+        let admin = plain_client(&url).await;
+
+        let (tx, mut rx) = tokio::sync::mpsc::channel(16);
+        let clock: Arc<dyn Clock> = Arc::new(redis_pane::SystemClock);
+        let token = FeedToken::default();
+        let feed = open_feed(
+            &url,
+            &Credentials::default(),
+            FeedKind::Subscribe(vec![Subscription::Channel("kill:probe".into())]),
+            token,
+            tx,
+            clock,
+            &admin,
+        )
+        .await
+        .unwrap();
+
+        let id = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if let Some(id) = subscriber_client_id(&admin).await {
+                    return id;
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await
+        .expect("the subscriber connection must show up in CLIENT LIST");
+
+        let _: () = admin
+            .client_kill(vec![fred::types::client::ClientKillFilter::ID(id)])
+            .await
+            .unwrap();
+
+        let msg = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+            .await
+            .expect("a killed feed connection must surface Msg::FeedClosed, never hang")
+            .expect("the feed task must send before its channel closes");
+        match msg {
+            Msg::FeedClosed { token: got, reason } => {
+                assert_eq!(got, token);
+                assert!(
+                    reason.is_some(),
+                    "a drop the reader did not ask for names why"
+                );
+            }
+            other => panic!("expected FeedClosed, got {other:?}"),
+        }
+
+        feed.close();
+        let _ = admin.quit().await;
+    }
+
+    // M3 task 5 (b) — an ACL-denied `SUBSCRIBE`, deliberately not covered
+    // here: a real Docker-backed attempt (`ACL SETUSER ... resetchannels
+    // &allowed:*`, then subscribing to a channel outside that pattern)
+    // found that fred 10.1.0's `SubscriberClient::subscribe()` does not
+    // surface the server's `-NOPERM` as an `Err` at all — `client
+    // .subscribe(["denied:channel"]).await` resolves `Ok(())` even though
+    // `PUBSUB CHANNELS` on a second connection afterwards shows the
+    // subscription never actually took (confirmed directly against a
+    // container: `redis-cli --user ... SUBSCRIBE denied:channel` gets
+    // `NOPERM` synchronously from the server, so this is fred's client-side
+    // handling, not a server-side inconsistency). `FeedHandle
+    // ::update_subscription`'s `Err` branch — and therefore
+    // `Msg::SubscriptionFailed` — is correct for every failure fred *does*
+    // surface (a dead connection, a malformed reply), but cannot fire for
+    // this specific ACL-denial shape until fred's own `subscribe()`
+    // propagates it. The state-management half (a failed add drops the
+    // chip, the notification carries the command) is fully covered at the
+    // core level (`crates/core/src/update/pubsub.rs`'s
+    // `a_failed_subscribe_drops_the_chip_and_raises_a_notification` and
+    // siblings) — what's unverified end-to-end is specifically whether the
+    // shell's `client.subscribe()` call ever returns the `Err` those core
+    // tests assume arrives. Flagged for whoever picks this up next rather
+    // than left as a silently-passing test that does not actually exercise
+    // the failure path it claims to.
 }

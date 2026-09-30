@@ -11,7 +11,7 @@
 │ r         refetch                                                            │
 │ C         copy redis-cli command                                             │
 │                                                                              │
-│ Tab focus   ⌃R read-only   g s slowlog   g m monitor   Esc back   q quit   ? F
+│ Tab focus   ⌃R read-only   g s slowlog   g m monitor   g p pub/sub   Esc back
 │                                                                              │
 │ Tab keys · Esc close                                                         │
 └──────────────────────────────────────────────────────────────────────────────┘

@@ -2,6 +2,7 @@
 
 use crate::key::KeyName;
 use crate::mutation::Mutation;
+use crate::state::pubsub::Subscription;
 
 /// Which read a reply belongs to.
 ///
@@ -53,13 +54,16 @@ impl FeedToken {
 /// description with no `fred` type in it, mirroring how [`Command::ReadKey`]
 /// names a key by bytes rather than by a shell-side handle.
 ///
-/// `Subscribe` is deliberately not modelled yet — Pub/Sub's own task will
-/// widen this (`Subscribe`/`Unsubscribe`/`PSubscribe` as the reader edits the
-/// subscription list) without touching `Monitor`'s arm, rather than being
-/// designed speculatively here.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// `Subscribe` carries the subscription list to dial with (`m3-pubsub.md`
+/// phase A) — unlike `Monitor`, which needs nothing beyond the feed itself,
+/// a Pub/Sub connection has to know what to `SUBSCRIBE`/`PSUBSCRIBE` to
+/// before it is worth opening at all (and phase A's lazy-open decision 6:
+/// `g p` with an empty list dials nothing until the first subscription, so
+/// this variant is only ever reached with a non-empty list in practice).
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FeedKindMsg {
     Monitor,
+    Subscribe(Vec<Subscription>),
 }
 
 /// Work the core cannot perform itself. A shell executes these and reports back
@@ -161,4 +165,17 @@ pub enum Command {
     /// handle — [`Command::CancelScan`]'s sibling for the second connection
     /// (`docs/plans/m3-feed-connection.md`). A no-op if none is open.
     CloseFeed,
+    /// Add and/or remove subscriptions on the **already-open** Pub/Sub feed
+    /// (`docs/plans/m3-pubsub.md` phase A) — `SUBSCRIBE`/`PSUBSCRIBE` for
+    /// `add`, `UNSUBSCRIBE`/`PUNSUBSCRIBE` for `remove`, issued on the same
+    /// connection [`Command::OpenFeed`] with
+    /// [`FeedKindMsg::Subscribe`] dialed. Deliberately not a
+    /// close-then-reopen: tearing the feed down to add one channel would
+    /// drop in-flight messages on every channel already subscribed, which is
+    /// the one thing a reader adding a second subscription mid-session must
+    /// never see happen to the first.
+    UpdateSubscription {
+        add: Vec<Subscription>,
+        remove: Vec<Subscription>,
+    },
 }

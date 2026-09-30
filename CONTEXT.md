@@ -153,3 +153,14 @@ own dedicated connection (never the main one — see `docs/plans/m3-feed-connect
 by nature, which is why the view carries a persistent warning rather than a dismissible one, and
 why its buffer is capped rather than retained in full like the Loaded set.
 _Avoid_: Log, command log, trace, tail (ambiguous with the app's own filtered display of it)
+
+**Pub/Sub**:
+The view of messages published to channels and patterns the reader has explicitly subscribed to
+(`SUBSCRIBE`/`PSUBSCRIBE`), over its own feed connection (`docs/plans/m3-feed-connection.md`) —
+never the main one, and never messages the reader did not ask for. Distinct from Monitor: Monitor
+is passive and server-wide; a Pub/Sub subscription is chosen, scoped, and edited (`a` add, `d`
+unsubscribe) while the view stays open. A Subscription is a Channel or a Pattern, auto-detected
+from what the reader typed; the list is remembered for the session and resubscribed on `g p`, but
+never persisted and never kept subscribed server-side once the view closes.
+_Avoid_: Subscriber, message log, event stream (too generic — this is specifically Redis Pub/Sub,
+not a general event feed)

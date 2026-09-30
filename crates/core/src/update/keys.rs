@@ -107,6 +107,9 @@ pub(super) fn filter_key(state: State, key: KeyPress) -> (State, Vec<Command>) {
     if state.screen == crate::state::View::Monitor {
         return monitor_filter_key(state, key);
     }
+    if state.screen == crate::state::View::PubSub {
+        return pubsub_filter_key(state, key);
+    }
     filter_key_keys_pane(state, key)
 }
 

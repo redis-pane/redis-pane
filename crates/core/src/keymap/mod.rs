@@ -127,6 +127,13 @@ pub enum Action {
     /// key like `d`/`e`/`t`/`c`, but — like those — it means nothing outside
     /// the view that gives it meaning; everywhere else it is a no-op.
     TogglePause,
+    /// `g p`: switch to the Pub/Sub view (M3 task 5, R6.2,
+    /// `docs/plans/m3-pubsub.md`). Unlike `OpenMonitor`, never stages a
+    /// confirmation (decision 7: subscribing costs only what the reader
+    /// chose to subscribe to) and opens lazily — with no remembered
+    /// subscription, nothing is dialed until the first one is added
+    /// (decision 6). Reached only through a chord.
+    OpenPubSub,
 }
 
 impl Action {
@@ -139,6 +146,25 @@ impl Action {
     /// an action be aimed at something the reader cannot see.
     pub fn pane_is_on_screen(&self, state: &crate::State) -> bool {
         use crate::render::layout::Pane;
+        // The two-pane stack-navigation gate below (DESIGN §2) exists only
+        // for `View::Keys`'s own split — Slowlog/Monitor/Pub/Sub are full
+        // screens with no "keys pane"/"value pane" concept for
+        // `state.focus`/`state.pane_visible` to answer a question about.
+        // Without this, an action a full-screen view reuses for its own
+        // meaning (Pub/Sub's `Action::Add`/`Action::Delete`/`Action::Open`/
+        // `Action::CollapseGroup` for its add-input/chip removal/chip
+        // navigation, decision 1) would be gated by `state.focus` — a
+        // *different*, unrelated field (`crate::render::layout::Pane`, not
+        // `PubSubFocus`) that most of the time happens to default to a
+        // value this gate reads as "visible", but is not guaranteed to, and
+        // is not what "is the Pub/Sub view's chip strip visible" actually
+        // means. Each full-screen view's own `dispatch_action` block already
+        // scopes what its reused actions mean (and its own guards, like
+        // `pubsub_dispatch`'s `focus == PubSubFocus::Strip`), so this gate
+        // has nothing further to add for them.
+        if state.screen != crate::state::View::Keys {
+            return true;
+        }
         match self {
             // Movement acts on the value cursor while one is active — which
             // only happens with a key open, and opening one already moves
@@ -232,6 +258,7 @@ impl Action {
             Action::OpenSlowlog => "slowlog",
             Action::OpenMonitor => "monitor",
             Action::TogglePause => "pause / resume",
+            Action::OpenPubSub => "pub/sub",
         }
     }
 
@@ -332,6 +359,11 @@ impl Default for Keymap {
                     prefix: KeyPress::plain(KeyCode::Char('g')),
                     second: KeyPress::plain(KeyCode::Char('m')),
                     action: Action::OpenMonitor,
+                },
+                ChordBinding {
+                    prefix: KeyPress::plain(KeyCode::Char('g')),
+                    second: KeyPress::plain(KeyCode::Char('p')),
+                    action: Action::OpenPubSub,
                 },
             ],
             bindings: vec![

@@ -1,23 +1,23 @@
 ─ redis-pane ─ ● staging · from profile staging  ✕ disconnected · read 14s ago ─
 
  KEY                      TYPE      TTL │ → to open
- ●┌─ help · keys pane ───────────────────────────────────────────────────────┐
- ●│ →         open / expand                                                  │
- ●│ /         filter                                                         │
- ●│ s         sort                                                           │
- ●│ t         tree view                                                      │
- ●│ d         delete                                                         │
-  │ c         copy                                                           │
-  │ r         reconnect                                                      │
-  │ C         copy redis-cli command                                         │
-  │ ↑↓ jk     move                                                           │
-  │ PgUp/PgDn page                                                           │
-  │ Home/End  top/bottom                                                     │
-  │                                                                          │
-  │ ⌃R read-only   g s slowlog   g m monitor   Esc back   q quit   ? F1 help │
-  │                                                                          │
-  │ Tab value keys · Esc close                                               │
-  └──────────────────────────────────────────────────────────────────────────┘
+┌─ help · keys pane ───────────────────────────────────────────────────────────┐
+│ →         open / expand                                                      │
+│ /         filter                                                             │
+│ s         sort                                                               │
+│ t         tree view                                                          │
+│ d         delete                                                             │
+│ c         copy                                                               │
+│ r         reconnect                                                          │
+│ C         copy redis-cli command                                             │
+│ ↑↓ jk     move                                                               │
+│ PgUp/PgDn page                                                               │
+│ Home/End  top/bottom                                                         │
+│                                                                              │
+│ ⌃R read-only   g s slowlog   g m monitor   g p pub/sub   Esc back   q quit   ?
+│                                                                              │
+│ Tab value keys · Esc close                                                   │
+└──────────────────────────────────────────────────────────────────────────────┘
                                         │
                                         │
 

@@ -1,13 +1,14 @@
 ─ redis-pane ─ ● staging · cache-01:6379/0 · from profile staging ───── ● live ─
 
- ⚠ MONITOR is running — the server pays for every command it streams here
- ● live                                                                 3 lines
- TIME         DB  COMMAND
- 16:21:23.107 0   "GET" "user:8812:session"
-┌─ help · monitor ─────────────────────────────────────────────────────────────┐
+ ⟡ [orders] [user:* ⁎]                                                    a add
+ ● live                                                              3 messages
+ TIME         CHANNEL               PAYLOAD
+┌─ help · pub/sub · tail ──────────────────────────────────────────────────────┐
+│ Tab       focus strip/tail                                                   │
+│ a         add                                                                │
 │ p         pause                                                              │
 │ /         filter                                                             │
-│ c         copy command                                                       │
+│ c         copy payload                                                       │
 │ ↑↓ jk     move                                                               │
 │ PgUp/PgDn page                                                               │
 │ Home/End  top/bottom (End resumes follow)                                    │
@@ -20,5 +21,4 @@
 
 
 
-
- p pause   / filter   c copy command   ↑↓ jk move   PgUp/PgDn page   ? F1 help
+ Tab focus strip/tail   a add   p pause   / filter   c copy payload   ? F1 help

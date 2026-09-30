@@ -130,7 +130,8 @@ terminal is small and the situation is urgent.
 | `g k` | Jump to the Keys view (the two-pane browser) | global |
 | `g s` | Jump to the Slowlog view, fetching a fresh `SLOWLOG GET` | global |
 | `g m` | Jump to the Monitor view, opening a `MONITOR` feed on its own connection (confirmed first on `prod`/`unknown`) | global |
-| `g` + `d` / `p` | Jump to Dashboard / Pub-Sub (planned, not yet built) | global |
+| `g p` | Jump to the Pub/Sub view — dials lazily (nothing until the first subscription), no confirmation | global |
+| `g` + `d` | Jump to Dashboard (planned, not yet built) | global |
 | `Ctrl-C` ×2 | Quit (single press = cancel current op) | global |
 | `/` | Filter / search in pane | pane |
 | `n` / `N` | Next / previous match | pane |
@@ -146,7 +147,9 @@ terminal is small and the situation is urgent.
 | `c` / `C` | Copy key or value / copy `redis-cli` command | key list, value pane |
 | `d` | Stage delete of the Selected key (`DEL`), (Hash, cursor on a field) of that field (`HDEL`), or (Slowlog view) `SLOWLOG RESET` | key list, value pane, slowlog view |
 | `y` | Confirm a staged mutation (`Esc` dismisses) | global, only while one is staged |
-| `p` | Pause / resume consuming the `MONITOR` feed (the socket stays open; paused lines are counted, not buffered) | Monitor view |
+| `p` | Pause / resume consuming the `MONITOR` or Pub/Sub feed (the socket stays open; paused lines/messages are counted, not buffered) | Monitor view, Pub/Sub tail |
+| `a` | Add a subscription | Pub/Sub view, either half |
+| `d` / `←→` | Unsubscribe the selected chip / pick a chip | Pub/Sub strip |
 | `Ctrl-R` | Toggle read-only mode | global |
 
 Bindings are user-overridable in config; the hint bar and the help overlay (`?`) both render the
@@ -457,7 +460,7 @@ Triage-first: memory used vs. peak vs. maxmemory as a bar, hit ratio, ops/sec sp
 connected/blocked clients, replication role and lag, and eviction/expiry counters. Anything
 alarming is colored, and every tile can be expanded into the raw `INFO` section behind it.
 
-### 6.7 Monitor / Pub-Sub
+### 6.7 Monitor
 
 **Monitor (`g m`, built — R6.1, M3).** A live, unfiltered tail of every command the server
 executes, driven by `MONITOR` on its own dedicated connection (`docs/plans/m3-feed-connection.md`)
@@ -516,11 +519,74 @@ screen with nothing on it to say so.
   This is not a mutation preview — opening a view is not a write — so Read-only Mode never sees it
   and never refuses it.
 
-**Pub-Sub (`g p`, planned).** The other feed-plumbing consumer — not yet built. Expected to share
-the same dedicated-connection machinery Monitor uses, widened for a dynamic subscribe/unsubscribe
-list rather than Monitor's fire-and-forget `MONITOR`.
+### 6.8 Pub/Sub
 
-### 6.8 Connection states and degradation
+**Pub/Sub (`g p`, built — R6.2, M3 task 5, `docs/plans/m3-pubsub.md`).** Shares the same
+dedicated-connection machinery Monitor uses (`docs/plans/m3-feed-connection.md`), but is a
+genuinely different shape, not "Monitor with a different source": the reader chooses what to
+subscribe to *before* anything streams (Monitor's view opens already running), and every message
+carries a channel identity Monitor's raw command text has no analogue of.
+
+```
+┌─ g p · Pub/Sub ────────────────────────────────────────────────────────────┐
+│ ⟡ [orders] [user:* ⁎]                                              a add    │
+│ ● live                                                          3 messages │
+│ TIME         CHANNEL               PAYLOAD                                 │
+│ 16:21:23.500 orders                {"id":8812,"total":41.5}                │
+│ 16:21:23.501 user:42               login                                   │
+│ 16:21:23.502 orders                {"id":8813}                             │
+│ ──────────────────────────────────────────────────────────────────────────│
+│ channel orders                                                             │
+│ {                                                                          │
+│   "id": 8813                                                               │
+│ }                                                                          │
+│ Tab focus strip/tail   a add   p pause   / filter   c copy payload   ? F1 help │
+└──────────────────────────────────────────────────────────────────────────┘
+```
+
+- **A one-row subscription-chip strip**, not a Monitor-style banner: `⟡`/`▶` marks whether the
+  strip or the tail currently has focus (`Tab` flips it), each subscription is a `[name]` chip —
+  a pattern's carries a trailing `⁎` — and `a add` is always shown at the right and works from
+  either half. The view opens with the **tail** focused, since a reader comes back to read
+  messages; the strip is where `Tab` takes you to pick a chip (`←→`) and unsubscribe it (`d`).
+  This is the "configure before you see anything" step Monitor has no equivalent of.
+- **Channel or pattern is auto-detected**: `*`, `?` or `[` anywhere in the typed text makes it a
+  pattern (`PSUBSCRIBE`); anything else is a channel (`SUBSCRIBE`); a leading `=` forces a channel.
+- **No persistent warning banner and no `prod`/`unknown` confirmation** — unlike `MONITOR`'s
+  server-wide, involuntary cost, a Pub/Sub subscription costs only what the reader chose to
+  subscribe to. Subscribing is not a write, so Read-only Mode never sees it either.
+- **The subscription list is remembered for the session, never persisted.** Leaving the view (any
+  route: `Esc`, `g k`/`g s`/`g m`, quitting) closes the feed connection — nothing stays subscribed
+  server-side — but the list itself stays in `State`, and `g p` resubscribes to it. `d` on a chip
+  unsubscribes it immediately, locally and (while the feed is live) on the server, via the same
+  connection — never a close-then-reopen, which would risk dropping a message on every other
+  channel already subscribed.
+- **The connection opens lazily.** `g p` with no remembered subscription opens with the add-input
+  focused and dials nothing until the first one is added.
+- **Bounded like Monitor**: 5,000 messages, each payload truncated to 4 KiB on arrival, enforced in
+  exactly one function. `p` pause counts rather than buffers; `/` filters channel and payload for
+  display only; `End` resumes following; `c` copies the selected message's payload.
+- **Columns**: the shell's own receipt time (Pub/Sub messages carry no server-side timestamp,
+  unlike `MONITOR`'s lines), then CHANNEL, then PAYLOAD — TIME sheds first below 80 columns,
+  CHANNEL is folded into the payload text (never dropped outright) below 70. This is the direct
+  answer to "distinct from Monitor's layout": the tail is at minimum two columns where Monitor's
+  is one.
+- **A detail strip** for the selected message — channel, `via <pattern>` when a pattern matched,
+  and the full payload, pretty-printed when it parses as JSON, with the Viewer's own byte
+  escaping throughout.
+- **A known limit on `via` when patterns overlap.** Redis delivers one `pmessage` per matching
+  pattern, so a channel matching two subscribed patterns at once (e.g. `user:*` and `user:4?`)
+  arrives as two separate messages with identical channel and payload — and fred's public API
+  (the Redis client this app is built on) does not expose which pattern produced which delivery.
+  When more than one subscribed pattern could match, the detail strip hedges rather than asserts:
+  `via user:* (or another matching pattern)`. Reading raw RESP frames ourselves to resolve this
+  exactly was considered and rejected — see `crates/app/src/redis/feed.rs`'s `matched_pattern`.
+- **A failed subscribe/unsubscribe surfaces as an R7.4 notification** naming the failing command
+  (`SUBSCRIBE`/`PSUBSCRIBE`/`UNSUBSCRIBE`/`PUNSUBSCRIBE`) — an ACL's `-NOPERM` on a restricted
+  channel, most plausibly. A chip whose `SUBSCRIBE` failed is dropped rather than left showing as
+  subscribed when the server never actually subscribed it.
+
+### 6.9 Connection states and degradation
 
 The title bar already answers *what am I connected to, and why*. It also has to answer *is that
 still true*, and *can I write*. Both are chrome the user reads without looking for it, so both
@@ -563,7 +629,7 @@ a diagnostic naming the target, its Source, and the failure
 screen; at startup there is nothing to show, and an app that opens to an empty error box wastes
 the reader's time.
 
-### 6.9 Slowlog
+### 6.10 Slowlog
 
 Reached by `g s` (§3), a full-screen `View` — not a third pane (G7) — showing the server's own
 `SLOWLOG GET` ring buffer in the same header/list/detail-strip frame every screen in this app

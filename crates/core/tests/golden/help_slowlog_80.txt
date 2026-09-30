@@ -12,7 +12,7 @@
 │ PgUp/PgDn page                                                               │
 │ Home/End  top/bottom                                                         │
 │                                                                              │
-│ ⌃R read-only   g s slowlog   g m monitor   g k keys   Esc back   q quit   ? F1
+│ ⌃R read-only   g s slowlog   g m monitor   g p pub/sub   g k keys   Esc back
 │                                                                              │
 │ Esc close                                                                    │
 └──────────────────────────────────────────────────────────────────────────────┘
