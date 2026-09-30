@@ -2,7 +2,7 @@
 
 use ratatui_textarea::CursorMove;
 
-use crate::command::ReadToken;
+use crate::command::{FeedToken, ReadToken};
 use crate::key::KeyName;
 use crate::keymap::Action;
 use crate::msg::KeyCode;
@@ -25,6 +25,7 @@ mod keys;
 mod link;
 mod monitor;
 mod mouse;
+mod pubsub;
 mod scan;
 mod slowlog;
 mod viewer;
@@ -42,6 +43,7 @@ use self::keys::*;
 use self::link::*;
 use self::monitor::*;
 use self::mouse::*;
+use self::pubsub::*;
 use self::scan::*;
 use self::slowlog::*;
 use self::viewer::*;
@@ -54,6 +56,22 @@ use self::viewer::*;
 fn issue_read(state: &mut State) -> ReadToken {
     state.read_token = state.read_token.next();
     state.read_token
+}
+
+/// Mint the token for a feed connection about to be opened — Monitor
+/// (`g m`) and Pub/Sub (`g p`) alike share this one counter
+/// (`state.feed_token_seq`), rather than each minting from its own
+/// `feed_token` field the way an earlier version of this did. Two
+/// independent per-feature counters can hold the same numeric value (both
+/// start at the same default), which made `Msg::FeedOpened`/`Msg::FeedClosed`
+/// routing correct only *because* leaving one feature's view always sets its
+/// `status` to `Idle` before the other's feed can open — an ordering
+/// invariant elsewhere in the code, not a property of the token itself. One
+/// shared counter makes a `FeedToken` name exactly one feed, ever, so routing
+/// no longer depends on that invariant holding.
+fn issue_feed_token(state: &mut State) -> FeedToken {
+    state.feed_token_seq = state.feed_token_seq.next();
+    state.feed_token_seq
 }
 
 /// Issue a Refetch of the Open key: mint its token, record it as the pending
@@ -244,6 +262,19 @@ pub fn update(mut state: State, msg: Msg) -> (State, Vec<Command>) {
         Msg::FeedOpened { token } => feed_opened(state, token),
         Msg::FeedClosed { token, reason } => feed_closed(state, token, reason),
         Msg::MonitorLine { token, at_ms, raw } => monitor_line(state, token, at_ms, raw),
+        Msg::PubSubMessage {
+            token,
+            at_ms,
+            channel,
+            via,
+            payload,
+        } => pubsub_message(state, token, at_ms, channel, via, payload),
+        Msg::SubscriptionFailed {
+            command,
+            detail,
+            at_ms,
+            subs,
+        } => subscription_failed(state, command, detail, at_ms, subs),
     }
 }
 
@@ -262,6 +293,13 @@ pub(crate) enum Mode {
     Confirm,
     Editing,
     Filtering,
+    /// The Pub/Sub view's add-input is capturing text (`a`, or opened
+    /// automatically by decision 6's lazy open). A distinct mode from
+    /// `Filtering`: different key (`a` vs `/`), different target
+    /// (`PubSubState::input`, submitted as a subscription, vs
+    /// `PubSubState::filter`, narrowing a display), never active at the
+    /// same time as each other.
+    PubSubAdding,
     Normal,
 }
 
@@ -306,6 +344,14 @@ pub(crate) fn mode_beneath_help(state: &State) -> Mode {
     if state.filtering {
         return Mode::Filtering;
     }
+    // The Pub/Sub add-input, ranked with the same "captures ordinary
+    // characters as text" precedence as Filtering — checked after it since
+    // the two can never coexist (`state.filtering` is tail-scoped, `adding`
+    // is strip-scoped) and order between them is therefore never observable,
+    // only documentation of which was written first.
+    if state.pubsub.adding {
+        return Mode::PubSubAdding;
+    }
     Mode::Normal
 }
 
@@ -328,7 +374,7 @@ fn key_press(mut state: State, key: KeyPress) -> (State, Vec<Command>) {
     // resolves to `Action::Help` there through the ordinary path below.
     if matches!(
         current_mode,
-        Mode::Confirm | Mode::Editing | Mode::Filtering
+        Mode::Confirm | Mode::Editing | Mode::Filtering | Mode::PubSubAdding
     ) && matches!(key.code, KeyCode::F(_))
         && state.keymap.action_for(&key) == Some(Action::Help)
     {
@@ -352,6 +398,7 @@ fn key_press(mut state: State, key: KeyPress) -> (State, Vec<Command>) {
         }
         Mode::Editing => return editor_key(state, key),
         Mode::Filtering => return filter_key(state, key),
+        Mode::PubSubAdding => return pubsub_add_key(state, key),
         Mode::Normal => {}
     }
     // `g`-chords (DESIGN §3's jump list, M3): a pending prefix waits, with no
@@ -461,6 +508,7 @@ fn dispatch_action(mut state: State, action: Action) -> (State, Vec<Command>) {
             Action::OpenKeysView => open_keys_view(state),
             Action::OpenSlowlog => open_slowlog(state),
             Action::OpenMonitor => open_monitor(state),
+            Action::OpenPubSub => open_pubsub(state),
             Action::MoveDown
             | Action::MoveUp
             | Action::PageDown
@@ -488,6 +536,7 @@ fn dispatch_action(mut state: State, action: Action) -> (State, Vec<Command>) {
             Action::OpenKeysView => open_keys_view(state),
             Action::OpenSlowlog => open_slowlog(state),
             Action::OpenMonitor => open_monitor(state),
+            Action::OpenPubSub => open_pubsub(state),
             Action::MoveDown
             | Action::MoveUp
             | Action::PageDown
@@ -501,11 +550,45 @@ fn dispatch_action(mut state: State, action: Action) -> (State, Vec<Command>) {
             _ => (state, Vec::new()),
         };
     }
+    // The Pub/Sub view (M3 task 5, `docs/plans/m3-pubsub.md`) is the same
+    // shape again: a full screen, so only the actions it gives its own
+    // meaning to (strip/tail focus, chip add/remove/navigate, tail
+    // movement/pause/filter/copy, reopen — decision 1) and the app-level
+    // handful do anything while it is showing.
+    if state.screen == View::PubSub {
+        return match action {
+            Action::Quit => quit(state),
+            Action::Help => open_help(state),
+            Action::Cancel => cancel(state),
+            Action::ToggleReadOnly => toggle_read_only(state),
+            Action::OpenKeysView => open_keys_view(state),
+            Action::OpenSlowlog => open_slowlog(state),
+            Action::OpenMonitor => open_monitor(state),
+            Action::OpenPubSub => open_pubsub(state),
+            Action::MoveDown
+            | Action::MoveUp
+            | Action::PageDown
+            | Action::PageUp
+            | Action::Top
+            | Action::Bottom
+            | Action::TogglePause
+            | Action::Refetch
+            | Action::Copy
+            | Action::Filter
+            | Action::CyclePane
+            | Action::Add
+            | Action::Delete
+            | Action::Open
+            | Action::CollapseGroup => pubsub_dispatch(state, action),
+            _ => (state, Vec::new()),
+        };
+    }
     match action {
         Action::Quit => quit(state),
         Action::OpenKeysView => open_keys_view(state),
         Action::OpenSlowlog => open_slowlog(state),
         Action::OpenMonitor => open_monitor(state),
+        Action::OpenPubSub => open_pubsub(state),
         // Scoped to the Monitor view alone — see the block above. A no-op
         // everywhere else, the same as `Action::Sort`'s bare `s` is a no-op
         // wherever nothing gives it a meaning.
@@ -664,6 +747,15 @@ fn cancel(mut state: State) -> (State, Vec<Command>) {
         state.screen = View::Keys;
         return (state, commands);
     }
+    // Pub/Sub's own way back — same shape, `docs/plans/m3-pubsub.md`. Note
+    // `Esc` while the add-input is capturing never reaches here at all:
+    // `Mode::PubSubAdding` routes to `pubsub_add_key` first, which is its
+    // own "back out of the nearest thing" (closes the input, not the view).
+    if state.screen == View::PubSub {
+        let commands = leave_pubsub(&mut state);
+        state.screen = View::Keys;
+        return (state, commands);
+    }
     // The "pop" half of stack navigation: back to the list you were
     // just looking at, before an unrelated background scan. Also
     // exits value-cursor mode if it was active — the same keypress,
@@ -768,11 +860,12 @@ fn clear_editing(state: &mut State) {
 }
 
 fn quit(mut state: State) -> (State, Vec<Command>) {
-    // Quitting is a route out of the Monitor view too (decision 2): a
-    // `MONITOR` left running behind a process that is about to exit costs the
-    // server with nothing left to say so, which is exactly the scenario
-    // decision 2 exists to rule out.
+    // Quitting is a route out of the Monitor and Pub/Sub views too
+    // (decision 2; `docs/plans/m3-pubsub.md`): a feed left running behind a
+    // process that is about to exit costs the server with nothing left to
+    // say so, which is exactly the scenario decision 2 exists to rule out.
     let mut commands = leave_monitor(&mut state);
+    commands.extend(leave_pubsub(&mut state));
     state.quitting = true;
     commands.push(Command::Quit);
     (state, commands)

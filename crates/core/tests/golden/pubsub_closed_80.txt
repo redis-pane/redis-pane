@@ -1,0 +1,24 @@
+─ redis-pane ─ ● staging · cache-01:6379/0 · from profile staging ───── ● live ─
+
+ ⟡ [orders] [user:* ⁎]                                                    a add
+ feed closed: the feed connection closed                             3 messages
+ TIME         CHANNEL               PAYLOAD
+ 16:21:23.500 orders                {"id":8812,"total":41.5}
+ 16:21:23.501 user:42               login
+ 16:21:23.502 orders                {"id":8813}
+
+
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────
+ channel orders
+ {
+   "id": 8813
+ }
+
+
+
+
+ Tab focus strip/tail   a add   / filter   c copy payload   ? F1 help

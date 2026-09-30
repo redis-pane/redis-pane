@@ -4,17 +4,17 @@
  ● user:8812:cart                  zset       412 B   12m │ string · 2 bytes · 2.1 KB
  ● user:8812:profile               json       880 B     ∞ │ ttl 9m                                                         ● live
  ● user:8812:session               hash      2.1 KB   42m ├
- ● user:8813:session ┌─ help · value pane · string ─────────────────────────────────────────────────────────┐
- ● cart:91af3c9d2e   │ e         edit                                                                       │
- ● feed:global:hot   │ c         copy                                                                       │
-                     │ t         edit ttl                                                                   │
-                     │ r         refetch                                                                    │
-                     │ C         copy redis-cli command                                                     │
-                     │                                                                                      │
-                     │ Tab focus   ⌃R read-only   g s slowlog   g m monitor   Esc back   q quit   ? F1 help │
-                     │                                                                                      │
-                     │ Tab keys · Esc close                                                                 │
-                     └──────────────────────────────────────────────────────────────────────────────────────┘
+ ● user:8813:s┌─ help · value pane · string ───────────────────────────────────────────────────────────────────────┐
+ ● cart:91af3c│ e         edit                                                                                     │
+ ● feed:global│ c         copy                                                                                     │
+              │ t         edit ttl                                                                                 │
+              │ r         refetch                                                                                  │
+              │ C         copy redis-cli command                                                                   │
+              │                                                                                                    │
+              │ Tab focus   ⌃R read-only   g s slowlog   g m monitor   g p pub/sub   Esc back   q quit   ? F1 help │
+              │                                                                                                    │
+              │ Tab keys · Esc close                                                                               │
+              └────────────────────────────────────────────────────────────────────────────────────────────────────┘
                                                           │
                                                           │
                                                           │

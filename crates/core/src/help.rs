@@ -64,6 +64,16 @@ pub enum HelpContext {
     /// — the same "a full screen, not the two-pane browser" reasoning as
     /// [`HelpContext::Slowlog`], one context of its own.
     Monitor,
+    /// `a` is capturing a subscription's channel/pattern text
+    /// (`update::pubsub::pubsub_add_key`) — the `Filter`-shaped sibling
+    /// context for `PubSubState::input`. Every ordinary character is text
+    /// here too, same reason `Filter` outranks Normal mode.
+    PubSubAdding,
+    /// The Pub/Sub view (`g p`, R6.2, M3 task 5, `docs/plans/m3-pubsub.md`)
+    /// — the same "a full screen, not the two-pane browser" reasoning as
+    /// [`HelpContext::Slowlog`]/[`HelpContext::Monitor`]. `focus` picks the
+    /// strip-scoped or tail-scoped rows (decision 1).
+    PubSub { focus: crate::state::PubSubFocus },
 }
 
 /// The Viewer's per-type contexts (PLAN's decision 2): one for each of the
@@ -246,6 +256,7 @@ pub fn context(state: &State) -> HelpContext {
         Mode::Confirm => HelpContext::Confirm,
         Mode::Editing => HelpContext::Editor(editor_context(state)),
         Mode::Filtering => HelpContext::Filter,
+        Mode::PubSubAdding => HelpContext::PubSubAdding,
         Mode::Normal => {
             // A pending chord outranks everything else in Normal mode — the
             // same "the very next keypress is spoken for" reasoning that
@@ -261,6 +272,11 @@ pub fn context(state: &State) -> HelpContext {
             }
             if state.screen == crate::state::View::Monitor {
                 return HelpContext::Monitor;
+            }
+            if state.screen == crate::state::View::PubSub {
+                return HelpContext::PubSub {
+                    focus: state.pubsub.focus,
+                };
             }
             // The pane *viewed* by help, not necessarily the one actually
             // focused — `Tab` flips `HelpView::pane` while help is open
@@ -392,6 +408,11 @@ pub fn here(state: &State, ctx: HelpContext) -> Vec<HelpRow> {
         HelpContext::ChordPending => chord_pending_rows(state),
         HelpContext::Slowlog => slowlog_rows(state),
         HelpContext::Monitor => monitor_rows(state),
+        HelpContext::PubSubAdding => vec![
+            HelpRow::new(keys_for(state, Action::EnterValueCursor), "subscribe"),
+            HelpRow::new(keys_for(state, Action::Cancel), "cancel"),
+        ],
+        HelpContext::PubSub { focus } => pubsub_rows(state, focus),
     }
 }
 
@@ -470,6 +491,66 @@ fn monitor_rows(state: &State) -> Vec<HelpRow> {
     rows.push(HelpRow::new("↑↓ jk", "move"));
     rows.push(HelpRow::new("PgUp/PgDn", "page"));
     rows.push(HelpRow::new("Home/End", "top/bottom (End resumes follow)"));
+    rows
+}
+
+/// The Pub/Sub view's own rows (M3 task 5, `docs/plans/m3-pubsub.md`
+/// decision 1): `Tab` always offered first (it is how the reader reaches
+/// every row beneath it), then strip-scoped or tail-scoped rows depending
+/// on `focus`, then `r reopen` whenever there is a closed, non-empty feed to
+/// reopen (offered regardless of focus, mirroring `update::pubsub::pubsub_dispatch`'s
+/// own `Action::Refetch` guard, which is not focus-gated).
+fn pubsub_rows(state: &State, focus: crate::state::PubSubFocus) -> Vec<HelpRow> {
+    // `a add` from either half, matching `update::pubsub::pubsub_dispatch`,
+    // which no longer gates `Action::Add` on focus.
+    let mut rows = vec![
+        HelpRow::new(keys_for(state, Action::CyclePane), "focus strip/tail"),
+        HelpRow::new(keys_for(state, Action::Add), "add"),
+    ];
+    match focus {
+        crate::state::PubSubFocus::Strip => {
+            // Chip navigation/removal means nothing with no chips — offered
+            // only once there is at least one, matching the guard
+            // `update::pubsub::move_chip`/`remove_subscription_at` put on
+            // the keypress itself.
+            if !state.pubsub.subscriptions.is_empty() {
+                rows.push(HelpRow::new(keys_for(state, Action::Delete), "unsubscribe"));
+                rows.push(HelpRow::new("←→", "select chip"));
+            }
+        }
+        crate::state::PubSubFocus::Tail => {
+            // Pause/resume means nothing with no feed actually streaming —
+            // the same guard `monitor_rows` puts on its own pause row.
+            if state.pubsub.status == crate::state::FeedStatus::Open {
+                let pause_label = if state.pubsub.paused {
+                    "resume"
+                } else {
+                    "pause"
+                };
+                rows.push(HelpRow::new(
+                    keys_for(state, Action::TogglePause),
+                    pause_label,
+                ));
+            }
+            rows.push(HelpRow::new(
+                keys_for(state, Action::Filter),
+                if state.pubsub.filter.is_empty() {
+                    "filter"
+                } else {
+                    "change filter"
+                },
+            ));
+            rows.push(HelpRow::new(keys_for(state, Action::Copy), "copy payload"));
+            rows.push(HelpRow::new("↑↓ jk", "move"));
+            rows.push(HelpRow::new("PgUp/PgDn", "page"));
+            rows.push(HelpRow::new("Home/End", "top/bottom (End resumes follow)"));
+        }
+    }
+    if matches!(state.pubsub.status, crate::state::FeedStatus::Closed { .. })
+        && !state.pubsub.subscriptions.is_empty()
+    {
+        rows.push(HelpRow::new(keys_for(state, Action::Refetch), "reopen"));
+    }
     rows
 }
 
@@ -807,7 +888,13 @@ pub fn everywhere(state: &State) -> Vec<HelpRow> {
             // from the Viewer it always goes back. Below 70 columns this is
             // also what draws the other pane at all, but it is still a
             // meaningful keypress either way, so it is not gated on width.
-            if !state.keys_pane_focused() || state.open.is_some() {
+            // Suppressed in the Pub/Sub view: `Tab` still means "focus
+            // strip/tail" there, but `pubsub_rows` already carries that row
+            // as HERE content (decision 1) — a second, differently-worded
+            // copy here would be a duplicate rather than new information.
+            if state.screen != crate::state::View::PubSub
+                && (!state.keys_pane_focused() || state.open.is_some())
+            {
                 rows.push(action_row(state, Action::CyclePane, "focus"));
             }
             // `⌃R`: omitted, not dimmed, under `replica` — never offer a
@@ -827,9 +914,14 @@ pub fn everywhere(state: &State) -> Vec<HelpRow> {
             if let Some(keys) = state.keymap.chord_hint(Action::OpenMonitor) {
                 rows.push(HelpRow::new(keys, Action::OpenMonitor.label()));
             }
+            if let Some(keys) = state.keymap.chord_hint(Action::OpenPubSub) {
+                rows.push(HelpRow::new(keys, Action::OpenPubSub.label()));
+            }
             if matches!(
                 state.screen,
-                crate::state::View::Slowlog | crate::state::View::Monitor
+                crate::state::View::Slowlog
+                    | crate::state::View::Monitor
+                    | crate::state::View::PubSub
             ) && let Some(keys) = state.keymap.chord_hint(Action::OpenKeysView)
             {
                 rows.push(HelpRow::new(keys, Action::OpenKeysView.label()));
@@ -844,7 +936,7 @@ pub fn everywhere(state: &State) -> Vec<HelpRow> {
         // `filter_key`/`editor_key` all handle `Esc` themselves, so a second
         // `Action::Cancel`-labelled row here would just repeat it. `F1` is
         // the only thing genuinely global left in these three modes.
-        Mode::Confirm | Mode::Editing | Mode::Filtering => {
+        Mode::Confirm | Mode::Editing | Mode::Filtering | Mode::PubSubAdding => {
             vec![HelpRow::new(f1_help_keys(state), "help")]
         }
     }

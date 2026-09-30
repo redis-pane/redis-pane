@@ -4025,3 +4025,184 @@ fn golden_help_in_monitor_view() {
     assert_golden("help_monitor_80", &draw_at(&state, 80, 24, &clock));
     assert_golden("help_monitor_130", &draw_at(&state, 130, 24, &clock));
 }
+
+// ── Pub/Sub (`g p`, M3 task 5, `docs/plans/m3-pubsub.md`) ──────────────────
+
+use redis_pane_core::state::{PubSubFocus, Subscription};
+
+const PUBSUB_NOW_MS: u64 = 1_339_518_083_500;
+
+fn pubsub_message(
+    at_ms: u64,
+    channel: &[u8],
+    via: Option<&[u8]>,
+    payload: &[u8],
+) -> (u64, Vec<u8>, Option<Vec<u8>>, Vec<u8>) {
+    (
+        at_ms,
+        channel.to_vec(),
+        via.map(|v| v.to_vec()),
+        payload.to_vec(),
+    )
+}
+
+/// An open feed, two subscriptions (one channel, one pattern), and three
+/// messages across both channels — the shape most Pub/Sub goldens start
+/// from, and the direct golden-frame proof of PLAN's "distinct from
+/// Monitor's layout" clause: multiple channels in one tail, each message
+/// carrying its own channel identity, which a `MONITOR` line has no
+/// analogue of.
+fn pubsub_with_messages() -> State {
+    let mut state = State {
+        screen: redis_pane_core::state::View::PubSub,
+        link: up(Tk::Armed),
+        ..base()
+    };
+    state.pubsub.subscriptions = vec![
+        Subscription::Channel("orders".into()),
+        Subscription::Pattern("user:*".into()),
+    ];
+    state.pubsub.status = FeedStatus::Open;
+    state.pubsub.following = true;
+    for (at_ms, channel, via, payload) in [
+        pubsub_message(
+            PUBSUB_NOW_MS,
+            b"orders",
+            None,
+            br#"{"id":8812,"total":41.5}"#,
+        ),
+        pubsub_message(PUBSUB_NOW_MS + 1, b"user:42", Some(b"user:*"), b"login"),
+        pubsub_message(PUBSUB_NOW_MS + 2, b"orders", None, br#"{"id":8813}"#),
+    ] {
+        state
+            .pubsub
+            .push_pubsub_message(at_ms, channel, via, payload);
+    }
+    state
+}
+
+#[test]
+fn golden_pubsub_80_multi_channel_tail() {
+    assert_golden(
+        "pubsub_80",
+        &draw_at(&pubsub_with_messages(), 80, 24, &FixedClock(PUBSUB_NOW_MS)),
+    );
+}
+
+#[test]
+fn golden_pubsub_130_multi_channel_tail() {
+    assert_golden(
+        "pubsub_130",
+        &draw_at(&pubsub_with_messages(), 130, 26, &FixedClock(PUBSUB_NOW_MS)),
+    );
+}
+
+#[test]
+fn golden_pubsub_strip_focused() {
+    let mut state = pubsub_with_messages();
+    state.pubsub.focus = PubSubFocus::Strip;
+    state.pubsub.selected_chip = 1;
+    assert_golden(
+        "pubsub_strip_focused_80",
+        &draw_at(&state, 80, 24, &FixedClock(PUBSUB_NOW_MS)),
+    );
+    assert_golden(
+        "pubsub_strip_focused_130",
+        &draw_at(&state, 130, 26, &FixedClock(PUBSUB_NOW_MS)),
+    );
+}
+
+#[test]
+fn golden_pubsub_empty_with_input_focused() {
+    let state = State {
+        screen: redis_pane_core::state::View::PubSub,
+        link: up(Tk::Armed),
+        ..base()
+    };
+    // Decision 6: `g p` with no remembered subscriptions opens with the
+    // add-input focused and dials nothing — this is what `open_pubsub`
+    // (`update::pubsub`) actually leaves `State` in, built directly here
+    // since this golden is about the render, not the transition into it.
+    let mut state = state;
+    state.pubsub.adding = true;
+    for c in "user:*".chars() {
+        state.pubsub.input.push(c);
+    }
+    assert_golden(
+        "pubsub_empty_input_focused_80",
+        &draw_at(&state, 80, 24, &FixedClock(PUBSUB_NOW_MS)),
+    );
+    assert_golden(
+        "pubsub_empty_input_focused_130",
+        &draw_at(&state, 130, 26, &FixedClock(PUBSUB_NOW_MS)),
+    );
+}
+
+#[test]
+fn golden_pubsub_paused() {
+    let mut state = pubsub_with_messages();
+    state.pubsub.focus = PubSubFocus::Tail;
+    state.pubsub.toggle_pause();
+    for i in 0..12 {
+        state.pubsub.push_pubsub_message(
+            PUBSUB_NOW_MS + 3 + i,
+            b"orders".to_vec(),
+            None,
+            format!("dropped {i}").into_bytes(),
+        );
+    }
+    assert_golden(
+        "pubsub_paused_80",
+        &draw_at(&state, 80, 24, &FixedClock(PUBSUB_NOW_MS)),
+    );
+}
+
+/// The detail strip pretty-prints a JSON payload — the selected message
+/// (the newest, `orders` · `{"id":8813}`) parses as JSON, so the detail
+/// strip shows it formatted rather than as one raw line.
+#[test]
+fn golden_pubsub_json_detail() {
+    let state = pubsub_with_messages();
+    assert_golden(
+        "pubsub_json_detail_80",
+        &draw_at(&state, 80, 24, &FixedClock(PUBSUB_NOW_MS)),
+    );
+}
+
+#[test]
+fn golden_pubsub_closed() {
+    let mut state = pubsub_with_messages();
+    state.pubsub.status = FeedStatus::Closed {
+        reason: Some("the feed connection closed".to_string()),
+    };
+    assert_golden(
+        "pubsub_closed_80",
+        &draw_at(&state, 80, 24, &FixedClock(PUBSUB_NOW_MS)),
+    );
+}
+
+#[test]
+fn golden_help_in_pubsub_view() {
+    let mut state = pubsub_with_messages();
+    state.help = Some(HelpView { pane: state.focus });
+    let clock = FixedClock(PUBSUB_NOW_MS);
+    assert_golden("help_pubsub_tail_80", &draw_at(&state, 80, 24, &clock));
+    state.pubsub.focus = PubSubFocus::Strip;
+    state.help = Some(HelpView { pane: state.focus });
+    assert_golden("help_pubsub_strip_80", &draw_at(&state, 80, 24, &clock));
+}
+
+#[test]
+fn golden_help_pubsub_adding() {
+    let mut state = State {
+        screen: redis_pane_core::state::View::PubSub,
+        link: up(Tk::Armed),
+        ..base()
+    };
+    state.pubsub.adding = true;
+    state.help = Some(HelpView { pane: state.focus });
+    assert_golden(
+        "help_pubsub_adding_80",
+        &draw_at(&state, 80, 24, &FixedClock(PUBSUB_NOW_MS)),
+    );
+}

@@ -8,6 +8,7 @@
 pub mod keys;
 pub mod layout;
 pub mod monitor;
+pub mod pubsub;
 pub mod slowlog;
 
 use ratatui::buffer::Buffer;
@@ -56,6 +57,15 @@ pub fn frame(state: &State, theme: &Theme, clock: &dyn Clock, area: Rect) -> Buf
             area.height.saturating_sub(2 + bottom),
         );
         monitor::render(state, theme, body, &mut buf);
+    } else if state.screen == crate::state::View::PubSub {
+        let bottom = if hint_bar_visible { 2 } else { 1 };
+        let body = Rect::new(
+            area.x,
+            area.y + 2,
+            area.width,
+            area.height.saturating_sub(2 + bottom),
+        );
+        pubsub::render(state, theme, body, &mut buf);
     } else {
         let plan = layout::layout(area, state.focus, state.split_adjust);
         let open_row = keys::render(state, theme, clock, plan.keys, plan.density, &mut buf);
@@ -945,6 +955,13 @@ fn context_title(ctx: help::HelpContext) -> String {
         HelpContext::ChordPending => "g …".to_string(),
         HelpContext::Slowlog => "slowlog".to_string(),
         HelpContext::Monitor => "monitor".to_string(),
+        HelpContext::PubSubAdding => "pub/sub · add".to_string(),
+        HelpContext::PubSub {
+            focus: crate::state::PubSubFocus::Strip,
+        } => "pub/sub · strip".to_string(),
+        HelpContext::PubSub {
+            focus: crate::state::PubSubFocus::Tail,
+        } => "pub/sub · tail".to_string(),
     }
 }
 
@@ -1979,6 +1996,50 @@ mod safety {
         }
     }
 
+    /// The Pub/Sub view's own sweep (M3 task 5, `docs/plans/m3-pubsub.md`)
+    /// — chips, an open tail with messages, the add-input, and a detail
+    /// strip all have their own width/height arithmetic
+    /// (`render::pubsub::columns_for`/`detail_strip`'s row-budget math) that
+    /// `populated()`'s Keys-view sweep above never exercises.
+    #[test]
+    fn no_terminal_size_can_make_pubsub_rendering_panic() {
+        use crate::state::{FeedStatus, Subscription, View};
+        let theme = Theme::new(ColorDepth::TrueColor);
+        let clock = FixedClock(1_000);
+        let mut state = State {
+            screen: View::PubSub,
+            ..State::default()
+        };
+        state.pubsub.subscriptions = vec![
+            Subscription::Channel("orders".into()),
+            Subscription::Pattern("user:*".into()),
+        ];
+        state.pubsub.status = FeedStatus::Open;
+        state
+            .pubsub
+            .push_pubsub_message(1_000, b"orders".to_vec(), None, br#"{"id":1}"#.to_vec());
+        state.pubsub.push_pubsub_message(
+            1_001,
+            b"user:42".to_vec(),
+            Some(b"user:*".to_vec()),
+            b"hi".to_vec(),
+        );
+        for w in [0u16, 1, 2, 7, 8, 20, 69, 70, 79, 80, 89, 90, 119, 120, 300] {
+            for h in [0u16, 1, 2, 3, 5, 23, 24, 60] {
+                let _ = frame(&state, &theme, &clock, Rect::new(0, 0, w, h));
+            }
+        }
+        state.pubsub.adding = true;
+        for c in "a fairly long pattern:*".chars() {
+            state.pubsub.input.push(c);
+        }
+        for w in [0u16, 1, 7, 8, 70, 80, 300] {
+            for h in [0u16, 1, 3, 24] {
+                let _ = frame(&state, &theme, &clock, Rect::new(0, 0, w, h));
+            }
+        }
+    }
+
     #[test]
     fn an_empty_keyspace_renders_at_every_size() {
         let theme = Theme::new(ColorDepth::Monochrome);
@@ -2165,6 +2226,45 @@ mod hint_bar_tests {
         let hint = hint_bar(&s, s.cols);
         assert!(hint.contains("k keys"), "{hint}");
         assert!(hint.contains("s slowlog"), "{hint}");
+    }
+
+    /// The Pub/Sub view (M3 task 5, `docs/plans/m3-pubsub.md`), both foci —
+    /// `g p` widened the `everywhere` row (it is now the widest row in every
+    /// context, including the ones above), so this is also the check that
+    /// the 80-column floor still renders a hint bar that is a genuine prefix
+    /// of help rather than something that silently drifted out of step once
+    /// one more chord joined the row.
+    #[test]
+    fn the_pubsub_views_hint_bar_is_a_prefix_of_its_help_on_the_strip() {
+        let mut s = crate::state::State {
+            screen: crate::state::View::PubSub,
+            cols: 80,
+            ..crate::state::State::default()
+        };
+        s.pubsub.focus = crate::state::PubSubFocus::Strip;
+        assert_hint_bar_is_a_prefix_of_help(&s);
+        let hint = hint_bar(&s, s.cols);
+        // Not `g p pub/sub`: at 80 columns the Pub/Sub view's own HERE rows
+        // (`Tab focus strip/tail`, `a add`) already spend enough of the
+        // budget that the `g p` `everywhere` row can legitimately be the
+        // first thing to not fit — `hint_bar`'s own "stop at the first row
+        // that would not fit" contract, which `assert_hint_bar_is_a_prefix_of_help`
+        // just verified this bar still honours. `add` is a HERE row, always
+        // near the front.
+        assert!(hint.contains("add"), "{hint}");
+    }
+
+    #[test]
+    fn the_pubsub_views_hint_bar_is_a_prefix_of_its_help_on_the_tail() {
+        let mut s = crate::state::State {
+            screen: crate::state::View::PubSub,
+            cols: 80,
+            ..crate::state::State::default()
+        };
+        s.pubsub.focus = crate::state::PubSubFocus::Tail;
+        assert_hint_bar_is_a_prefix_of_help(&s);
+        let hint = hint_bar(&s, s.cols);
+        assert!(hint.contains("focus strip/tail"), "{hint}");
     }
 }
 

@@ -369,6 +369,11 @@ impl Shell {
             }
             Command::OpenFeed { kind, token } => self.open_feed(kind, token),
             Command::CloseFeed => self.close_feed(),
+            Command::UpdateSubscription { add, remove } => {
+                if let Some(handle) = self.feed.handle.as_ref() {
+                    handle.update_subscription(add, remove, self.tx.clone(), self.clock.clone());
+                }
+            }
         }
         ControlFlow::Continue(())
     }
@@ -603,6 +608,7 @@ impl Shell {
 
         let kind = match kind {
             FeedKindMsg::Monitor => FeedKind::Monitor,
+            FeedKindMsg::Subscribe(subs) => FeedKind::Subscribe(subs),
         };
         let (dial, credentials) = (
             self.reconnect.dial.clone(),

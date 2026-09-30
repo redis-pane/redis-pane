@@ -75,7 +75,7 @@ Proves: the architecture holds, and the app can be trusted about what it is conn
 
 **Progress: complete.** The boundary is enforced by CI, the clock is injected, resolution and
 config parsing carry their full test tables, the Redis shell connects over RESP3 and probes for
-`CLIENT TRACKING`, both re-arm invariants are asserted, and every readout in DESIGN §6.8 is a
+`CLIENT TRACKING`, both re-arm invariants are asserted, and every readout in DESIGN §6.9 is a
 recorded golden frame.
 
 | # | Task | Proves |
@@ -90,7 +90,7 @@ recorded golden frame.
 | 8 | Redis shell: `fred`, RESP3, version floor, **capability probe** | Connects to 6.2 and 7.x; Redis 5 is refused with a diagnostic rather than a protocol error; a server refusing `CLIENT TRACKING` degrades to `○ manual` (R1.13, ADR-0007) |
 | 9 | Startup diagnostics and exit codes | Unreachable target exits non-zero with target, Source and cause on stderr (R1.14) |
 | 10 | Reconnect with visible backoff, both re-arm invariants | The shell redials on `Command::Reconnect` (exponential backoff, `redis::backoff_for`), redoing the full startup ritual — version floor, tracking probe, server conditions — since a server that vanished and came back is not guaranteed to still be the same one. `r` retries immediately rather than waiting out the timer (ADR-0009), cancelling whatever backoff or in-flight attempt was already running. Both re-arm invariants hold and are tested: the header never reads `● live` until tracking is armed, and a second write after an invalidation produces a push only once the Refetch re-armed (ADR-0006, ADR-0009). The header states the retry countdown while one is scheduled |
-| 11 | Title bar: Environment dot, target, db, Source, Read-only reason | Golden frames of every readout in DESIGN §6.8, including `replica … locked` |
+| 11 | Title bar: Environment dot, target, db, Source, Read-only reason | Golden frames of every readout in DESIGN §6.9, including `replica … locked` |
 | 12 | Help overlay, keymap as data, hint bar | An overridden binding changes the on-screen hint (R7.5) |
 
 **Done when** `redis-pane staging` opens against a real server, shows exactly what it is
@@ -135,7 +135,7 @@ before it runs, Read-only Mode is enforced at exactly one point, and nothing her
 RedisInsight-shaped bugs M0/M1 were built to make structurally impossible.
 
 **Progress: in flight.** Task 1 was already done incidentally while building M0's title bar and
-Ctrl-R toggle — `ReadOnlyReason`, its precedence rules, and the DESIGN §6.8 chrome all shipped
+Ctrl-R toggle — `ReadOnlyReason`, its precedence rules, and the DESIGN §6.9 chrome all shipped
 with golden-frame coverage before this table existed. Tasks 2–4 (the chokepoint, Delete, and
 String edit) are done. The rest is ordered per a grilling session with the user: value edit ships
 type by type (String → Hash → Set → List → ZSet) before TTL editing, single-key confirmation is
@@ -160,7 +160,7 @@ survives as a separate, later, opt-in escape hatch (task 5 below) rather than th
 
 | # | Task | Proves |
 |---|---|---|
-| 1 | Read-only Mode as real state: `State` field, reason (`environment`/`replica`/`user`), `Ctrl-R` toggle, title-bar chrome | Golden frames of all four DESIGN §6.8 readouts; `replica` is never liftable (R4.5, ADR-0004) — **done** |
+| 1 | Read-only Mode as real state: `State` field, reason (`environment`/`replica`/`user`), `Ctrl-R` toggle, title-bar chrome | Golden frames of all four DESIGN §6.9 readouts; `replica` is never liftable (R4.5, ADR-0004) — **done** |
 | 2 | Mutation chokepoint: `PendingMutation`, `State::confirm`, propose → preview → confirm → execute as `Command`/`Msg` additions | A state-transition test proves Read-only Mode refuses *at confirm*, after composing the real command, never at the keypress that staged it (R4.4, DESIGN §6.5) — **done** |
 | 3 | Delete: single key, `DEL <key>`, preview + one keypress (`d` stages, `y` confirms, `Esc` dismisses) | Confirmed and refused paths both covered by unit tests; a completed delete reuses the existing "gone" badge machinery (`state.keys.set_gone`), so a deleted row behaves exactly like one that expired or was evicted — **done** |
 | 4 | Value edit — String (and JSON-as-string, R3.2): `e` opens an inline editor in the value pane; `Ctrl-S` stages a `SET` with a stacked red/green diff preview; values over 200KB are refused with a notice (ADR-0014) | Core unit tests cover open/stage/discard, the JSON-invalid indicator, the size refusal at the boundary, and that a live update is held while the buffer is open (R3.8); golden frames pin the editor body, the wrapped-line case, and the hint bar; a Docker-backed integration test proves `SET` actually lands — **done** |
@@ -212,7 +212,13 @@ plumbing, phase B built Monitor on top of it. `fred::monitor::run` only accepts 
 `ServerConfig`; Sentinel (a v1 target, ADR-0008) is handled by rewriting the feed's Config to
 Centralized against the primary the main connection already resolved, rather than either failing
 with fred's own generic Config error or leaving Sentinel silently unsupported — see
-`crates/app/src/redis/feed.rs`'s `monitor_config`. Pub-Sub and Dashboard remain unstarted.
+`crates/app/src/redis/feed.rs`'s `monitor_config`. Task 5 (Pub/Sub) is done — see
+[`m3-pubsub.md`](plans/m3-pubsub.md) for the full build: a `SubscriberClient` on the same
+feed-connection plumbing (no reconnect policy; Sentinel needs no rewrite the way Monitor's does,
+since it is an ordinary client), a shared `state/tail.rs` `LiveTail<T>` Monitor was refactored onto
+so the two live tails share one cap/pause/following/filter implementation, and every `FeedToken`
+minted from one counter shared across features rather than one per feature. Dashboard remains
+unstarted.
 
 | # | Task | Proves |
 |---|---|---|
@@ -220,7 +226,7 @@ with fred's own generic Config error or leaving Sentinel silently unsupported �
 | 2 | ~~Dedicated-connection plumbing for push/poll feeds: a second `fred::Client` (or equivalent) the shell can hand to Monitor/Pub-Sub without starving the main read/write path~~ | done — proven both by the plumbing's own integration tests and by Monitor (task 4) actually using it: an ordinary read on the main connection completes without waiting on an open feed; a killed feed connection surfaces `Msg::FeedClosed` rather than hanging; `Command::CloseFeed` really disconnects |
 | 3 | ~~Slowlog viewer (`g s`): `SLOWLOG GET`/`RESET`, sort, single-node (ADR-0008)~~ | done — entries render in a type-aware-consistent frame; `RESET` is a real mutation (confirm dialog, read-only refusal including `replica`) |
 | 4 | ~~Monitor (`g m`): live tail, filter box, pause/resume, bounded buffer with a visible cap, persistent cost-warning banner~~ | done — the buffer never grows past its cap over a long synthetic run and against a real stream; pausing stops consuming the feed (proven against a real connection, not a mock) rather than hiding it; the banner survives to the single-pane floor |
-| 5 | Pub/Sub (`g p`): subscribe to channels and patterns, live tail | Distinct from Monitor's layout (not just "Monitor with a different source"); unsubscribing on view-close leaves no orphaned subscription |
+| 5 | ~~Pub/Sub (`g p`): subscribe to channels and patterns, live tail~~ | done — a two-column (channel, payload) tail plus a subscription-chip strip that Monitor has no analogue of; `Esc`/`g k`/`g s`/`g m`/quit all close the feed connection, proven against a real server's own `PUBSUB CHANNELS`/`NUMPAT` accounting, not just the app's own state |
 | 6 | Dashboard (`g d`): `INFO`-based tiles — memory used/peak/maxmemory bar, hit ratio, ops/sec sparkline, clients, replication role/lag, eviction/expiry counters, single-node (ADR-0008) | Alarming values are colored; every tile expands to its raw `INFO` section; refreshes on an interval, not static — **flag at the top of this task's plan doc**: the documented alternative (skip the Dashboard, add a memory figure to the status bar, rely on the Slowlog for triage) is still on the table and should be re-decided before work starts, not assumed away by this plan existing |
 
 **Console (R5.2–R5.4) is explicitly out of scope for M3.** The Palette (R5.1) shipped and was

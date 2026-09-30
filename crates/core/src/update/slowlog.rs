@@ -28,9 +28,11 @@ pub(super) const SLOWLOG_PAGE_ROWS: usize = 10;
 /// refresh button anywhere in this app (ADR-0006), only a scoped Refetch,
 /// and here the "scope" is the whole ring buffer rather than one key.
 pub(super) fn open_slowlog(mut state: State) -> (State, Vec<Command>) {
-    // Leaving Monitor closes its feed first (decision 2,
-    // `docs/plans/m3-monitor.md`) — a no-op unless one was actually open.
+    // Leaving Monitor or Pub/Sub closes its feed first (decision 2,
+    // `docs/plans/m3-monitor.md`; `docs/plans/m3-pubsub.md`) — a no-op
+    // unless one was actually open.
     let mut commands = leave_monitor(&mut state);
+    commands.extend(leave_pubsub(&mut state));
     state.screen = View::Slowlog;
     state.slowlog.loading = true;
     commands.push(Command::FetchSlowlog {
@@ -40,10 +42,11 @@ pub(super) fn open_slowlog(mut state: State) -> (State, Vec<Command>) {
 }
 
 /// `g k`: back to the Keys view. A no-op if already there — nothing here
-/// depends on which view was showing, except a Monitor feed left open
-/// (decision 2, closed here too).
+/// depends on which view was showing, except a Monitor or Pub/Sub feed left
+/// open (closed here too).
 pub(super) fn open_keys_view(mut state: State) -> (State, Vec<Command>) {
-    let commands = leave_monitor(&mut state);
+    let mut commands = leave_monitor(&mut state);
+    commands.extend(leave_pubsub(&mut state));
     state.screen = View::Keys;
     (state, commands)
 }

@@ -3,19 +3,19 @@
  SLOWLOG · 3 entries · sort: recent
  AGE       DURATION COMMAND                                                                                CLIENT
  12s ago   185.0ms  HGETALL user:8812:session                                                              worker-3 (10.0.0.4:5…
- 3h ago    420µs    G┌─ help · slowlog ────────────────────────────────────────────────────────────────────┐0.0.0.9:33012
- 2d ago    2.40s    K│ s         sort                                                                      │orker-3 (10.0.0.4:5…
-                     │ r         refetch                                                                   │
-                     │ c         copy command                                                              │
-                     │ d         reset slowlog                                                             │
-                     │ ↑↓ jk     move                                                                      │
-                     │ PgUp/PgDn page                                                                      │
-                     │ Home/End  top/bottom                                                                │
-                     │                                                                                     │
-                     │ ⌃R read-only   g s slowlog   g m monitor   g k keys   Esc back   q quit   ? F1 help │
-                     │                                                                                     │
-                     │ Esc close                                                                           │
-                     └─────────────────────────────────────────────────────────────────────────────────────┘
+ 3h ago    420┌─ help · slowlog ──────────────────────────────────────────────────────────────────────────────────┐:33012
+ 2d ago    2.4│ s         sort                                                                                    │ (10.0.0.4:5…
+              │ r         refetch                                                                                 │
+              │ c         copy command                                                                            │
+              │ d         reset slowlog                                                                           │
+              │ ↑↓ jk     move                                                                                    │
+              │ PgUp/PgDn page                                                                                    │
+              │ Home/End  top/bottom                                                                              │
+              │                                                                                                   │
+              │ ⌃R read-only   g s slowlog   g m monitor   g p pub/sub   g k keys   Esc back   q quit   ? F1 help │
+              │                                                                                                   │
+              │ Esc close                                                                                         │
+              └───────────────────────────────────────────────────────────────────────────────────────────────────┘
 
 ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
  cmd    HGETALL user:8812:session

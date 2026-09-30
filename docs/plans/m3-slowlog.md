@@ -43,7 +43,7 @@ fixes applied: pending-chord EVERYWHERE no longer repeats `g s slowlog`, AGE rep
 dropped from the app crate's `fred` features since only the integration test needs `CONFIG SET`,
 issued there via `custom()` instead). B — `RESET` through the mutation chokepoint, confirm arm,
 read-only refusal (including `replica`), refetch on success, CONTEXT.md **Slowlog**, DESIGN §3
-(`View`/`screen`, chords) and a Slowlog screen section (§6.9), DESIGN §4 keymap rows, PLAN §6
+(`View`/`screen`, chords) and a Slowlog screen section (§6.10), DESIGN §4 keymap rows, PLAN §6
 progress (done).
 
 ## Context

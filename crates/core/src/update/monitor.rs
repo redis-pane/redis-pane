@@ -41,9 +41,10 @@ pub(super) fn open_monitor(mut state: State) -> (State, Vec<Command>) {
 /// view), reset the tail, mint a token, and ask the shell to dial.
 pub(super) fn open_monitor_view(mut state: State) -> (State, Vec<Command>) {
     let mut commands = leave_monitor(&mut state);
+    commands.extend(leave_pubsub(&mut state));
     state.screen = View::Monitor;
     state.monitor.reset();
-    state.monitor.feed_token = state.monitor.feed_token.next();
+    state.monitor.feed_token = issue_feed_token(&mut state);
     state.monitor.status = FeedStatus::Connecting;
     commands.push(Command::OpenFeed {
         kind: FeedKindMsg::Monitor,
@@ -84,7 +85,7 @@ pub(super) fn reopen_monitor_feed(mut state: State) -> (State, Vec<Command>) {
     ) {
         return (state, Vec::new());
     }
-    state.monitor.feed_token = state.monitor.feed_token.next();
+    state.monitor.feed_token = issue_feed_token(&mut state);
     state.monitor.status = FeedStatus::Connecting;
     let token = state.monitor.feed_token;
     (
@@ -112,6 +113,13 @@ pub(super) fn feed_confirm_key(
     match key.code {
         KeyCode::Char('y') if !key.ctrl && !key.alt => match kind {
             FeedKindMsg::Monitor => open_monitor_view(state),
+            // Pub/Sub stages no confirmation (`m3-pubsub.md` decision 7:
+            // "no banner and no prod confirm" — subscribing is scoped to
+            // what the reader chose, not a server-wide cost). Nothing ever
+            // sets `state.pending_feed = Some(FeedKindMsg::Subscribe(_))`
+            // today; this arm only keeps the match exhaustive ahead of
+            // phase B, which opens `View::PubSub` directly instead.
+            FeedKindMsg::Subscribe(_) => (state, Vec::new()),
         },
         KeyCode::Esc => (state, Vec::new()),
         _ => {

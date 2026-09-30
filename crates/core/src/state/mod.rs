@@ -10,8 +10,10 @@ pub mod editor;
 pub mod loaded;
 pub mod monitor;
 pub mod open;
+pub mod pubsub;
 pub mod scan;
 pub mod slowlog;
+pub mod tail;
 pub mod tree;
 pub mod ttl;
 pub mod value;
@@ -24,8 +26,13 @@ pub use monitor::{
     FeedStatus, MONITOR_CAP, MONITOR_LINE_MAX, MonitorColumns, MonitorLine, MonitorState,
 };
 pub use open::{Attachment, EditPhase, OpenKey, PendingRead, ReadOutcome};
+pub use pubsub::{
+    PUBSUB_CAP, PUBSUB_PAYLOAD_MAX, PubSubFocus, PubSubMessage, PubSubState, Subscription,
+    parse_subscription, redis_glob_match,
+};
 pub use scan::ScanState;
 pub use slowlog::{SlowlogEntry, SlowlogSort, SlowlogState};
+pub use tail::LiveTail;
 pub use tree::Tree;
 pub use ttl::{
     TtlEdit, TtlEditRefusal, TtlOutcome, format_duration, parse_ttl_edit, resolve_ttl_edit,
@@ -54,6 +61,8 @@ pub enum View {
     Slowlog,
     /// `g m`: the `MONITOR` tail (R6.1, M3 phase B, `docs/plans/m3-monitor.md`).
     Monitor,
+    /// `g p`: the Pub/Sub view (R6.2, M3 task 5, `docs/plans/m3-pubsub.md`).
+    PubSub,
 }
 
 /// Where a Connection's target came from (ADR-0001).
@@ -840,6 +849,24 @@ pub struct State {
     /// feature to embed them in, per that doc's own note that each feature
     /// holds its own.
     pub monitor: MonitorState,
+    /// The Pub/Sub view's own state — subscriptions, the bounded tail, the
+    /// feed connection's status, pause/filter/following (M3 phase A,
+    /// `docs/plans/m3-pubsub.md`). `View::PubSub` itself is phase B; this
+    /// field exists ahead of the view so the feed-connection plumbing
+    /// (`Msg::PubSubMessage`, `Msg::FeedOpened`/`FeedClosed` routing) has
+    /// somewhere real to land.
+    pub pubsub: PubSubState,
+    /// The single counter every feed token is minted from — Monitor
+    /// (`state.monitor.feed_token`) and Pub/Sub (`state.pubsub.feed_token`)
+    /// alike, via `update::issue_feed_token`. Not a per-feature field: two
+    /// independent counters could hold the same numeric value (both default
+    /// to the same starting point), which made cross-feature routing
+    /// correct only because of an ordering invariant elsewhere (leaving one
+    /// view always sets its own status to `Idle` before the other's feed
+    /// can open) rather than because of the token's own identity. One
+    /// counter means a [`crate::command::FeedToken`] names exactly one feed,
+    /// ever — full stop, not "as long as that invariant holds".
+    pub feed_token_seq: crate::command::FeedToken,
     /// `MONITOR`'s confirm dialog, staged on `g m` in `prod`/`unknown`
     /// (`docs/plans/m3-monitor.md` decision 3) — a distinct kind from
     /// [`State::confirm`], never a [`PendingMutation`]: opening a view is not

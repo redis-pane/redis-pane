@@ -322,4 +322,40 @@ pub enum Msg {
         at_ms: u64,
         raw: String,
     },
+    /// One message from an open Pub/Sub feed (`docs/plans/m3-pubsub.md`
+    /// phase A), translated by the shell's read loop — a `message` reply
+    /// (`via: None`) or a `pmessage` reply (`via: Some(pattern)`). `at_ms`
+    /// is receipt time from the injected `Clock`, the only timestamp a
+    /// Pub/Sub message has (decision 9: unlike `MONITOR`, Redis attaches no
+    /// server-side time to a published message). Guarded by `token` exactly
+    /// like [`Msg::MonitorLine`] — this variant needs no cross-feature
+    /// ambiguity guard of its own, since it names Pub/Sub by construction;
+    /// only the feed-connection lifecycle messages
+    /// ([`Msg::FeedOpened`]/[`Msg::FeedClosed`]) are shared between Monitor
+    /// and Pub/Sub and need the two-state token routing
+    /// (`crate::update::feed`).
+    PubSubMessage {
+        token: crate::command::FeedToken,
+        at_ms: u64,
+        channel: Vec<u8>,
+        via: Option<Vec<u8>>,
+        payload: Vec<u8>,
+    },
+    /// A `Command::UpdateSubscription` add or remove failed on the server
+    /// (`docs/plans/m3-pubsub.md` — R7.4: errors surface as a non-blocking
+    /// notification carrying the failing command, never a silently dropped
+    /// `Err`). `command` is which of `SUBSCRIBE`/`PSUBSCRIBE`/`UNSUBSCRIBE`/
+    /// `PUNSUBSCRIBE` failed. `subs` are exactly the
+    /// [`crate::state::Subscription`]s that command applied to — for an add
+    /// failure these must not stay shown as subscribed (the server never
+    /// actually subscribed them), so the core drops any of them still
+    /// present in `state.pubsub.subscriptions`; for a remove failure there
+    /// is nothing to restore (the chip was already removed locally when the
+    /// remove was requested), so this is notification-only.
+    SubscriptionFailed {
+        command: String,
+        detail: String,
+        at_ms: u64,
+        subs: Vec<crate::state::Subscription>,
+    },
 }

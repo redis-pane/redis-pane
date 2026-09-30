@@ -1,6 +1,61 @@
 # M3 task 5: Pub/Sub (`g p`)
 
-Status: **planning — not started.** No code, no ADR. DESIGN §6.7 gives Pub/Sub the same two
+Status: **done, 2026-09-29.** Built in two phases: A — `LiveTail<T>` extraction, Pub/Sub state and
+commands, the shell's `SubscriberClient` feed, and integration tests; B — `View::PubSub`, `g p`,
+the view's keys and input, render (chip strip, status, columns, detail strip), help contexts,
+goldens, and this doc's own decisions (below), reconciled against the body they override. No ADR.
+DESIGN §6.7/§6.8 has been split so Pub/Sub has its own section rather than sharing Monitor's
+two-sentence placeholder. CONTEXT.md's proposed **Pub/Sub** entry (below) has been added.
+
+## Decisions (2026-09-29) — these override the body below where they differ
+
+1. **Subscriptions are a one-row chip strip** at the top of the view:
+   `⟡ subscribed  [orders]  [user:* ⁎]  a add`. `Tab` moves focus between the strip and the tail.
+   On the strip, `←→` picks a chip and `d` unsubscribes it; on the tail, keys work as in Monitor.
+   *Amended in review:* the view opens with the **tail** focused (opening on the strip left `↑↓`
+   dead until a `Tab` nobody knew to press), and `a` adds from either half, since the strip
+   advertises `a add` regardless of focus.
+2. **Channel or pattern is auto-detected**: input containing `*`, `?` or `[` becomes a pattern
+   (`PSUBSCRIBE`), anything else a channel; a leading `=` forces a channel. The chip marks
+   patterns.
+3. **Subscriptions are remembered for the session.** Leaving the view closes the connection
+   (nothing stays subscribed server-side); the list stays in `State`, and `g p` resubscribes to
+   it. Never persisted, forgotten on quit.
+4. **Payload:** one line per row, cut to width; a detail strip under the tail (the Slowlog's
+   shape) shows the selected message's channel, `via <pattern>` when a pattern matched, and the
+   full payload — pretty-printed when it parses as JSON, with the Viewer's byte escaping.
+5. **fred `SubscriberClient`** (feature `subscriber-client`), built from `build_config` — a normal
+   client, so **Sentinel works as is** (no primary rewrite like Monitor's). **No reconnect
+   policy**: a drop is `FeedClosed`, and `r` reopens and resubscribes the remembered list.
+   Adding/removing a chip issues `SUBSCRIBE`/`PSUBSCRIBE`/`UNSUBSCRIBE`/`PUNSUBSCRIBE` on the
+   **same** connection (`Command::UpdateSubscription { add, remove }`), so other channels never
+   miss a message. Closing sends `QUIT`.
+6. **The connection opens lazily**: `g p` with an empty list opens the view with the add input
+   focused and dials nothing until the first subscription. Leaving the view by any route
+   (`Esc`, `g k`/`g s`/`g m`, quit) closes it.
+7. **No banner and no prod confirm** — the cost is scoped to what the reader chose (see "Why
+   Pub/Sub is not Monitor" below). DESIGN §6.7 is split so Pub/Sub has its own section without
+   the banner. Subscribing is not a write, so Read-only Mode does not apply.
+8. **Bounded like Monitor**: `PUBSUB_CAP` = 5000 messages and `PUBSUB_PAYLOAD_MAX` = 4 KiB, both
+   enforced only in `push_pubsub_message`. `p` pause counts rather than buffers; `/` filters
+   channel and payload for display only; `End` resumes following; `c` copies the payload.
+9. **Time column** is the shell's receipt time from the injected clock (Pub/Sub messages carry
+   no server timestamp), shown as UTC `HH:MM:SS.mmm`.
+10. **Share the tail, don't copy it**: pull cap/pause/following/selection/filter out of
+    `MonitorState` into a generic `state/tail.rs` (`LiveTail<T>`) that Monitor and Pub/Sub both
+    wrap. Monitor's existing tests and goldens must pass unchanged — that is the proof the
+    extraction changed no behaviour.
+
+**Build order:** A — `LiveTail<T>` extraction, Pub/Sub state and commands, the shell's
+`SubscriberClient` feed, integration tests (channel + pattern attribution; a mid-session add
+keeps the first subscription flowing; after close, `PUBSUB CHANNELS`/`PUBSUB NUMPAT` from another
+connection show nothing of ours; a server-side `CLIENT KILL` yields `FeedClosed`). B — `View::PubSub`
+and `g p`, the view's keys and input, render (chip strip, status, columns, detail strip), help
+contexts, goldens, docs (CONTEXT.md, DESIGN §4/§6.7, PLAN §6, README).
+
+---
+
+DESIGN §6.7 gives Pub/Sub the same two
 sentences as Monitor and no distinct layout description: "Live tail with a filter box,
 pause/resume, and a persistent warning banner on `MONITOR` explaining its cost. Buffers are
 bounded with a visible cap." The warning-banner sentence is `MONITOR`-specific and does not carry
