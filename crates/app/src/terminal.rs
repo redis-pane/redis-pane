@@ -888,11 +888,24 @@ impl Reconnect {
 /// What the terminal can display. A real probe belongs in M0.3's follow-up;
 /// `COLORTERM` is the part that is both cheap and reliable.
 pub fn detect_color_depth() -> ColorDepth {
-    resolve_color_depth(
-        std::env::var("NO_COLOR").ok(),
-        std::env::var("COLORTERM").ok(),
-        std::env::var("TERM").ok(),
-    )
+    resolve_color_depth(ColorEnv {
+        no_color: std::env::var("NO_COLOR").ok(),
+        colorterm: std::env::var("COLORTERM").ok(),
+        term: std::env::var("TERM").ok(),
+        wt_session: std::env::var("WT_SESSION").ok(),
+        windows: cfg!(windows),
+    })
+}
+
+/// The environment [`resolve_color_depth`] decides from.
+struct ColorEnv {
+    no_color: Option<String>,
+    colorterm: Option<String>,
+    term: Option<String>,
+    /// Set by Windows Terminal, which renders truecolor but sets neither
+    /// `COLORTERM` nor `TERM`.
+    wt_session: Option<String>,
+    windows: bool,
 }
 
 /// The pure decision, taken out of [`detect_color_depth`] so it can be tested
@@ -906,21 +919,27 @@ pub fn detect_color_depth() -> ColorDepth {
 /// (<https://no-color.org>) is now honoured too: a user who has set it wants
 /// monochrome regardless of what the terminal claims to support, and ignoring
 /// it was the one real gap here.
-fn resolve_color_depth(
-    no_color: Option<String>,
-    colorterm: Option<String>,
-    term: Option<String>,
-) -> ColorDepth {
-    if no_color.is_some() {
+///
+/// `COLORTERM` and `TERM` are Unix conventions: PowerShell, conhost and
+/// Windows Terminal set neither, so reading their absence as "declares
+/// nothing" rendered every Windows session monochrome. Every console since
+/// Windows 10 1703 interprets VT colour sequences (crossterm enables them), so
+/// on Windows an absent `TERM` means 256 colours, and `WT_SESSION` means
+/// truecolor.
+fn resolve_color_depth(env: ColorEnv) -> ColorDepth {
+    if env.no_color.is_some() {
         return ColorDepth::Monochrome;
     }
-    match colorterm.as_deref() {
-        Some("truecolor") | Some("24bit") => ColorDepth::TrueColor,
-        _ => match term.as_deref() {
-            Some(t) if t.contains("256") => ColorDepth::Ansi256,
-            Some("dumb") | None => ColorDepth::Monochrome,
-            _ => ColorDepth::Ansi256,
-        },
+    if matches!(env.colorterm.as_deref(), Some("truecolor") | Some("24bit"))
+        || env.wt_session.is_some()
+    {
+        return ColorDepth::TrueColor;
+    }
+    match env.term.as_deref() {
+        Some(t) if t.contains("256") => ColorDepth::Ansi256,
+        Some("dumb") => ColorDepth::Monochrome,
+        None if !env.windows => ColorDepth::Monochrome,
+        _ => ColorDepth::Ansi256,
     }
 }
 
@@ -929,11 +948,47 @@ mod tests {
     use super::*;
 
     fn depth(no_color: Option<&str>, colorterm: Option<&str>, term: Option<&str>) -> ColorDepth {
-        resolve_color_depth(
-            no_color.map(String::from),
-            colorterm.map(String::from),
-            term.map(String::from),
-        )
+        resolve_color_depth(ColorEnv {
+            no_color: no_color.map(String::from),
+            colorterm: colorterm.map(String::from),
+            term: term.map(String::from),
+            wt_session: None,
+            windows: false,
+        })
+    }
+
+    fn windows_depth(no_color: Option<&str>, wt_session: Option<&str>) -> ColorDepth {
+        resolve_color_depth(ColorEnv {
+            no_color: no_color.map(String::from),
+            colorterm: None,
+            term: None,
+            wt_session: wt_session.map(String::from),
+            windows: true,
+        })
+    }
+
+    #[test]
+    fn windows_terminal_is_truecolor_without_colorterm_or_term() {
+        assert_eq!(
+            windows_depth(None, Some("0b2c7a3e-1f4d-4b8e-9c61-3a5d2e7f8b90")),
+            ColorDepth::TrueColor
+        );
+    }
+
+    #[test]
+    fn a_windows_console_with_no_term_is_ansi256_not_monochrome() {
+        // PowerShell in conhost sets neither COLORTERM nor TERM; it was the
+        // session that rendered monochrome.
+        assert_eq!(windows_depth(None, None), ColorDepth::Ansi256);
+    }
+
+    #[test]
+    fn no_color_still_wins_on_windows() {
+        assert_eq!(
+            windows_depth(Some("1"), Some("some-session")),
+            ColorDepth::Monochrome
+        );
+        assert_eq!(windows_depth(Some("1"), None), ColorDepth::Monochrome);
     }
 
     #[test]
