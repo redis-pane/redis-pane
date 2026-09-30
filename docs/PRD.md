@@ -265,9 +265,10 @@ config file; a **Connection** is a live session, which may be **ad-hoc** (no Pro
   liveness on the open key (R3.6–R3.11). *This is the milestone that already beats `redis-cli`
   for daily use.*
 - **M2 — Mutate.** Editing, TTL management, delete/rename/copy, read-only mode, safety rails.
-- **M3 — Power.** Monitor, pub/sub, server dashboard, slowlog. (Console cut from M3 — see §10's
-  resolved open question. The command palette shipped in alpha.14 and was withdrawn —
-  [ADR-0020](adr/0020-no-command-palette.md).)
+- **M3 — Power.** Monitor, pub/sub, server dashboard, slowlog — **complete**, shipped by
+  alpha.18. (Console cut from M3 — see §10's resolved open question. The command palette shipped
+  in alpha.14 and was withdrawn — [ADR-0020](adr/0020-no-command-palette.md); contextual `?`/`F1`
+  help took over discovery.)
 - **M4 — Scale & polish.** Cluster support, million-key performance work, themes, packaging
   and distribution. *Raw binary distribution (GitHub Release archives for macOS, Linux, and
   Windows, via `cargo-dist`) shipped ahead of M4 as a low-risk alpha-testing convenience — no

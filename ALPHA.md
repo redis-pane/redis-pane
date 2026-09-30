@@ -15,13 +15,13 @@ byte of it.
 Download the binary for your OS from the [Releases page](https://github.com/vinodsantharam/redis-pane/releases) — macOS (Intel or Apple Silicon), Linux (x86_64), and Windows are all built there. Or, on macOS/Linux, run the installer script from a release page (note: these alpha releases are marked as GitHub prereleases, so the `/latest/` URL alias doesn't resolve to them — use the tagged URL, matching whatever the current alpha tag is):
 
 ```bash
-curl --proto '=https' --tlsv1.2 -LsSf https://github.com/vinodsantharam/redis-pane/releases/download/v0.1.0-alpha.17/redis-pane-installer.sh | sh
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/vinodsantharam/redis-pane/releases/download/v0.1.0-alpha.18/redis-pane-installer.sh | sh
 ```
 
 On Windows, from PowerShell:
 
 ```powershell
-irm https://github.com/vinodsantharam/redis-pane/releases/download/v0.1.0-alpha.17/redis-pane-installer.ps1 | iex
+irm https://github.com/vinodsantharam/redis-pane/releases/download/v0.1.0-alpha.18/redis-pane-installer.ps1 | iex
 ```
 
 These builds are **unsigned** — expected for an alpha. On first run:
@@ -105,8 +105,21 @@ redis-pane --profile mine --probe
 - **`s`** — cycle sort: scan order → name → ttl → size → type.
 - **`c`** — copy the key name or the value, whichever pane is focused. **`C`** — copy a
   ready-to-run `redis-cli` command for the open key.
+- **`e`** — edit the open value in place (on a Hash, List or Sorted set, the row under the
+  cursor); **`a`** — add a field or member; **`d`** — delete; **`t`** in the value pane — change
+  the TTL. **`⌃S`** stages an edit, and **`y`** confirms it after showing the exact command it
+  will run.
 - **`⌃R`** — toggle Read-only Mode (some environments start locked and say why).
-- **`?`** — help, showing your actual keybindings.
+- **`?`** or **`F1`** — help for exactly where you are: the keys that work here, with anything
+  Read-only Mode would refuse dimmed and the reason shown. `F1` works even while typing.
+- **`g` then a letter** — jump to a view over the server itself (`Esc` or `g k` comes back):
+  - **`g s`** — the Slowlog: commands that ran too long, sortable; `d` resets it.
+  - **`g m`** — Monitor: every command the server runs, live. `p` pauses, `/` filters. It costs
+    the server while it runs, so it asks first on `prod`/`unknown` and closes when you leave.
+  - **`g p`** — Pub/Sub: `a` to subscribe to a channel or a pattern (`user:*`), then watch what's
+    published. Nothing stays subscribed after you leave.
+  - **`g d`** — the Dashboard: memory against `maxmemory`, hit ratio, ops/sec, clients,
+    replication and evictions, refreshed every 2s; `Enter` shows the raw `INFO` behind a tile.
 - **Resize the terminal.** Columns drop in order above 70 wide; below 70, opening a key pushes
   into a full-width view with a breadcrumb back to the list.
 - **If your server supports `CLIENT TRACKING`**, open a key and change it from another terminal
@@ -129,8 +142,10 @@ redis-pane --profile mine --probe
 
 ## What's not there yet, on purpose
 
-- No editing, deleting, renaming, or TTL changes (M2).
-- No command palette, console, server dashboard, `MONITOR`, or pub/sub (M3).
+- No renaming or copying keys, and no bulk operations across several keys — coming next.
+- No embedded Redis console — `redis-cli` is one keystroke away in the terminal you're already
+  in. No command palette either: it shipped briefly and was withdrawn, since every action it
+  listed already had a key.
 - No Cluster support — Sentinel works, Cluster is deferred.
 - Nothing older than Redis 6.0 / no RESP2 — you'll get a clear message naming the version, not a
   crash.
