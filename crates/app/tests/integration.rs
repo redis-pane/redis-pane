@@ -3518,19 +3518,26 @@ async fn a_silently_dead_connection_frees_the_read_gate_within_the_configured_ti
     );
 
     // The deadlock this bug report describes: without the fix, the guard
-    // from the first read is never dropped, so this second read — standing
-    // in for the reconnect's own refetch — queues behind it and never runs.
+    // from the first read is never dropped, so the next read — the
+    // reconnect's own refetch — queues behind it and never runs.
+    //
+    // Asked directly, with a read that does no I/O: the gate must hand the
+    // next permit its turn at once. An earlier version sent a real command
+    // here, against the still-paused server, under a 10s bound — the same
+    // length as `default_command_timeout` (`connect_with`) — so whenever
+    // fred's unresponsive detector did not release that command first, the
+    // test raced the command timeout it was not about and failed nightly
+    // (run 36307520486). Whether a read against a dead connection resolves
+    // at all is the first half of this test; the real refetch below runs on
+    // a fresh connection, exactly as `Command::Reconnect` does.
     let permit = gate.begin();
-    tokio::time::timeout(
-        Duration::from_secs(10),
-        permit.run(redis_pane::redis::read::read_value(
-            &client,
-            b"k",
-            redis_pane::redis::read::Arming::Enabled,
-        )),
-    )
-    .await
-    .expect("the read-gate mutex must not still be held by the first, stuck read");
+    let ran = tokio::time::timeout(Duration::from_secs(1), permit.run(async {}))
+        .await
+        .expect("the read-gate mutex must not still be held by the first, stuck read");
+    assert!(
+        ran.is_some(),
+        "a fresh permit that nothing superseded must get its turn"
+    );
 
     container.unpause().await.unwrap();
     tokio::time::sleep(Duration::from_millis(500)).await;
