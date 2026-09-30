@@ -289,6 +289,43 @@ pub enum Msg {
         detail: String,
         at_ms: u64,
     },
+    /// `Command::FetchServerInfo` answered (R6.3, M3 task 6,
+    /// `docs/plans/m3-dashboard.md`): the shell's parse of `INFO` into a
+    /// core-owned [`crate::state::RawInfo`] — no `fred` types cross this
+    /// boundary (ADR-0011). `at_ms` is the shell's injected clock reading at
+    /// receipt, carried through rather than re-derived, so `DashboardState`'s
+    /// "updated Ns ago" readout is a function of state alone (ADR-0011).
+    /// `token` is the one the `FetchServerInfo` that started it carried; a
+    /// reply whose token is not the current poll's is stale (a manual `r`
+    /// that overlapped a timer poll, or vice versa) and is dropped rather
+    /// than overwriting a newer answer — see [`crate::command::InfoToken`].
+    ServerInfoLoaded {
+        info: crate::state::RawInfo,
+        at_ms: u64,
+        token: crate::command::InfoToken,
+    },
+    /// `Command::FetchServerInfo` failed. Produces both the R7.4 notification
+    /// naming the failing command and the Dashboard's own in-view error
+    /// state — the same shape [`Msg::SlowlogFailed`] already has. The last
+    /// good values stay on screen with their age; nothing goes blank
+    /// (decision 7, `docs/plans/m3-dashboard.md`). Guarded by `token` exactly
+    /// like [`Msg::ServerInfoLoaded`].
+    ServerInfoFailed {
+        detail: String,
+        at_ms: u64,
+        token: crate::command::InfoToken,
+    },
+    /// One tick of the Dashboard's poll interval (decision 1,
+    /// `docs/plans/m3-dashboard.md`): the shell's `tokio::time::interval`
+    /// always ticks (so it never accrues missed-tick catch-up bursts — see
+    /// `terminal::run`'s own comment), but only ever produces this `Msg`,
+    /// leaving [`crate::update::update`] to decide whether the tick actually
+    /// means anything — issuing `Command::FetchServerInfo` only while
+    /// `View::Dashboard` is on screen, the main connection is up, and no
+    /// poll is already in flight (`DashboardState::loading`). This is what
+    /// keeps the timer itself a shell concern while the *decision* stays in
+    /// the core, testable without a real clock or a real interval.
+    DashboardPollTick,
     /// A feed connection (`Command::OpenFeed`) finished dialing and is
     /// streaming (`docs/plans/m3-feed-connection.md`). `token` is the one the
     /// `OpenFeed` that started it carried; a token that does not name the feed

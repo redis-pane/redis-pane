@@ -69,8 +69,11 @@ impl ScanState {
     }
 }
 
-/// Group digits so a six-figure key count is readable at a glance.
-fn thousands(n: u64) -> String {
+/// Group digits so a six-figure key count is readable at a glance. Reused
+/// wherever else in the app a large count needs the same treatment (the
+/// Dashboard's tile figures, `render/dashboard.rs`) — one formatter, not a
+/// second one written to match it by eye.
+pub(crate) fn thousands(n: u64) -> String {
     let s = n.to_string();
     let mut out = String::with_capacity(s.len() + s.len() / 3);
     for (i, c) in s.chars().enumerate() {

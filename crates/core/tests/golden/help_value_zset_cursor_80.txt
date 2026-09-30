@@ -14,7 +14,7 @@
 │ PgUp/PgDn page                                                               │
 │ Home/End  top/bottom                                                         │
 │                                                                              │
-│ Tab focus   ⌃R read-only   g s slowlog   g m monitor   g p pub/sub   Esc back
+│ Tab focus   ⌃R read-only   g s slowlog   g m monitor   g p pub/sub   g d dashb
 │                                                                              │
 │ Tab keys · Esc close                                                         │
 └──────────────────────────────────────────────────────────────────────────────┘

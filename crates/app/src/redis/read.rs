@@ -19,7 +19,9 @@
 
 use fred::prelude::*;
 use fred::types::CustomCommand;
+use fred::types::InfoKind;
 use fred::types::Value as RedisValue;
+use redis_pane_core::state::RawInfo;
 use redis_pane_core::state::slowlog::SlowlogEntry;
 use redis_pane_core::state::value::{
     BinaryValue, IndexedValue, JsonValue, MemberValue, PairValue, ScoredValue, StreamValue,
@@ -390,4 +392,131 @@ pub async fn fetch_slowlog(client: &Client, count: i64) -> Result<Vec<SlowlogEnt
             },
         )
         .collect())
+}
+
+/// Fetch the server's own vitals (R6.3, M3 task 6,
+/// `docs/plans/m3-dashboard.md`): `INFO`, parsed into the core's
+/// `# section` / `key:value` shape — no `fred` type crosses the
+/// core/shell boundary (ADR-0011), the same shell-parses/core-holds split
+/// [`fetch_slowlog`] already uses.
+///
+/// `InfoKind::Default` (not `InfoKind::All`/`InfoKind::Everything`): the
+/// same call [`crate::redis::server_conditions`] already makes at connect
+/// time, which covers every section a tile reads (`Clients`, `Memory`,
+/// `Stats`, `Replication`), and is cheap enough to poll every 2s on a single
+/// node — `commandstats`/`latencystats`, `All`'s extra sections, would not
+/// be.
+///
+/// **Tolerant by construction**, since a real `INFO` reply varies by
+/// deployment and by ACL: a line with no `:` is skipped rather than
+/// rejected (a `# Section` header has none, and some servers emit the odd
+/// comment or blank line); text before the first `# Section` header, if a
+/// server ever sent any, is dropped rather than panicking on "no current
+/// section" (never observed live, but nothing here assumes it cannot
+/// happen); a server missing a whole section (a fresh container has no
+/// meaningful `Replication` beyond `role:master`, a restricted ACL can drop
+/// `Cluster`/`Commandstats` outright) simply leaves that section absent —
+/// [`RawInfo::section`]/[`RawInfo::field`] both return `None` rather than a
+/// caller finding a section that silently is not there.
+///
+/// No arming, like [`fetch_slowlog`]: `INFO` has no `CLIENT TRACKING`
+/// equivalent.
+pub async fn fetch_server_info(client: &Client) -> Result<RawInfo, Error> {
+    let text: String = client.info(Some(InfoKind::Default)).await?;
+    Ok(parse_info(&text))
+}
+
+/// The parser [`fetch_server_info`] uses, split out so it can be exercised
+/// against odd/truncated text directly rather than only through a live
+/// server (see this module's own tests below).
+fn parse_info(text: &str) -> RawInfo {
+    let mut sections: Vec<(String, Vec<(String, String)>)> = Vec::new();
+    for line in text.lines() {
+        let line = line.trim_end_matches('\r');
+        if let Some(name) = line.strip_prefix("# ") {
+            sections.push((name.to_string(), Vec::new()));
+            continue;
+        }
+        let Some((key, value)) = line.split_once(':') else {
+            // Blank line, a comment with no `key:value` shape, or text
+            // before the first section header — tolerated, not rejected
+            // (this function's own doc comment).
+            continue;
+        };
+        let Some((_, fields)) = sections.last_mut() else {
+            // A `key:value` line before any `# Section` header has been
+            // seen. Never observed against a real server, but dropping it
+            // is strictly safer than inventing a section name for it.
+            continue;
+        };
+        fields.push((key.to_string(), value.to_string()));
+    }
+    RawInfo::new(sections)
+}
+
+#[cfg(test)]
+mod info_tests {
+    use super::*;
+
+    #[test]
+    fn parses_sections_and_fields_in_order() {
+        let text = "# Server\r\nredis_version:8.4.0\r\nos:Linux\r\n\r\n# Clients\r\nconnected_clients:3\r\n";
+        let info = parse_info(text);
+        assert_eq!(
+            info.field("redis_version"),
+            Some("8.4.0"),
+            "value may carry a colon-adjacent field like a version string"
+        );
+        assert_eq!(info.field("connected_clients"), Some("3"));
+        assert_eq!(
+            info.sections()
+                .iter()
+                .map(|(n, _)| n.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Server", "Clients"]
+        );
+    }
+
+    #[test]
+    fn a_line_with_no_colon_is_skipped_not_rejected() {
+        let text = "# Server\r\nthis line has no colon\r\nredis_version:8.4.0\r\n";
+        let info = parse_info(text);
+        assert_eq!(info.field("redis_version"), Some("8.4.0"));
+    }
+
+    #[test]
+    fn a_key_value_line_before_any_section_header_is_dropped_not_a_panic() {
+        let text = "stray:value\r\n# Server\r\nredis_version:8.4.0\r\n";
+        let info = parse_info(text);
+        assert_eq!(info.field("stray"), None);
+        assert_eq!(info.field("redis_version"), Some("8.4.0"));
+    }
+
+    #[test]
+    fn an_empty_reply_parses_to_no_sections_without_panicking() {
+        let info = parse_info("");
+        assert!(info.sections().is_empty());
+        assert_eq!(info.field("anything"), None);
+    }
+
+    #[test]
+    fn a_missing_section_is_absent_not_a_default() {
+        // A fresh container's real `INFO` has a `Replication` section
+        // (`role:master`) but nothing else replication-shaped — modelled
+        // here by a reply that omits `Replication` entirely, standing in
+        // for an ACL-restricted `INFO` that drops a whole section.
+        let text = "# Server\r\nredis_version:8.4.0\r\n";
+        let info = parse_info(text);
+        assert!(info.section("Replication").is_none());
+    }
+
+    #[test]
+    fn a_value_containing_a_colon_keeps_only_the_first_split() {
+        // `master_replid` style hex strings never contain a colon, but a
+        // command-line style field (`config_file`, a Windows-style path) can
+        // — `split_once` must not truncate the value at a second colon.
+        let text = "# Server\r\nconfig_file:C:\\redis\\redis.conf\r\n";
+        let info = parse_info(text);
+        assert_eq!(info.field("config_file"), Some("C:\\redis\\redis.conf"));
+    }
 }

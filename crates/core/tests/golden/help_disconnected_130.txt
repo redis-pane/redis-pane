@@ -1,23 +1,23 @@
 ─ redis-pane ─ ● staging · cache-01:6379/0 · from profile staging ───────────────────────────── ✕ disconnected · read 14s ago  r ─
 
  KEY                               TYPE        SIZE   TTL │ → to open
- ● user:8812:cart   ┌─ help · keys pane ─────────────────────────────────────────────────────────────────────┐
- ● user:8812:profile│ →         open / expand                                                                │
- ● user:8812:session│ /         filter                                                                       │
- ● user:8813:session│ s         sort                                                                         │
- ● cart:91af3c9d2e  │ t         tree view                                                                    │
- ● feed:global:hot  │ d         delete                                                                       │
-                    │ c         copy                                                                         │
-                    │ r         reconnect                                                                    │
-                    │ C         copy redis-cli command                                                       │
-                    │ ↑↓ jk     move                                                                         │
-                    │ PgUp/PgDn page                                                                         │
-                    │ Home/End  top/bottom                                                                   │
-                    │                                                                                        │
-                    │ ⌃R read-only   g s slowlog   g m monitor   g p pub/sub   Esc back   q quit   ? F1 help │
-                    │                                                                                        │
-                    │ Tab value keys · Esc close                                                             │
-                    └────────────────────────────────────────────────────────────────────────────────────────┘
+ ● user:8812┌─ help · keys pane ─────────────────────────────────────────────────────────────────────────────────────┐
+ ● user:8812│ →         open / expand                                                                                │
+ ● user:8812│ /         filter                                                                                       │
+ ● user:8813│ s         sort                                                                                         │
+ ● cart:91af│ t         tree view                                                                                    │
+ ● feed:glob│ d         delete                                                                                       │
+            │ c         copy                                                                                         │
+            │ r         reconnect                                                                                    │
+            │ C         copy redis-cli command                                                                       │
+            │ ↑↓ jk     move                                                                                         │
+            │ PgUp/PgDn page                                                                                         │
+            │ Home/End  top/bottom                                                                                   │
+            │                                                                                                        │
+            │ ⌃R read-only   g s slowlog   g m monitor   g p pub/sub   g d dashboard   Esc back   q quit   ? F1 help │
+            │                                                                                                        │
+            │ Tab value keys · Esc close                                                                             │
+            └────────────────────────────────────────────────────────────────────────────────────────────────────────┘
                                                           │
                                                           │
 

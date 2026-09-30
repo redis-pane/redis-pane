@@ -227,6 +227,24 @@ pub async fn run(
     shell.start_scan(None);
     shell.watch_link();
 
+    // The Dashboard's poll interval (decision 1, `docs/plans/m3-dashboard.md`):
+    // 2 seconds, always ticking. Every tick produces `Msg::DashboardPollTick`
+    // and nothing more — the core (`update::dashboard::dashboard_poll_tick`)
+    // is the one place that decides whether a given tick actually issues
+    // `Command::FetchServerInfo`, reading `View::Dashboard`, the link, and
+    // whether a poll is already in flight from state alone. That keeps the
+    // decision testable without a real clock or a real interval, and it is
+    // what makes this timer's mere existence harmless: a tick while the
+    // reader is elsewhere in the app is a `Msg` that changes nothing.
+    // Always ticking rather than started/stopped on `View::Dashboard`
+    // transitions, for the same reason a feed connection would not want a
+    // `tokio::time::Interval` that is only sometimes polled: it accrues
+    // missed ticks and bursts through them on return under its default
+    // `MissedTickBehavior`. The core never owns this timer (CLAUDE.md's
+    // injected-clock discipline) — only the tick, never the decision.
+    let mut dashboard_poll = tokio::time::interval(std::time::Duration::from_secs(2));
+    dashboard_poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+
     loop {
         term.draw(|f| {
             let buf = render::frame(&state, &theme, clock.as_ref(), f.area());
@@ -257,6 +275,7 @@ pub async fn run(
                 }
             },
             () = tokio::time::sleep(std::time::Duration::from_secs(1)) => continue,
+            _ = dashboard_poll.tick() => Some(Msg::DashboardPollTick),
         };
         let Some(msg) = msg else {
             return Ok(());
@@ -352,6 +371,7 @@ impl Shell {
             }
             Command::FetchMetadata { indices } => self.fetch_metadata(state, &indices),
             Command::FetchSlowlog { count } => self.fetch_slowlog(count),
+            Command::FetchServerInfo { token } => self.fetch_server_info(token),
             Command::ReadKey {
                 key,
                 index,
@@ -431,6 +451,34 @@ impl Shell {
                 Err(e) => Msg::SlowlogFailed {
                     detail: e.details().to_string(),
                     at_ms: clock.now_epoch_ms(),
+                },
+            };
+            let _ = tx.send(msg).await;
+        });
+    }
+
+    /// Fetch the server's own vitals (R6.3, M3 task 6,
+    /// `docs/plans/m3-dashboard.md`). No arming, no liveness, matching
+    /// [`Shell::fetch_slowlog`] — a plain request/response. `token` is
+    /// [`Command::FetchServerInfo`]'s own — minted by the core, carried
+    /// through unchanged, and echoed back on both replies so
+    /// `update::dashboard::server_info_loaded`/`server_info_failed` can drop
+    /// a stale one (review item (b)): the shell holds no opinion about
+    /// which fetch is "current," it only ever answers the one it was asked
+    /// to make.
+    fn fetch_server_info(&self, token: redis_pane_core::command::InfoToken) {
+        let (client, tx, clock) = (self.client.clone(), self.tx.clone(), self.clock.clone());
+        tokio::spawn(async move {
+            let msg = match crate::redis::read::fetch_server_info(&client).await {
+                Ok(info) => Msg::ServerInfoLoaded {
+                    info,
+                    at_ms: clock.now_epoch_ms(),
+                    token,
+                },
+                Err(e) => Msg::ServerInfoFailed {
+                    detail: e.details().to_string(),
+                    at_ms: clock.now_epoch_ms(),
+                    token,
                 },
             };
             let _ = tx.send(msg).await;

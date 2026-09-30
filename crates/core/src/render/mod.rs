@@ -5,6 +5,7 @@
 //! terminals — that is the shell's problem. This is what lets golden-frame
 //! tests exist at all (ADR-0011).
 
+pub mod dashboard;
 pub mod keys;
 pub mod layout;
 pub mod monitor;
@@ -66,6 +67,15 @@ pub fn frame(state: &State, theme: &Theme, clock: &dyn Clock, area: Rect) -> Buf
             area.height.saturating_sub(2 + bottom),
         );
         pubsub::render(state, theme, body, &mut buf);
+    } else if state.screen == crate::state::View::Dashboard {
+        let bottom = if hint_bar_visible { 2 } else { 1 };
+        let body = Rect::new(
+            area.x,
+            area.y + 2,
+            area.width,
+            area.height.saturating_sub(2 + bottom),
+        );
+        dashboard::render(state, theme, clock, body, &mut buf);
     } else {
         let plan = layout::layout(area, state.focus, state.split_adjust);
         let open_row = keys::render(state, theme, clock, plan.keys, plan.density, &mut buf);
@@ -962,6 +972,8 @@ fn context_title(ctx: help::HelpContext) -> String {
         HelpContext::PubSub {
             focus: crate::state::PubSubFocus::Tail,
         } => "pub/sub · tail".to_string(),
+        HelpContext::Dashboard => "dashboard".to_string(),
+        HelpContext::DashboardOverlay => "dashboard · info".to_string(),
     }
 }
 
@@ -2265,6 +2277,34 @@ mod hint_bar_tests {
         assert_hint_bar_is_a_prefix_of_help(&s);
         let hint = hint_bar(&s, s.cols);
         assert!(hint.contains("focus strip/tail"), "{hint}");
+    }
+
+    // ── M3 task 6: the Dashboard grid and its raw-`INFO` overlay ────────────
+
+    #[test]
+    fn the_dashboards_hint_bar_is_a_prefix_of_its_help() {
+        let s = crate::state::State {
+            screen: crate::state::View::Dashboard,
+            cols: 80,
+            ..crate::state::State::default()
+        };
+        assert_hint_bar_is_a_prefix_of_help(&s);
+        let hint = hint_bar(&s, s.cols);
+        assert!(hint.contains("move focus"), "{hint}");
+    }
+
+    #[test]
+    fn the_dashboard_overlays_hint_bar_is_a_prefix_of_its_help() {
+        let mut s = crate::state::State {
+            screen: crate::state::View::Dashboard,
+            cols: 80,
+            ..crate::state::State::default()
+        };
+        s.dashboard.expanded_tile = Some(crate::state::TileId::Memory);
+        assert_hint_bar_is_a_prefix_of_help(&s);
+        let hint = hint_bar(&s, s.cols);
+        assert!(hint.contains("scroll"), "{hint}");
+        assert!(hint.contains("close"), "{hint}");
     }
 }
 

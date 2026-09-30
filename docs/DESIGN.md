@@ -70,6 +70,21 @@ is the entire mitigation for doing so — it is not optional chrome.
 `TTL` is the last metadata column to go because it is the field people are hunting when the
 terminal is small and the situation is urgent.
 
+**The Dashboard's own grid (`g d`, §6.6, M3 task 6).** A tile grid is a genuinely different
+layout shape from the two-pane split above — it gets its own breakpoints, not the two-pane numbers
+above force-fitted to it:
+
+| Width | Tiles per row |
+|---|---|
+| ≥ 120 cols | 3 |
+| 80–119 | 2 |
+| < 80 | 1, and the grid scrolls |
+
+Below 80 columns the six tiles (memory, hit ratio, ops/sec, clients, replication, eviction) do not
+all fit vertically in a typical terminal height, so the grid scrolls with tile focus
+(`←→↑↓`/`hjkl`) the same way the keys pane's own viewport follows the selection — stateless,
+recomputed each frame from which tile is focused, never a persisted scroll position of its own.
+
 ## 3. Navigation model
 
 - **`Tab` toggles the two panes**; focus is shown by border color *and* a
@@ -131,7 +146,7 @@ terminal is small and the situation is urgent.
 | `g s` | Jump to the Slowlog view, fetching a fresh `SLOWLOG GET` | global |
 | `g m` | Jump to the Monitor view, opening a `MONITOR` feed on its own connection (confirmed first on `prod`/`unknown`) | global |
 | `g p` | Jump to the Pub/Sub view — dials lazily (nothing until the first subscription), no confirmation | global |
-| `g` + `d` | Jump to Dashboard (planned, not yet built) | global |
+| `g d` | Jump to the Dashboard view, fetching `INFO` immediately and polling it every 2s while shown | global |
 | `Ctrl-C` ×2 | Quit (single press = cancel current op) | global |
 | `/` | Filter / search in pane | pane |
 | `n` / `N` | Next / previous match | pane |
@@ -150,6 +165,8 @@ terminal is small and the situation is urgent.
 | `p` | Pause / resume consuming the `MONITOR` or Pub/Sub feed (the socket stays open; paused lines/messages are counted, not buffered) | Monitor view, Pub/Sub tail |
 | `a` | Add a subscription | Pub/Sub view, either half |
 | `d` / `←→` | Unsubscribe the selected chip / pick a chip | Pub/Sub strip |
+| `←→↑↓` / `hjkl` | Move tile focus | Dashboard view |
+| `Enter` | Expand the focused tile's raw `INFO` section into a scrollable overlay | Dashboard view |
 | `Ctrl-R` | Toggle read-only mode | global |
 
 Bindings are user-overridable in config; the hint bar and the help overlay (`?`) both render the
@@ -456,9 +473,47 @@ race with it — from the default path entirely; the escape hatch keeps `$EDITOR
 hardened, for the reader who wants it.
 
 ### 6.6 Dashboard
-Triage-first: memory used vs. peak vs. maxmemory as a bar, hit ratio, ops/sec sparkline,
-connected/blocked clients, replication role and lag, and eviction/expiry counters. Anything
-alarming is colored, and every tile can be expanded into the raw `INFO` section behind it.
+
+**Dashboard (`g d`, built — R6.3, M3 task 6, `docs/plans/m3-dashboard.md`).** Triage-first: memory
+used vs. peak vs. `maxmemory` as a bar (`maxmemory 0` reads "no limit," not a bar with no
+ceiling), hit ratio, an ops/sec sparkline over the last 60 polls (~2 minutes), connected/blocked
+clients, replication role and lag, and eviction/expiry counters. Anything alarming is colored
+through the theme's semantic `Token::Warn`/`Token::Danger` tokens, never a literal colour, and
+every tile can be expanded (`Enter`) into the raw `INFO` section behind it as a scrollable
+overlay (`Esc` closes it, `Esc` again leaves the view — nearest thing first).
+
+Single node (ADR-0008): `INFO`, like `SLOWLOG`, is per-server, so a Cluster-scoped Dashboard would
+need a node selector this app's premise has no room for — out of scope for v1.
+
+Data source is `INFO`, request/response on the main connection, not a feed — unlike Monitor and
+Pub/Sub there is no `CLIENT TRACKING` equivalent to arm. `g d` fetches once immediately (no blank
+tile waiting for the first tick) and a shell-side `tokio::time::interval` polls it every 2s while
+the view is on screen; the timer itself is shell plumbing (the core never owns one, per the
+injected-clock discipline), but whether a given tick actually fetches — screen showing, connection
+up, no poll already in flight — is a decision the core makes from state alone, so it is testable
+without a real clock or a real interval. A manual `g d`/`r` can overlap a timer poll; each fetch
+carries a token minted by the core, and a reply whose token is not the current poll's is dropped
+whole, so an older, slower reply landing after a newer one cannot overwrite it or corrupt the
+counter-based alarms' before/after comparison.
+
+Replication reads differently depending on role, since `INFO` describes the two sides of a
+replication link with different fields entirely: a primary's lag is the *worst* lag across its
+`slaveN:...,lag=N` lines (any replica whose `state` is not `online` alarms outright, regardless of
+lag); a replica's is `master_last_io_seconds_ago` plus `master_link_status` (`down` alarms
+outright). A primary with zero replicas is unremarkable, not an error.
+
+Alarm thresholds (named constants in `crates/core/src/state/dashboard.rs`, not user-configurable
+for v1): memory ≥80% of `maxmemory` warns, ≥95% is danger; hit ratio below 80% warns, but only once
+`keyspace_hits + keyspace_misses` has reached 1,000 samples — a handful of reads on a fresh
+container earns no alarm; replication lag above 5s warns, above 30s (or the link down) is danger;
+`blocked_clients` above zero warns; `evicted_keys` rising between polls warns; `rejected_connections`
+rising between polls is danger, folded into the clients tile rather than given a seventh tile of
+its own, since it is a fact about client admission, the same subject that tile already covers.
+
+Grid breakpoints (§2): 3 tiles per row at ≥120 columns, 2 at 80–119, 1 (scrolling) below 80. Tile
+focus (`←→↑↓`/`hjkl`) moves through the grid's own row-major order; below 80 columns the grid
+scrolls to keep the focused tile on screen, the same stateless-viewport trick the keys pane uses
+for its own selection, so no persisted grid-scroll field exists.
 
 ### 6.7 Monitor
 
@@ -701,10 +756,13 @@ scope from Cluster being out of v1 entirely, not a new limitation this screen in
 
 ## 9. Open design questions
 
-- Does the dashboard belong in v1 at all, or is the slowlog plus a memory figure in the status
-  bar the whole of what triage actually needs? This is now the largest remaining scope risk.
 - Does the keys pane need a permanent column header row, or can the columns be implied by the
   data and explained once in help?
+
+**Resolved since M3 task 6** — the Dashboard belongs in v1: re-decided at `docs/plans/m3-dashboard.md`'s
+own decision point once the Slowlog had shipped and the gap it did not cover (memory against
+`maxmemory`, replication lag, a client spike) was judged real rather than assumed. Built as §6.6
+describes.
 
 **Resolved since v0.6** — the split defaults to each density's documented ratio (45% keys at
 Full, 50% at Tight/NoSize) and is independent of focus, not a function of it: focus already

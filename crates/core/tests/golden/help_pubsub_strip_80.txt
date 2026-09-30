@@ -11,7 +11,7 @@
 │ d         unsubscribe                                                        │
 │ ←→        select chip                                                        │
 │                                                                              │
-│ ⌃R read-only   g s slowlog   g m monitor   g p pub/sub   g k keys   Esc back
+│ ⌃R read-only   g s slowlog   g m monitor   g p pub/sub   g d dashboard   g k k
 │                                                                              │
 │ Esc close                                                                    │
 └──────────────────────────────────────────────────────────────────────────────┘

@@ -4206,3 +4206,208 @@ fn golden_help_pubsub_adding() {
         &draw_at(&state, 80, 24, &FixedClock(PUBSUB_NOW_MS)),
     );
 }
+
+// ── M3 task 6 — the Dashboard (`g d`, R6.3, `docs/plans/m3-dashboard.md`) ───
+
+const DASHBOARD_NOW_MS: u64 = 200_000;
+
+/// A real-looking, healthy Redis 7/8 `INFO` reply — every tile has
+/// something to show, and nothing here is close to an alarm threshold.
+/// `ops` is the one field that varies between polls (`dashboard_state`'s own
+/// synthetic history below) — every other field stays flat, so nothing but
+/// the ops/sec sparkline moves across those polls.
+fn dashboard_healthy_info(ops: u64) -> redis_pane_core::state::RawInfo {
+    redis_pane_core::state::RawInfo::new(vec![
+        (
+            "Clients".to_string(),
+            vec![
+                ("connected_clients".to_string(), "12".to_string()),
+                ("blocked_clients".to_string(), "0".to_string()),
+            ],
+        ),
+        (
+            "Memory".to_string(),
+            vec![
+                ("used_memory".to_string(), "536870912".to_string()), // 512 MB
+                ("used_memory_peak".to_string(), "629145600".to_string()), // 600 MB
+                ("maxmemory".to_string(), "2147483648".to_string()),  // 2 GB
+            ],
+        ),
+        (
+            "Stats".to_string(),
+            vec![
+                ("instantaneous_ops_per_sec".to_string(), ops.to_string()),
+                ("keyspace_hits".to_string(), "90000".to_string()),
+                ("keyspace_misses".to_string(), "10000".to_string()),
+                ("evicted_keys".to_string(), "0".to_string()),
+                ("expired_keys".to_string(), "128".to_string()),
+                ("rejected_connections".to_string(), "0".to_string()),
+            ],
+        ),
+        (
+            "Replication".to_string(),
+            vec![
+                ("role".to_string(), "master".to_string()),
+                ("connected_slaves".to_string(), "1".to_string()),
+                (
+                    "slave0".to_string(),
+                    "ip=127.0.0.1,port=6380,state=online,offset=196,lag=0".to_string(),
+                ),
+            ],
+        ),
+    ])
+}
+
+/// A Dashboard with a realistic ops/sec history behind it — 48 synthetic
+/// polls of varying traffic (a simple deterministic wave, not `rand`: this
+/// crate carries no RNG dependency, and golden fixtures have to be
+/// reproducible bit-for-bit anyway) before the final, "real" poll every
+/// other tile's figures are asserted against. Without this the sparkline
+/// tile would render as a single flat bar — technically correct, but not
+/// what the grid actually looks like once a session has been open a
+/// while, which is the point of a grid golden.
+fn dashboard_state() -> State {
+    let mut state = State {
+        screen: redis_pane_core::state::View::Dashboard,
+        link: up(Tk::Armed),
+        ..base()
+    };
+    for i in 0..48u64 {
+        // A triangle wave between ~50 and ~450 ops/sec — enough variation
+        // that every sparkline level (`▁` through `█`) is reachable, and
+        // deterministic so the fixture never flakes.
+        let phase = i % 24;
+        let ops = if phase < 12 {
+            50 + phase * 33
+        } else {
+            50 + (24 - phase) * 33
+        };
+        let at_ms = (DASHBOARD_NOW_MS - 8_000).saturating_sub((48 - i) * 2_000);
+        state
+            .dashboard
+            .record_poll(dashboard_healthy_info(ops), at_ms);
+    }
+    state
+        .dashboard
+        .record_poll(dashboard_healthy_info(340), DASHBOARD_NOW_MS - 8_000);
+    state
+}
+
+fn draw_dashboard_at(state: &State, w: u16, h: u16) -> String {
+    let buf = render::frame(
+        state,
+        &Theme::new(ColorDepth::Monochrome),
+        &FixedClock(DASHBOARD_NOW_MS),
+        Rect::new(0, 0, w, h),
+    );
+    render::to_text(&buf)
+}
+
+#[test]
+fn golden_dashboard_grid_130() {
+    assert_golden(
+        "dashboard_grid_130",
+        &draw_dashboard_at(&dashboard_state(), 130, 26),
+    );
+}
+
+#[test]
+fn golden_dashboard_grid_100() {
+    assert_golden(
+        "dashboard_grid_100",
+        &draw_dashboard_at(&dashboard_state(), 100, 24),
+    );
+}
+
+#[test]
+fn golden_dashboard_grid_80() {
+    assert_golden(
+        "dashboard_grid_80",
+        &draw_dashboard_at(&dashboard_state(), 80, 24),
+    );
+}
+
+/// Below 80 columns the grid drops to one tile per row and scrolls
+/// (decision 5) — the focused tile (`Memory`, the grid's default focus)
+/// must still be the first thing on screen.
+#[test]
+fn golden_dashboard_grid_60() {
+    assert_golden(
+        "dashboard_grid_60",
+        &draw_dashboard_at(&dashboard_state(), 60, 24),
+    );
+}
+
+/// One tile in `Warn` (hit ratio, just under 80% with enough samples to
+/// alarm) and one in `Danger` (memory past 95% of `maxmemory`) — proving
+/// "anything alarming is colored" actually reaches the grid, through the
+/// semantic `Token::Warn`/`Token::Danger` tokens, never a literal colour.
+#[test]
+fn golden_dashboard_alarming_tiles() {
+    let mut state = State {
+        screen: redis_pane_core::state::View::Dashboard,
+        link: up(Tk::Armed),
+        ..base()
+    };
+    let info = redis_pane_core::state::RawInfo::new(vec![
+        (
+            "Memory".to_string(),
+            vec![
+                ("used_memory".to_string(), "990000000".to_string()),
+                ("used_memory_peak".to_string(), "990000000".to_string()),
+                ("maxmemory".to_string(), "1000000000".to_string()), // 99% used: Danger
+            ],
+        ),
+        (
+            "Stats".to_string(),
+            vec![
+                ("keyspace_hits".to_string(), "700".to_string()),
+                ("keyspace_misses".to_string(), "300".to_string()), // 70%, >= 1000 samples: Warn
+            ],
+        ),
+    ]);
+    state.dashboard.record_poll(info, DASHBOARD_NOW_MS - 2_000);
+    assert_golden(
+        "dashboard_alarming_tiles_100",
+        &draw_dashboard_at(&state, 100, 24),
+    );
+}
+
+/// `Enter` on the focused tile expands its raw `INFO` section (decision 6).
+#[test]
+fn golden_dashboard_overlay() {
+    let mut state = dashboard_state();
+    state.dashboard.focused_tile = redis_pane_core::state::TileId::Replication;
+    state.dashboard.open_overlay();
+    assert_golden("dashboard_overlay_100", &draw_dashboard_at(&state, 100, 24));
+}
+
+/// Right after `g d`, before the first `Msg::ServerInfoLoaded` lands — "no
+/// blank frame" is a claim about the fetch being issued immediately, not
+/// about what is on screen the instant before it answers, so this still has
+/// to say something (decision 1).
+#[test]
+fn golden_dashboard_loading() {
+    let mut state = State {
+        screen: redis_pane_core::state::View::Dashboard,
+        link: up(Tk::Armed),
+        ..base()
+    };
+    state.dashboard.loading = true;
+    assert_golden("dashboard_loading_80", &draw_dashboard_at(&state, 80, 24));
+}
+
+/// A poll fails after at least one had already landed: the last good tiles
+/// stay on screen with their age, and an error banner names what failed —
+/// never silently stale (decision 7).
+#[test]
+fn golden_dashboard_error_with_stale_values() {
+    let mut state = dashboard_state();
+    state.dashboard.loading = false;
+    state.dashboard.error =
+        Some("READONLY You can't write against a read only replica".to_string());
+    assert_golden(
+        "dashboard_error_stale_80",
+        &draw_dashboard_at(&state, 80, 24),
+    );
+}

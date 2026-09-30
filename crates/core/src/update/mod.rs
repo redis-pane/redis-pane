@@ -19,6 +19,7 @@ use crate::state::{
 use crate::{Command, Msg, State};
 
 mod confirm;
+mod dashboard;
 mod editor;
 mod feed;
 mod keys;
@@ -37,6 +38,7 @@ mod viewer;
 // "The trick that makes this low-risk". A child module (a `#[cfg(test)]` mod
 // below) can see a private `use` in its parent, so nothing here needs `pub`.
 use self::confirm::*;
+use self::dashboard::*;
 use self::editor::*;
 use self::feed::*;
 use self::keys::*;
@@ -259,6 +261,15 @@ pub fn update(mut state: State, msg: Msg) -> (State, Vec<Command>) {
         Msg::Quit => quit(state),
         Msg::SlowlogLoaded { entries } => slowlog_loaded(state, entries),
         Msg::SlowlogFailed { detail, at_ms } => slowlog_failed(state, detail, at_ms),
+        Msg::ServerInfoLoaded { info, at_ms, token } => {
+            server_info_loaded(state, info, at_ms, token)
+        }
+        Msg::ServerInfoFailed {
+            detail,
+            at_ms,
+            token,
+        } => server_info_failed(state, detail, at_ms, token),
+        Msg::DashboardPollTick => dashboard_poll_tick(state),
         Msg::FeedOpened { token } => feed_opened(state, token),
         Msg::FeedClosed { token, reason } => feed_closed(state, token, reason),
         Msg::MonitorLine { token, at_ms, raw } => monitor_line(state, token, at_ms, raw),
@@ -509,6 +520,7 @@ fn dispatch_action(mut state: State, action: Action) -> (State, Vec<Command>) {
             Action::OpenSlowlog => open_slowlog(state),
             Action::OpenMonitor => open_monitor(state),
             Action::OpenPubSub => open_pubsub(state),
+            Action::OpenDashboard => open_dashboard(state),
             Action::MoveDown
             | Action::MoveUp
             | Action::PageDown
@@ -537,6 +549,7 @@ fn dispatch_action(mut state: State, action: Action) -> (State, Vec<Command>) {
             Action::OpenSlowlog => open_slowlog(state),
             Action::OpenMonitor => open_monitor(state),
             Action::OpenPubSub => open_pubsub(state),
+            Action::OpenDashboard => open_dashboard(state),
             Action::MoveDown
             | Action::MoveUp
             | Action::PageDown
@@ -565,6 +578,7 @@ fn dispatch_action(mut state: State, action: Action) -> (State, Vec<Command>) {
             Action::OpenSlowlog => open_slowlog(state),
             Action::OpenMonitor => open_monitor(state),
             Action::OpenPubSub => open_pubsub(state),
+            Action::OpenDashboard => open_dashboard(state),
             Action::MoveDown
             | Action::MoveUp
             | Action::PageDown
@@ -583,12 +597,39 @@ fn dispatch_action(mut state: State, action: Action) -> (State, Vec<Command>) {
             _ => (state, Vec::new()),
         };
     }
+    // The Dashboard view (M3 task 6, `docs/plans/m3-dashboard.md`) is the
+    // same shape once more: a full screen, so only the actions it gives its
+    // own meaning to (tile-focus movement, the raw-`INFO` overlay, refetch,
+    // copy — decision 6) and the app-level handful do anything while it is
+    // showing.
+    if state.screen == View::Dashboard {
+        return match action {
+            Action::Quit => quit(state),
+            Action::Help => open_help(state),
+            Action::Cancel => cancel(state),
+            Action::ToggleReadOnly => toggle_read_only(state),
+            Action::OpenKeysView => open_keys_view(state),
+            Action::OpenSlowlog => open_slowlog(state),
+            Action::OpenMonitor => open_monitor(state),
+            Action::OpenPubSub => open_pubsub(state),
+            Action::OpenDashboard => open_dashboard(state),
+            Action::MoveUp
+            | Action::MoveDown
+            | Action::Open
+            | Action::CollapseGroup
+            | Action::EnterValueCursor
+            | Action::Copy
+            | Action::Refetch => dashboard_dispatch(state, action),
+            _ => (state, Vec::new()),
+        };
+    }
     match action {
         Action::Quit => quit(state),
         Action::OpenKeysView => open_keys_view(state),
         Action::OpenSlowlog => open_slowlog(state),
         Action::OpenMonitor => open_monitor(state),
         Action::OpenPubSub => open_pubsub(state),
+        Action::OpenDashboard => open_dashboard(state),
         // Scoped to the Monitor view alone — see the block above. A no-op
         // everywhere else, the same as `Action::Sort`'s bare `s` is a no-op
         // wherever nothing gives it a meaning.
@@ -755,6 +796,23 @@ fn cancel(mut state: State) -> (State, Vec<Command>) {
         let commands = leave_pubsub(&mut state);
         state.screen = View::Keys;
         return (state, commands);
+    }
+    // The Dashboard's own way back. The raw-`INFO` overlay is the nearest
+    // thing when it is open — `Esc` closes it and stops there, exactly the
+    // "nearest thing first" rule every other overlay in this app follows —
+    // and only a *second* `Esc`, with nothing left to close, leaves the
+    // view. No feed to close either way (unlike Monitor/Pub/Sub, `INFO` is
+    // request/response on the main connection): leaving only ever flips
+    // `state.screen`, and `Msg::DashboardPollTick`'s own guard
+    // (`dashboard_poll_tick`) is what actually stops issuing
+    // `Command::FetchServerInfo` on the shell's very next tick (decision 1).
+    if state.screen == View::Dashboard {
+        if state.dashboard.expanded_tile.is_some() {
+            state.dashboard.close_overlay();
+            return (state, Vec::new());
+        }
+        state.screen = View::Keys;
+        return (state, Vec::new());
     }
     // The "pop" half of stack navigation: back to the list you were
     // just looking at, before an unrelated background scan. Also
