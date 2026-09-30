@@ -6,6 +6,7 @@
 //! [`loaded::LoadedSet`].
 
 pub mod copy;
+pub mod dashboard;
 pub mod editor;
 pub mod loaded;
 pub mod monitor;
@@ -20,6 +21,10 @@ pub mod value;
 pub mod view;
 
 pub use copy::CopyWhat;
+pub use dashboard::{
+    AlarmLevel, ClientsTile, DashboardState, EvictionTile, HitRatioTile, MemoryTile, RawInfo,
+    ReplicationTile, TileId,
+};
 pub use editor::{EditBuffer, EditTarget, FieldPart, is_valid_zset_score};
 pub use loaded::{KeyKind, LoadedSet};
 pub use monitor::{
@@ -63,6 +68,10 @@ pub enum View {
     Monitor,
     /// `g p`: the Pub/Sub view (R6.2, M3 task 5, `docs/plans/m3-pubsub.md`).
     PubSub,
+    /// `g d`: the server Dashboard (R6.3, M3 task 6,
+    /// `docs/plans/m3-dashboard.md`) — `INFO`-based tiles, polled on a
+    /// shell-side interval alive only while this is the screen showing.
+    Dashboard,
 }
 
 /// Where a Connection's target came from (ADR-0001).
@@ -856,6 +865,13 @@ pub struct State {
     /// (`Msg::PubSubMessage`, `Msg::FeedOpened`/`FeedClosed` routing) has
     /// somewhere real to land.
     pub pubsub: PubSubState,
+    /// The Dashboard view's own state — the parsed `INFO` reply, the
+    /// previous poll (for counter-based alarms), the ops/sec history,
+    /// tile focus/expansion, and whether a fetch is in flight (M3 task 6,
+    /// `docs/plans/m3-dashboard.md`). No feed token: unlike Monitor/Pub-Sub
+    /// this is a plain request/response polled on a shell-side interval, not
+    /// a second connection.
+    pub dashboard: DashboardState,
     /// The single counter every feed token is minted from — Monitor
     /// (`state.monitor.feed_token`) and Pub/Sub (`state.pubsub.feed_token`)
     /// alike, via `update::issue_feed_token`. Not a per-feature field: two

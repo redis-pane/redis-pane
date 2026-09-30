@@ -134,6 +134,13 @@ pub enum Action {
     /// subscription, nothing is dialed until the first one is added
     /// (decision 6). Reached only through a chord.
     OpenPubSub,
+    /// `g d`: switch to the Dashboard view and issue a fresh
+    /// `Command::FetchServerInfo` (M3 task 6, R6.3,
+    /// `docs/plans/m3-dashboard.md`). Reached only through a chord — see
+    /// [`Keymap::chord_action`]. Unlike `OpenMonitor` this stages no
+    /// cost-confirmation: `INFO` is cheap enough on a single node that
+    /// `MONITOR`'s warning banner has no analogue here.
+    OpenDashboard,
 }
 
 impl Action {
@@ -259,6 +266,7 @@ impl Action {
             Action::OpenMonitor => "monitor",
             Action::TogglePause => "pause / resume",
             Action::OpenPubSub => "pub/sub",
+            Action::OpenDashboard => "dashboard",
         }
     }
 
@@ -364,6 +372,11 @@ impl Default for Keymap {
                     prefix: KeyPress::plain(KeyCode::Char('g')),
                     second: KeyPress::plain(KeyCode::Char('p')),
                     action: Action::OpenPubSub,
+                },
+                ChordBinding {
+                    prefix: KeyPress::plain(KeyCode::Char('g')),
+                    second: KeyPress::plain(KeyCode::Char('d')),
+                    action: Action::OpenDashboard,
                 },
             ],
             bindings: vec![

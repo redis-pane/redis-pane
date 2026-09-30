@@ -3682,6 +3682,94 @@ async fn the_slowlog_read_path_fetches_entries_then_reset_via_the_mutate_chokepo
     let _ = writer.quit().await;
 }
 
+// ── M3 task 6 phase A — the Dashboard's `INFO` read path
+// (`docs/plans/m3-dashboard.md`) ─────────────────────────────────────────────
+//
+// The tile-derivation tests in `crates/core/src/state/dashboard.rs` prove the
+// parser and the alarm math against a fixed, hand-written fixture. What they
+// cannot prove is that a real server's `INFO` reply actually has the shape
+// those fixtures assume — section names, field names, what is present versus
+// absent on a fresh container. These two tests are that check, the same
+// "most likely to catch a real-world format surprise" reasoning
+// `the_slowlog_read_path...` above already applies to `SLOWLOG GET`.
+
+#[tokio::test]
+#[ignore = "needs docker"]
+async fn a_fresh_containers_real_info_parses_into_every_tile_without_panicking() {
+    let (_c, url) = start("redis", "7-alpine").await;
+    let (client, _) = redis_pane::redis::connect(&url).await.unwrap();
+
+    let info = redis_pane::redis::read::fetch_server_info(&client)
+        .await
+        .unwrap();
+
+    // A fresh, single-node container: `Replication` is present (`role:master`)
+    // but has nothing else replication-shaped, and there is no ACL trimming
+    // any section away — the parser's tolerance for *missing* sections is
+    // exercised by the unit tests in `crates/core/src/redis/read.rs`; this is
+    // the tolerance for whatever real Redis 7 actually sends.
+    assert_eq!(info.field("role"), Some("master"), "{info:?}");
+
+    let mut dashboard = redis_pane_core::state::DashboardState::default();
+    dashboard.record_poll(info, 0);
+
+    // Every tile, populated, with no panic anywhere in the derivation —
+    // decision 3's whole tile set, against a real reply.
+    let memory = dashboard.memory_tile().expect("memory tile");
+    assert!(memory.used_bytes > 0, "{memory:?}");
+    let hit_ratio = dashboard.hit_ratio_tile().expect("hit ratio tile");
+    let _ = hit_ratio.ratio(); // must not panic, whatever it reads
+    let clients = dashboard.clients_tile().expect("clients tile");
+    assert!(clients.connected >= 1, "{clients:?}");
+    let replication = dashboard.replication_tile().expect("replication tile");
+    assert_eq!(replication.role, "master");
+    let eviction = dashboard.eviction_tile().expect("eviction tile");
+    assert_eq!(eviction.evicted_keys, 0, "{eviction:?}");
+
+    let _ = client.quit().await;
+}
+
+#[tokio::test]
+#[ignore = "needs docker"]
+async fn two_sequential_polls_show_counters_moving_between_them() {
+    let (_c, url) = start("redis", "7-alpine").await;
+    let (client, _) = redis_pane::redis::connect(&url).await.unwrap();
+
+    let before = redis_pane::redis::read::fetch_server_info(&client)
+        .await
+        .unwrap();
+    let commands_before: u64 = before
+        .field("total_commands_processed")
+        .and_then(|v| v.parse().ok())
+        .expect("total_commands_processed must be present");
+
+    // A handful of real commands between the two polls — what makes the
+    // second `INFO` reply describe a server that has actually done
+    // something since the first, the same "refreshing, not static" claim
+    // R6.3 and PLAN's "Proves" column make for this whole screen.
+    for i in 0..10 {
+        let _: () = client
+            .set(format!("dashboard:probe:{i}"), "v", None, None, false)
+            .await
+            .unwrap();
+    }
+
+    let after = redis_pane::redis::read::fetch_server_info(&client)
+        .await
+        .unwrap();
+    let commands_after: u64 = after
+        .field("total_commands_processed")
+        .and_then(|v| v.parse().ok())
+        .expect("total_commands_processed must be present");
+
+    assert!(
+        commands_after > commands_before,
+        "before={commands_before} after={commands_after}: the second poll must describe a server that has moved, not a frozen snapshot"
+    );
+
+    let _ = client.quit().await;
+}
+
 // ── M3 task 2 phase A — feed-connection plumbing
 // (`docs/plans/m3-feed-connection.md`) ──────────────────────────────────────
 //

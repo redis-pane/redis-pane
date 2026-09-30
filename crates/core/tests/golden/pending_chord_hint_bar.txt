@@ -1,1 +1,1 @@
-k keys   s slowlog   m monitor   p pub/sub   Esc cancel   ? F1 help
+k keys   s slowlog   m monitor   p pub/sub   d dashboard   Esc cancel   ? F1 help

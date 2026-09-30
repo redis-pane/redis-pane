@@ -514,7 +514,7 @@ impl Viewer for BinaryValue {
     }
 }
 
-fn plural(n: usize, noun: &str) -> String {
+pub(crate) fn plural(n: usize, noun: &str) -> String {
     // "entry" pluralises irregularly and is the only such noun here.
     let plural = match noun {
         "entry" => "entries".to_string(),

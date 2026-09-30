@@ -194,7 +194,7 @@ hunting for a keybinding, and the server's own operational signals — slow comm
 stream, pub/sub traffic, its own vitals — are visible without leaving the terminal or opening a
 second one.
 
-**Progress: in flight.** Task 1 (Palette) shipped in 0.1.0-alpha.14, then was withdrawn
+**Progress: done.** All six tasks are built. Task 1 (Palette) shipped in 0.1.0-alpha.14, then was withdrawn
 (ADR-0020): `Ctrl-K` opened a fuzzy list over every `Action` in `crates/core/src/keymap/mod.rs`,
 reading the same `Keymap` the hint bar and help overlay already read rather than a second copy of
 it. Hands-on testing found no use for it — every `Action` it listed already had a key, so it was
@@ -217,8 +217,13 @@ with fred's own generic Config error or leaving Sentinel silently unsupported �
 feed-connection plumbing (no reconnect policy; Sentinel needs no rewrite the way Monitor's does,
 since it is an ordinary client), a shared `state/tail.rs` `LiveTail<T>` Monitor was refactored onto
 so the two live tails share one cap/pause/following/filter implementation, and every `FeedToken`
-minted from one counter shared across features rather than one per feature. Dashboard remains
-unstarted.
+minted from one counter shared across features rather than one per feature. Task 6 (Dashboard) is
+done — see [`m3-dashboard.md`](plans/m3-dashboard.md): the re-decision point at the top of that
+plan was re-asked once the Slowlog had shipped, and the answer was to build it. `INFO` is
+request/response on the main connection like `SLOWLOG GET`, polled by a shell-side
+`tokio::time::interval` that always ticks; the core decides from state alone whether a given tick
+fetches (`Msg::DashboardPollTick`), and every fetch carries a core-minted token so a manual `g d`/`r`
+overlapping a timer poll cannot let a stale reply land over a newer one.
 
 | # | Task | Proves |
 |---|---|---|
@@ -227,7 +232,7 @@ unstarted.
 | 3 | ~~Slowlog viewer (`g s`): `SLOWLOG GET`/`RESET`, sort, single-node (ADR-0008)~~ | done — entries render in a type-aware-consistent frame; `RESET` is a real mutation (confirm dialog, read-only refusal including `replica`) |
 | 4 | ~~Monitor (`g m`): live tail, filter box, pause/resume, bounded buffer with a visible cap, persistent cost-warning banner~~ | done — the buffer never grows past its cap over a long synthetic run and against a real stream; pausing stops consuming the feed (proven against a real connection, not a mock) rather than hiding it; the banner survives to the single-pane floor |
 | 5 | ~~Pub/Sub (`g p`): subscribe to channels and patterns, live tail~~ | done — a two-column (channel, payload) tail plus a subscription-chip strip that Monitor has no analogue of; `Esc`/`g k`/`g s`/`g m`/quit all close the feed connection, proven against a real server's own `PUBSUB CHANNELS`/`NUMPAT` accounting, not just the app's own state |
-| 6 | Dashboard (`g d`): `INFO`-based tiles — memory used/peak/maxmemory bar, hit ratio, ops/sec sparkline, clients, replication role/lag, eviction/expiry counters, single-node (ADR-0008) | Alarming values are colored; every tile expands to its raw `INFO` section; refreshes on an interval, not static — **flag at the top of this task's plan doc**: the documented alternative (skip the Dashboard, add a memory figure to the status bar, rely on the Slowlog for triage) is still on the table and should be re-decided before work starts, not assumed away by this plan existing |
+| 6 | ~~Dashboard (`g d`): `INFO`-based tiles — memory used/peak/maxmemory bar, hit ratio, ops/sec sparkline, clients, replication role/lag, eviction/expiry counters, single-node (ADR-0008)~~ | done — alarming values are colored through the theme's semantic tokens; every tile expands to its raw `INFO` section as a scrollable overlay; refreshes on a shell-side interval the core decides whether to act on, not static; a core-minted token drops a stale reply behind a newer manual fetch or poll |
 
 **Console (R5.2–R5.4) is explicitly out of scope for M3.** The Palette (R5.1) shipped and was
 withdrawn (ADR-0020) — see [PRD.md §10](PRD.md) for the resolved open question and the rationale.

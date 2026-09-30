@@ -21,8 +21,9 @@ to edit, `a` to add, `d` to delete, `t` for the TTL, `y` to confirm). Every chan
 exact command before it runs, and Read-only Mode refuses it where it should. Editing happens
 inline, so a value that reads as JSON stays visible while you type.
 
-It can also watch the server itself: a live Monitor tail and the Slowlog, each a keystroke away.
-Rename, copy, and bulk operations across several keys are coming next.
+It can also watch the server itself: a live Monitor tail, the Slowlog, and a Dashboard of the
+server's own vitals, each a keystroke away. Rename, copy, and bulk operations across several keys
+are coming next.
 
 Requires Redis 6.0 or newer (Valkey works too).
 
@@ -88,7 +89,7 @@ Once you're in:
 *`←`/`→` fold and step through the tree; `Enter` drops a cursor into the open value so you can move
 through a long list without the mouse, and `Esc` takes you back to the key list.*
 
-Beyond the keyspace, three views show what the server itself is doing:
+Beyond the keyspace, four views show what the server itself is doing:
 
 - `g m` opens **Monitor**, a live tail of every command the server runs. `p` pauses it, `/`
   filters it, and leaving the view shuts the feed down so it never keeps running out of sight
@@ -97,6 +98,9 @@ Beyond the keyspace, three views show what the server itself is doing:
   and leaving the view closes the connection — nothing stays subscribed behind you
 - `g s` opens the **Slowlog**, the server's own list of commands that ran too long, sortable by
   time or duration
+- `g d` opens the **Dashboard**: memory against `maxmemory`, hit ratio, an ops/sec sparkline,
+  clients, replication lag and eviction counters, polling `INFO` every couple of seconds. Anything
+  alarming is colored, and `Enter` on a tile expands the raw `INFO` section behind it
 
 ![The Monitor view: a live tail of commands streaming in under a warning banner, paused while the skipped count climbs, then filtered down to HSET commands](monitor-demo.gif)
 
@@ -117,6 +121,7 @@ docs live under `docs/` if you want the full history behind a decision.
 
 ## Not planning to build
 
-Not a server manager, not a metrics or alerting tool — Monitor and the Slowlog are for looking, not
-for dashboards or paging — and not a replacement for `redis-cli` in scripts. No
-multi-server workspace, no plugins, no export/import — one connection at a time, kept simple.
+Not a server manager, not an alerting or paging tool, and not a metrics store — the Dashboard reads
+`INFO` live and keeps nothing beyond an in-session sparkline, it does not retain history across a
+restart or notify anyone — and not a replacement for `redis-cli` in scripts. No multi-server
+workspace, no plugins, no export/import — one connection at a time, kept simple.

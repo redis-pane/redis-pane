@@ -164,3 +164,10 @@ from what the reader typed; the list is remembered for the session and resubscri
 never persisted and never kept subscribed server-side once the view closes.
 _Avoid_: Subscriber, message log, event stream (too generic — this is specifically Redis Pub/Sub,
 not a general event feed)
+
+**Dashboard**:
+The triage-first view of one server's own vitals — memory, hit ratio, ops/sec, clients,
+replication, eviction — built from `INFO` and polled on an interval rather than pushed. Scoped to
+exactly one node (ADR-0008); there is no cross-node aggregation because Cluster is out for v1.
+_Avoid_: Overview, stats page, metrics (too generic — this is specifically the server's own `INFO`
+data, not application-level metrics)

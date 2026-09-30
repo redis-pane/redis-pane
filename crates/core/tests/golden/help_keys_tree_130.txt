@@ -1,23 +1,23 @@
 ─ redis-pane ─ ● staging · cache-01:6379/0 · from profile staging ─────────────────────────────────────────────────────── ● live ─
 
  KEY                               TYPE        SIZE   TTL │ a group is selected
- ▾ cart:            ┌─ help · keys pane · tree ──────────────────────────────────────────────────────────────┐
-   ● 91af3c9d2e     │ →         open / expand                                                                │
- ▾ feed:            │ /         filter                                                                       │
-   ▾ global:        │ s         sort                                                                         │
-     ● hot          │ t         flat view                                                                    │
- ▾ user:            │ d         delete                                                                       │
-   ▾ 8812:          │ c         copy                                                                         │
-     ● cart         │ r         rescan                                                                       │
-     ● profile      │ C         copy redis-cli command                                                       │
-     ● session      │ ↑↓ jk     move                                                                         │
-   ▾ 8813:          │ PgUp/PgDn page                                                                         │
-     ● session      │ Home/End  top/bottom                                                                   │
-                    │                                                                                        │
-                    │ ⌃R read-only   g s slowlog   g m monitor   g p pub/sub   Esc back   q quit   ? F1 help │
-                    │                                                                                        │
-                    │ Tab value keys · Esc close                                                             │
-                    └────────────────────────────────────────────────────────────────────────────────────────┘
+ ▾ cart:    ┌─ help · keys pane · tree ──────────────────────────────────────────────────────────────────────────────┐
+   ● 91af3c9│ →         open / expand                                                                                │
+ ▾ feed:    │ /         filter                                                                                       │
+   ▾ global:│ s         sort                                                                                         │
+     ● hot  │ t         flat view                                                                                    │
+ ▾ user:    │ d         delete                                                                                       │
+   ▾ 8812:  │ c         copy                                                                                         │
+     ● cart │ r         rescan                                                                                       │
+     ● profi│ C         copy redis-cli command                                                                       │
+     ● sessi│ ↑↓ jk     move                                                                                         │
+   ▾ 8813:  │ PgUp/PgDn page                                                                                         │
+     ● sessi│ Home/End  top/bottom                                                                                   │
+            │                                                                                                        │
+            │ ⌃R read-only   g s slowlog   g m monitor   g p pub/sub   g d dashboard   Esc back   q quit   ? F1 help │
+            │                                                                                                        │
+            │ Tab value keys · Esc close                                                                             │
+            └────────────────────────────────────────────────────────────────────────────────────────────────────────┘
                                                           │
                                                           │
     sorted by name

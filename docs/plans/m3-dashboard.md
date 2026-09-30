@@ -1,8 +1,42 @@
 # M3 task 6: server Dashboard (`g d`)
 
-Status: **planning — not started.** No code, no ADR.
+Status: **done 2026-09-30.** No ADR.
 
-## Decision point — read this before anything else in this doc
+## Decisions (2026-09-30) — the decision point below is settled; these override the body
+
+**Option 1, the full Dashboard, was chosen** over both a "lite" single-list screen and the
+descope to a status-bar memory figure. The signal the decision point asked for exists now:
+Slowlog and Monitor answer "what is slow" and "what is running", but nothing answers memory
+against `maxmemory`, evictions, replication lag or a client spike — the gap is real.
+
+1. **Refresh:** `INFO` polled every **2s** by a shell-side `tokio::time::interval` in
+   `terminal.rs`, alive only while `state.screen == View::Dashboard` (`state.screen`, not
+   `state.view` — see the Slowlog task). `g d` fetches once immediately, so no blank frame.
+   The core never owns a timer. Polling pauses while the main connection is down.
+2. **Main connection**, not a feed: `INFO` is request/response like `SLOWLOG GET`.
+3. **Tiles:** memory used / peak / `maxmemory` as a bar (`maxmemory 0` → "no limit", no bar);
+   hit ratio; ops/sec with a sparkline of the last **60 polls** (~2 min, bounded); clients
+   connected / blocked; replication role, replica count, lag and `master_link_status`;
+   evictions and expiries.
+4. **Alarm thresholds**, named constants, semantic tokens `Warn`/`Danger` only: memory ≥80% warn,
+   ≥95% danger; hit ratio <80% warn, only once hits+misses ≥1000; replica lag >5s warn, >30s or
+   link down danger; `evicted_keys` rising between polls warn; `blocked_clients` >0 warn;
+   `rejected_connections` rising danger.
+5. **Grid breakpoints** (new; recorded in DESIGN §2): ≥120 cols 3 tiles per row, 80–119 two,
+   <80 one per row and scrollable.
+6. **Keys** (keymap growth rule, view-scoped reuse): `←→↑↓`/`hjkl` move tile focus; `Enter` opens
+   the focused tile's raw `INFO` section as a scrollable overlay, `Esc` closes it; `r` fetches
+   now; `c` copies the raw section. `g d` joins `Keymap.chords`.
+7. **Errors:** `INFO` refused (ACL) or failing → an R7.4 notification plus an in-view error state.
+   The last good values stay on screen with their age (`updated 8s ago`) — never silently stale.
+8. **Single node** (ADR-0008), as below.
+
+**Build order:** A — `Command::FetchServerInfo`/`Msg::ServerInfoLoaded` (+ failure), the shell's
+`INFO` parser into a core-owned `RawInfo`, `DashboardState` with pure tile/alarm derivation,
+the interval arm, `View::Dashboard` + `g d`; unit and integration tests. B — the grid render,
+tiles, sparkline, bar and overlay; help; goldens; docs.
+
+## Decision point (settled 2026-09-30, kept for the record)
 
 **DESIGN.md §9 already flags the Dashboard as "the largest remaining scope risk"** and names a
 concrete alternative:

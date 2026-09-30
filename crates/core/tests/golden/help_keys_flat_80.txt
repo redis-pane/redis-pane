@@ -14,7 +14,7 @@
 │ PgUp/PgDn page                                                               │
 │ Home/End  top/bottom                                                         │
 │                                                                              │
-│ ⌃R read-only   g s slowlog   g m monitor   g p pub/sub   Esc back   q quit   ?
+│ ⌃R read-only   g s slowlog   g m monitor   g p pub/sub   g d dashboard   Esc b
 │                                                                              │
 │ Tab value keys · Esc close                                                   │
 └──────────────────────────────────────────────────────────────────────────────┘

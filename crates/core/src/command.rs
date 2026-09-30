@@ -50,6 +50,27 @@ impl FeedToken {
     }
 }
 
+/// Which `Command::FetchServerInfo`/`Msg::ServerInfoLoaded`/
+/// `Msg::ServerInfoFailed` reply belongs to (M3 task 6,
+/// `docs/plans/m3-dashboard.md`).
+///
+/// Mirrors [`ReadToken`] for exactly the same reason, one poll wide: a
+/// manual `g d`/`r` can overlap a timer-driven poll
+/// (`Msg::DashboardPollTick`), and without an identity a slow reply that
+/// lands *second* could overwrite a newer one that already landed — which
+/// would also corrupt the previous-poll comparison the rising-counter
+/// alarms rely on (`DashboardState::record_poll`'s `previous` rotation).
+/// Minted only by [`crate::update::update`], never by a shell, for the same
+/// reason [`ReadToken::next`] is crate-private.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct InfoToken(u64);
+
+impl InfoToken {
+    pub(crate) fn next(self) -> Self {
+        Self(self.0.wrapping_add(1))
+    }
+}
+
 /// Which feed to open (`docs/plans/m3-feed-connection.md`). A core-only
 /// description with no `fred` type in it, mirroring how [`Command::ReadKey`]
 /// names a key by bytes rather than by a shell-side handle.
@@ -151,6 +172,19 @@ pub enum Command {
     /// carries no arming and answers with [`crate::Msg::SlowlogLoaded`]
     /// rather than a push.
     FetchSlowlog { count: i64 },
+    /// Fetch the server's own vitals (R6.3, M3 task 6,
+    /// `docs/plans/m3-dashboard.md`): `INFO`. Issued by `g d`, by `r`, and by
+    /// [`crate::update::update`] reacting to a `Msg::DashboardPollTick` while
+    /// the Dashboard is on screen (the shell's interval always ticks —
+    /// decision 1, the core never owns the timer itself — but only a tick
+    /// the core actually acts on produces this). Like
+    /// [`Command::FetchSlowlog`] this is a plain request/response on the
+    /// main connection, not a feed — `INFO` has no `CLIENT TRACKING`
+    /// equivalent, so there is nothing to (re-)arm. `token` is
+    /// [`InfoToken`]'s own reason to exist: a manual fetch and a poll can
+    /// overlap, and only the reply carrying the *current* token is allowed
+    /// to land.
+    FetchServerInfo { token: InfoToken },
     /// Open a second, dedicated connection to the same resolved target and
     /// start streaming from it (`docs/plans/m3-feed-connection.md`) — `MONITOR`
     /// today, Pub/Sub later widens [`FeedKindMsg`]. The render loop never does

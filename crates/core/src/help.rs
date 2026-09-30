@@ -74,6 +74,22 @@ pub enum HelpContext {
     /// [`HelpContext::Slowlog`]/[`HelpContext::Monitor`]. `focus` picks the
     /// strip-scoped or tail-scoped rows (decision 1).
     PubSub { focus: crate::state::PubSubFocus },
+    /// The Dashboard view (`g d`, R6.3, M3 task 6,
+    /// `docs/plans/m3-dashboard.md`) — the same "a full screen, not the
+    /// two-pane browser" reasoning as [`HelpContext::Slowlog`]/
+    /// [`HelpContext::Monitor`]/[`HelpContext::PubSub`], one context of its
+    /// own. Not parameterised by the focused tile: every tile's help rows
+    /// are the same four actions (move, expand, refetch, copy) regardless
+    /// of which tile focus happens to be on.
+    Dashboard,
+    /// The Dashboard's raw-`INFO` overlay, open over the grid (decision 6's
+    /// `Enter`). A separate context, not [`HelpContext::Dashboard`] with a
+    /// flag: the overlay's own keys (scroll, copy, `Esc` to close) are a
+    /// different, smaller set than the grid's (move focus, expand, refetch,
+    /// copy) — the same reasoning that gives `HelpContext::Confirm` and
+    /// `HelpContext::ChordPending` their own variants rather than folding
+    /// into whatever context they are drawn over.
+    DashboardOverlay,
 }
 
 /// The Viewer's per-type contexts (PLAN's decision 2): one for each of the
@@ -278,6 +294,16 @@ pub fn context(state: &State) -> HelpContext {
                     focus: state.pubsub.focus,
                 };
             }
+            if state.screen == crate::state::View::Dashboard {
+                // The raw-`INFO` overlay outranks the grid underneath it —
+                // the same "nearest thing first" precedence `cancel()`
+                // (`update/mod.rs`) uses to decide what a bare `Esc` closes.
+                return if state.dashboard.expanded_tile.is_some() {
+                    HelpContext::DashboardOverlay
+                } else {
+                    HelpContext::Dashboard
+                };
+            }
             // The pane *viewed* by help, not necessarily the one actually
             // focused — `Tab` flips `HelpView::pane` while help is open
             // without moving `State::focus` (`update::help_key`'s own
@@ -413,6 +439,8 @@ pub fn here(state: &State, ctx: HelpContext) -> Vec<HelpRow> {
             HelpRow::new(keys_for(state, Action::Cancel), "cancel"),
         ],
         HelpContext::PubSub { focus } => pubsub_rows(state, focus),
+        HelpContext::Dashboard => dashboard_rows(state),
+        HelpContext::DashboardOverlay => dashboard_overlay_rows(state),
     }
 }
 
@@ -552,6 +580,31 @@ fn pubsub_rows(state: &State, focus: crate::state::PubSubFocus) -> Vec<HelpRow> 
         rows.push(HelpRow::new(keys_for(state, Action::Refetch), "reopen"));
     }
     rows
+}
+
+/// The Dashboard grid's own rows (M3 task 6, decision 6): tile-focus
+/// movement, expanding the focused tile, refetch, and copying its raw
+/// `INFO` section.
+fn dashboard_rows(state: &State) -> Vec<HelpRow> {
+    vec![
+        HelpRow::new("←→↑↓ hjkl", "move focus"),
+        HelpRow::new(keys_for(state, Action::EnterValueCursor), "expand tile"),
+        HelpRow::new(refetch_keys(state), refetch_label(state, false)),
+        HelpRow::new(keys_for(state, Action::Copy), "copy section"),
+    ]
+}
+
+/// The Dashboard's raw-`INFO` overlay's own rows (decision 6): scrolling,
+/// copying the section it is showing, refetching without closing it first
+/// (`update::dashboard::dashboard_dispatch`'s own overlay branch answers
+/// `r` the same as the grid does), and closing it.
+fn dashboard_overlay_rows(state: &State) -> Vec<HelpRow> {
+    vec![
+        HelpRow::new("↑↓ jk", "scroll"),
+        HelpRow::new(keys_for(state, Action::Copy), "copy section"),
+        HelpRow::new(refetch_keys(state), refetch_label(state, false)),
+        HelpRow::new(keys_for(state, Action::Cancel), "close"),
+    ]
 }
 
 fn keys_rows(state: &State, tree: bool, filtered: bool) -> Vec<HelpRow> {
@@ -875,10 +928,28 @@ pub fn everywhere(state: &State) -> Vec<HelpRow> {
             // the chord had two different meanings rather than one already in
             // progress (Decision 1, `docs/plans/m3-slowlog.md`: "the hint bar
             // and help show its continuations plus `Esc cancel` ... only").
+            //
+            // Checked before the Dashboard-overlay arm below, matching
+            // `context`'s own precedence: "a pending chord outranks
+            // everything else in Normal mode."
             vec![
                 HelpRow::new(keys_for(state, Action::Cancel), "cancel"),
                 HelpRow::new(help_keys(state), "help"),
             ]
+        }
+        // The Dashboard's raw-`INFO` overlay is its own tiny mode, the same
+        // shape a pending chord already gets one arm up: HERE
+        // (`dashboard_overlay_rows`) already carries its own `Esc close`
+        // row, so EVERYWHERE shrinks to just `F1 help` — the same
+        // `Mode::Confirm`/`Mode::Editing`/`Mode::Filtering` treatment below,
+        // reached here rather than there because the overlay is not its own
+        // `Mode` (it is `Mode::Normal` with `state.dashboard.expanded_tile`
+        // set, not a mode `key_press`'s own precedence needs to know about).
+        Mode::Normal
+            if state.screen == crate::state::View::Dashboard
+                && state.dashboard.expanded_tile.is_some() =>
+        {
+            vec![HelpRow::new(f1_help_keys(state), "help")]
         }
         Mode::Normal => {
             let mut rows = Vec::new();
@@ -892,8 +963,10 @@ pub fn everywhere(state: &State) -> Vec<HelpRow> {
             // strip/tail" there, but `pubsub_rows` already carries that row
             // as HERE content (decision 1) — a second, differently-worded
             // copy here would be a duplicate rather than new information.
-            if state.screen != crate::state::View::PubSub
-                && (!state.keys_pane_focused() || state.open.is_some())
+            if !matches!(
+                state.screen,
+                crate::state::View::PubSub | crate::state::View::Dashboard
+            ) && (!state.keys_pane_focused() || state.open.is_some())
             {
                 rows.push(action_row(state, Action::CyclePane, "focus"));
             }
@@ -917,11 +990,15 @@ pub fn everywhere(state: &State) -> Vec<HelpRow> {
             if let Some(keys) = state.keymap.chord_hint(Action::OpenPubSub) {
                 rows.push(HelpRow::new(keys, Action::OpenPubSub.label()));
             }
+            if let Some(keys) = state.keymap.chord_hint(Action::OpenDashboard) {
+                rows.push(HelpRow::new(keys, Action::OpenDashboard.label()));
+            }
             if matches!(
                 state.screen,
                 crate::state::View::Slowlog
                     | crate::state::View::Monitor
                     | crate::state::View::PubSub
+                    | crate::state::View::Dashboard
             ) && let Some(keys) = state.keymap.chord_hint(Action::OpenKeysView)
             {
                 rows.push(HelpRow::new(keys, Action::OpenKeysView.label()));
@@ -1351,6 +1428,8 @@ mod tests {
         ctxs.push(HelpContext::Confirm);
         ctxs.push(HelpContext::ChordPending);
         ctxs.push(HelpContext::Slowlog);
+        ctxs.push(HelpContext::Dashboard);
+        ctxs.push(HelpContext::DashboardOverlay);
         ctxs
     }
 
@@ -1360,8 +1439,8 @@ mod tests {
         // should fail loudly here rather than silently under-testing a new
         // variant — 4 (Keys) + 1 (Filter) + 1 (Value(None)) + 16 (8 types ×
         // cursor) + 9 (5 plain Editor + 2 zset × 2 AddForm) + 1 (Confirm) +
-        // 1 (ChordPending) + 1 (Slowlog).
-        assert_eq!(every_context().len(), 34);
+        // 1 (ChordPending) + 1 (Slowlog) + 1 (Dashboard) + 1 (DashboardOverlay).
+        assert_eq!(every_context().len(), 36);
     }
 
     #[test]
