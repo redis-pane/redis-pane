@@ -720,7 +720,8 @@ buffer is genuinely empty (a real state right after a fresh reset, or simply not
 crossed the server's threshold yet) — three different reasons, three different sentences, not one
 placeholder standing in for all of them.
 
-Single-node only ([ADR-0008](adr/0008-cluster-support.md)): `SLOWLOG` is per-node, and a Cluster
+Single-node only ([ADR-0008](adr/0008-sentinel-in-v1-cluster-deferred.md),
+[ADR-0021](adr/0021-cluster-refused-until-supported.md)): `SLOWLOG` is per-node, and a Cluster
 target would need a node selector this app's one-Connection premise has no room for — inherited
 scope from Cluster being out of v1 entirely, not a new limitation this screen introduces.
 
