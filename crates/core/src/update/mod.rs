@@ -164,7 +164,26 @@ fn paste(mut state: State, text: String) -> (State, Vec<Command>) {
 /// Pure: no I/O, no clock, no randomness. Time arrives inside the message
 /// (see [`Msg::ReadCompleted`]) rather than being read here, which is what
 /// keeps a frame a function of state alone (ADR-0011).
-pub fn update(mut state: State, msg: Msg) -> (State, Vec<Command>) {
+pub fn update(state: State, msg: Msg) -> (State, Vec<Command>) {
+    let (mut state, commands) = step(state, msg);
+    // The value cursor lives only in a focused value pane (issue #55). Many
+    // routes move focus to the keys pane — `Tab`, a click or scroll there,
+    // `Esc` while an `Enter` read is still in flight and its reply asks for
+    // the cursor — and each of them once left `cursor_active` behind: the
+    // hint bar described the key list, the arrows drove the value cursor,
+    // and `Esc` saw focus already on Keys and had nothing to pop. Enforced
+    // here, after every message, so no single route can forget it again.
+    if state.focus != Pane::Value
+        && let Some(open) = &mut state.open
+    {
+        open.cursor_active = false;
+    }
+    (state, commands)
+}
+
+/// Everything [`update`] does except the focus invariant it enforces once
+/// `step` has returned.
+fn step(mut state: State, msg: Msg) -> (State, Vec<Command>) {
     match msg {
         Msg::Key(key) => key_press(state, key),
         Msg::Mouse(action) => mouse_action(state, action),

@@ -674,6 +674,94 @@ mod cursor_mode_tests {
         assert!(!state.open.unwrap().may_apply());
     }
 
+    // ── issue #55: the value cursor outliving the value pane's focus ───────
+    //
+    // Every route below once left `cursor_active` set with focus on the keys
+    // pane: the hint bar described the key list, the arrows still drove the
+    // value cursor, and `Esc` — seeing focus already on Keys — had nothing
+    // to pop. The reader was stuck in a pane the screen said they had left.
+
+    /// The first key in the list moved by a plain `↓` from the keys pane,
+    /// with a second row to move to.
+    fn open_with_two_rows() -> State {
+        let mut state = open_with(5);
+        state.keys.push(b"other");
+        state.rebuild_list();
+        state
+    }
+
+    #[test]
+    fn tab_back_to_the_keys_pane_hands_movement_back_to_the_key_list() {
+        let (state, _) = press(open_with_two_rows(), KeyCode::Enter);
+        let (state, _) = press(state, KeyCode::Tab);
+        assert_eq!(state.focus, Pane::Keys);
+        assert!(!state.open.as_ref().unwrap().cursor_active);
+
+        let (state, _) = press(state, KeyCode::Down);
+        assert_eq!(state.view.selected, 1, "↓ moves the list it is aimed at");
+        assert_eq!(state.open.unwrap().cursor, 0);
+    }
+
+    #[test]
+    fn a_click_in_the_keys_pane_hands_movement_back_to_the_key_list() {
+        use crate::msg::MouseAction;
+        let (state, _) = press(open_with_two_rows(), KeyCode::Enter);
+        let area = ratatui::layout::Rect::new(0, 0, state.cols, state.rows);
+        let keys = crate::render::layout::layout(area, state.focus, state.split_adjust).keys;
+        let (state, _) = update(
+            state,
+            Msg::Mouse(MouseAction::Down {
+                col: keys.x + 1,
+                row: keys.y + 2,
+            }),
+        );
+        assert_eq!(state.focus, Pane::Keys);
+        assert!(!state.open.unwrap().cursor_active);
+    }
+
+    #[test]
+    fn esc_before_a_slow_enter_read_lands_is_not_undone_by_its_reply() {
+        // A slow link (the issue's ElastiCache target): `Enter` opens a key
+        // and asks for the cursor, the reader backs out with `Esc` before the
+        // reply arrives, and the reply must not drag the cursor back into a
+        // pane focus has already left.
+        let mut state = open_with_two_rows();
+        state.view.selected = 1;
+        let (state, cmds) = press(state, KeyCode::Enter);
+        let Some(Command::ReadKey {
+            token,
+            index,
+            key: name,
+            ..
+        }) = cmds.into_iter().next()
+        else {
+            panic!("Enter on a detached key must open it");
+        };
+        let (state, _) = press(state, KeyCode::Esc);
+        assert_eq!(state.focus, Pane::Keys);
+
+        let (state, _) = update(
+            state,
+            Msg::ValueLoaded {
+                token,
+                index,
+                name,
+                value: Value::Hash(PairValue {
+                    pairs: vec![("f".into(), "v".into())],
+                    total: 1,
+                }),
+                ttl_seconds: -1,
+                size_bytes: 4,
+                at_ms: 0,
+            },
+        );
+        assert_eq!(state.focus, Pane::Keys);
+        assert!(!state.open.as_ref().unwrap().cursor_active);
+
+        let (state, _) = press(state, KeyCode::Up);
+        assert_eq!(state.view.selected, 0, "↑ moves the key list");
+    }
+
     /// Below 70 columns only one pane is drawn at a time; movement must be
     /// aimed at whichever one that is, cursor mode or not (the same
     /// discipline `pane_is_on_screen` already applies to the key list).
@@ -1121,6 +1209,10 @@ mod viewer_scroll_tests {
             cols: 130,
             rows: 40,
             open: Some(OpenKey::new(Some(0), "k".into(), value, -1, 10, 0)),
+            // An active cursor is only ever in a focused value pane — `Enter`
+            // sets both, and `update` clears the cursor wherever focus is not
+            // (issue #55).
+            focus: Pane::Value,
             ..State::default()
         };
         state.open.as_mut().unwrap().cursor_active = true;
