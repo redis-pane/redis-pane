@@ -146,7 +146,9 @@ redis-pane --profile mine --probe
 - No embedded Redis console — `redis-cli` is one keystroke away in the terminal you're already
   in. No command palette either: it shipped briefly and was withdrawn, since every action it
   listed already had a key.
-- No Cluster support — Sentinel works, Cluster is deferred.
+- No Cluster support — Sentinel works, Cluster is deferred (ADR-0021). A Cluster target is
+  refused at startup with a diagnostic, rather than silently served from one arbitrary node;
+  use `redis-cli -c` for a Cluster deployment meanwhile.
 - Nothing older than Redis 6.0 / no RESP2 — you'll get a clear message naming the version, not a
   crash.
 - A handful of known UI gaps are already tracked in `docs/UI_TASKS.md` if you want to check

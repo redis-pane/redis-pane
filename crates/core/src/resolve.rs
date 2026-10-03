@@ -306,13 +306,25 @@ pub fn redact(url: &str) -> String {
 /// An ad-hoc target that is not loopback or a unix socket is `unknown`, and
 /// therefore starts in Read-only Mode (ADR-0004). `unknown` is a real
 /// Environment, not a stand-in for "probably fine".
+///
+/// Strips every scheme `fred::Config::from_url` accepts, not just the two
+/// plain ones — a loopback `redis-sentinel://` or `redis-cluster://` URL must
+/// resolve to `Local` exactly like a plain `redis://127.0.0.1` does (ADR-0021,
+/// `docs/plans/m4-cluster-refusal.md`). The `-cluster`/`-sentinel` variants
+/// are stripped first so e.g. `redis-cluster://` is never left with a
+/// dangling `-cluster` prefix after only the plain scheme is stripped.
 fn infer_environment(target: &str) -> Environment {
-    let host = target
-        .rsplit('@')
-        .next()
-        .unwrap_or(target)
-        .trim_start_matches("redis://")
-        .trim_start_matches("rediss://");
+    let host = target.rsplit('@').next().unwrap_or(target);
+    let host = [
+        "rediss-cluster://",
+        "redis-cluster://",
+        "rediss-sentinel://",
+        "redis-sentinel://",
+        "rediss://",
+        "redis://",
+    ]
+    .iter()
+    .fold(host, |h, scheme| h.trim_start_matches(scheme));
     let is_loopback = host.starts_with("127.0.0.1")
         || host.starts_with("localhost")
         || host.starts_with("[::1]")
@@ -488,6 +500,81 @@ mod tests {
                 Environment::Local
             );
         }
+    }
+
+    /// ADR-0021 / `docs/plans/m4-cluster-refusal.md`: `infer_environment` must
+    /// strip Sentinel and Cluster scheme variants the same way it already
+    /// strips `redis://`/`rediss://`, so a loopback target under either
+    /// scheme is `Local` like every other loopback target — not `Unknown`
+    /// just because of the scheme it arrived under.
+    #[test]
+    fn a_loopback_sentinel_or_cluster_url_is_local() {
+        for url in [
+            "redis-sentinel://127.0.0.1:26379",
+            "rediss-sentinel://127.0.0.1:26379",
+            "redis-cluster://127.0.0.1:30001",
+            "rediss-cluster://127.0.0.1:30001",
+            "redis-sentinel://localhost:26379",
+        ] {
+            let flags = Flags {
+                url: Some(url.into()),
+                ..Flags::default()
+            };
+            assert_eq!(
+                resolve(&flags, None, &EnvVars::default())
+                    .connection
+                    .environment,
+                Environment::Local,
+                "{url} should resolve to Local"
+            );
+        }
+    }
+
+    /// The non-loopback counterpart: a Sentinel/Cluster URL to a remote host
+    /// stays `Unknown`, same as a plain `redis://` URL would.
+    #[test]
+    fn a_non_loopback_sentinel_or_cluster_url_is_unknown() {
+        for url in [
+            "redis-sentinel://sentinel.example.com:26379",
+            "redis-cluster://cluster.example.com:30001",
+        ] {
+            let flags = Flags {
+                url: Some(url.into()),
+                ..Flags::default()
+            };
+            assert_eq!(
+                resolve(&flags, None, &EnvVars::default())
+                    .connection
+                    .environment,
+                Environment::Unknown,
+                "{url} should resolve to Unknown"
+            );
+        }
+    }
+
+    /// Plain schemes must be unaffected by the new stripping logic.
+    #[test]
+    fn plain_schemes_are_unchanged_by_the_new_scheme_list() {
+        let flags = Flags {
+            url: Some("redis://127.0.0.1:6379".into()),
+            ..Flags::default()
+        };
+        assert_eq!(
+            resolve(&flags, None, &EnvVars::default())
+                .connection
+                .environment,
+            Environment::Local
+        );
+        let flags = Flags {
+            url: Some("rediss://remote.example.com:6379".into()),
+            ..Flags::default()
+        };
+        assert_eq!(
+            resolve(&flags, None, &EnvVars::default())
+                .connection
+                .environment,
+            Environment::Unknown
+        );
     }
 
     #[test]

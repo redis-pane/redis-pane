@@ -51,6 +51,12 @@ pub enum ConnectError {
     UnknownVersion(String),
     /// A password reference could not be resolved (ADR-0002).
     Credentials(String),
+    /// The target is a Redis Cluster — by URL scheme (`build_config`, before
+    /// any connection attempt) or by `INFO`'s `cluster_enabled:1` (folded into
+    /// `connect_with`'s existing post-connect `INFO` read). Cluster is
+    /// deferred to M5; see ADR-0021 for why a refusal beats a half-working
+    /// session that silently answers from one arbitrary node.
+    Cluster,
 }
 
 impl std::fmt::Display for ConnectError {
@@ -75,6 +81,13 @@ impl std::fmt::Display for ConnectError {
                     "could not read the server version (INFO server said {raw:?})"
                 )
             }
+            // One line: it is also shown as an in-app notification when a
+            // reconnect lands on a Cluster, and the status bar has one row.
+            ConnectError::Cluster => write!(
+                f,
+                "Redis Cluster is not supported yet (planned for M5, ADR-0021) — use \
+                 `redis-cli -c` for this server meanwhile"
+            ),
         }
     }
 }
@@ -119,6 +132,18 @@ pub(crate) fn build_config(url: &str, credentials: &Credentials) -> Result<Confi
     let mut config = Config::from_url(url).map_err(|e| {
         ConnectError::Unreachable(format!("{}: {e}", redis_pane_core::resolve::redact(url)))
     })?;
+
+    // The cheapest and earliest Cluster check: a `redis-cluster://`/
+    // `rediss-cluster://` URL (or any other spelling `fred` accepts — it
+    // matches on the `-cluster` scheme suffix, see `fred::utils::
+    // url_is_clustered`) is refused before a connection is even attempted.
+    // Checking `config.server.is_clustered()` after parsing, rather than
+    // string-matching the scheme ourselves, means every spelling `fred`
+    // recognizes is covered without this list having to track fred's own
+    // (ADR-0021).
+    if config.server.is_clustered() {
+        return Err(ConnectError::Cluster);
+    }
 
     // A Profile's credentials are the more specific statement of intent, so
     // they win over anything embedded in the URL.
@@ -220,8 +245,20 @@ pub async fn connect_with(
     // defaulting `read_only`/`condition` to `None` here is exactly how a
     // replica gets treated as a primary, so the failure is carried forward
     // instead and surfaced by every caller (review M1).
-    let (read_only, condition, server_state_error) = match server_conditions(&client).await {
-        Ok((read_only, condition)) => (read_only, condition, None),
+    //
+    // The Cluster check (`INFO`'s `cluster_enabled:1`) rides this same read —
+    // `fetch_conditions` is the one place `INFO server` is parsed for this
+    // purpose, so no second round trip is added (ADR-0021). This catches a
+    // Cluster target reached by a plain `redis://`/`rediss://` URL, which the
+    // scheme check in `build_config` cannot — every node of a Cluster reports
+    // this regardless of which scheme dialled it.
+    let (read_only, condition, server_state_error) = match fetch_conditions(&client).await {
+        Ok((read_only, condition, clustered)) => {
+            if clustered {
+                return Err(ConnectError::Cluster);
+            }
+            (read_only, condition, None)
+        }
         Err(e) => (None, None, Some(describe(&e))),
     };
     Ok((
@@ -244,6 +281,19 @@ pub async fn connect_with(
 pub async fn server_conditions(
     client: &Client,
 ) -> Result<(Option<ReadOnlyReason>, Option<ServerCondition>), Error> {
+    let (read_only, condition, _clustered) = fetch_conditions(client).await?;
+    Ok((read_only, condition))
+}
+
+/// `server_conditions`'s own fetch and parse, plus whether `INFO` reports
+/// Cluster mode — one `INFO` read shared by both, so the Cluster check added
+/// by ADR-0021 does not cost a second round trip. `server_conditions` stays
+/// the public, Cluster-unaware entry point `terminal.rs`'s reconnect path
+/// already calls; `connect_with` calls this directly so it can see the
+/// `clustered` flag too.
+async fn fetch_conditions(
+    client: &Client,
+) -> Result<(Option<ReadOnlyReason>, Option<ServerCondition>, bool), Error> {
     // Propagated, not defaulted: an ACL without `info` makes this `Err`, and
     // defaulting to an empty string here is exactly how a replica went
     // unnoticed and got treated as a primary (review M1).
@@ -280,7 +330,16 @@ pub async fn server_conditions(
         None
     };
 
-    Ok((read_only, condition))
+    // Both `INFO server`'s `redis_mode:cluster` and `INFO cluster`'s
+    // `cluster_enabled:1` report Cluster mode (confirmed against a real
+    // `redis:7-alpine --cluster-enabled yes` container, 2026-10-03); both are
+    // present in the `InfoKind::Default` reply already fetched above, so
+    // checking either adds no extra command. `cluster_enabled:1` is used
+    // because it is the literal boolean flag ADR-0021 and `monitor_config`'s
+    // existing check (`config.server.is_clustered()`) already talk about.
+    let clustered = field("cluster_enabled:").as_deref() == Some("1");
+
+    Ok((read_only, condition, clustered))
 }
 
 async fn server_version(client: &Client) -> Result<Version, ConnectError> {
@@ -397,6 +456,34 @@ mod tests {
         assert_eq!(backoff_for(1), Duration::from_millis(500));
         assert_eq!(backoff_for(3), Duration::from_millis(2_000));
         assert_eq!(backoff_for(20), Duration::from_millis(8_000));
+    }
+
+    /// ADR-0021 / `docs/plans/m4-cluster-refusal.md`: a Cluster-scheme URL is
+    /// refused in `build_config` itself, before any network attempt — no
+    /// Docker needed, this is a pure string/parse check. Every scheme `fred`
+    /// recognises as clustered must be caught, which is why this checks
+    /// `config.server.is_clustered()` rather than string-matching schemes.
+    #[test]
+    fn a_clustered_url_is_refused_before_build_config_returns() {
+        for url in [
+            "redis-cluster://127.0.0.1:30001",
+            "rediss-cluster://127.0.0.1:30001",
+        ] {
+            let err = build_config(url, &Credentials::default())
+                .expect_err("a Cluster-scheme URL must be refused");
+            assert!(
+                matches!(err, ConnectError::Cluster),
+                "expected ConnectError::Cluster for {url}, got {err:?}"
+            );
+        }
+    }
+
+    /// A plain scheme must not trip the Cluster refusal.
+    #[test]
+    fn a_plain_scheme_url_is_not_refused_as_clustered() {
+        let config = build_config("redis://127.0.0.1:6379", &Credentials::default())
+            .expect("a plain redis:// URL must build a Config");
+        assert!(!config.server.is_clustered());
     }
 
     #[test]
