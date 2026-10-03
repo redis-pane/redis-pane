@@ -262,7 +262,13 @@ the decision this milestone makes about it is to refuse it clearly rather than b
 after the beta, designed in [`m5-cluster.md`](plans/m5-cluster.md). M4 ends in a beta (`0.1.0-beta.1`), not
 a 1.0.
 
-**Progress: not started.**
+**Progress: in flight.** Task 1 is done — a Cluster-scheme URL is refused in `build_config`
+before any connection attempt, and a plain `redis://`/`rediss://` URL to a cluster-enabled
+server is refused via the `cluster_enabled:1` check folded into the same `INFO` read
+`connect_with` already made (no second round trip). `infer_environment` now strips
+`-sentinel`/`-cluster` scheme variants too, so a loopback Sentinel URL resolves `local`. See
+[`m4-cluster-refusal.md`](plans/m4-cluster-refusal.md) for the resolved build-time decisions.
+Tasks 2–8 are not started.
 
 | # | Task | Proves |
 |---|---|---|

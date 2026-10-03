@@ -832,6 +832,55 @@ async fn a_refused_info_is_reported_not_treated_as_a_primary() {
     let _ = writer.quit().await;
 }
 
+// ── ADR-0021: Cluster targets are refused, not silently half-served ─────────
+
+async fn start_cluster_enabled() -> (ContainerAsync<GenericImage>, String) {
+    let container = GenericImage::new("redis", "7-alpine")
+        .with_exposed_port(REDIS_PORT)
+        .with_wait_for(WaitFor::message_on_stdout("Ready to accept connections"))
+        .with_cmd(vec!["redis-server", "--cluster-enabled", "yes"])
+        .start()
+        .await
+        .expect("docker must be running for the integration suite");
+    let port = container.get_host_port_ipv4(REDIS_PORT).await.unwrap();
+    (container, format!("redis://127.0.0.1:{port}"))
+}
+
+#[tokio::test]
+#[ignore = "needs docker"]
+async fn a_plain_url_to_a_cluster_enabled_server_is_refused_with_the_adr_0021_diagnostic() {
+    // A single-node `--cluster-enabled yes` container has no multi-node
+    // topology, so this specifically exercises the `cluster_enabled:1`
+    // detection path (the harder of the two — the URL-scheme refusal is a
+    // pure string check, covered without Docker in `crates/app/src/redis/
+    // mod.rs`'s `a_clustered_url_is_refused_before_build_config_returns`).
+    // The scheme here is a plain `redis://`, deliberately not a
+    // `redis-cluster://` URL: nothing about the scheme should matter, only
+    // what the server itself reports.
+    let (_c, url) = start_cluster_enabled().await;
+    let err = redis_pane::redis::connect(&url)
+        .await
+        .expect_err("a cluster-enabled server must be refused, not half-served");
+    assert!(
+        matches!(err, redis_pane::redis::ConnectError::Cluster),
+        "expected ConnectError::Cluster, got {err:?}"
+    );
+    let msg = err.to_string();
+    assert!(
+        msg.contains("ADR-0021"),
+        "the diagnostic must name the deciding ADR: {msg}"
+    );
+    assert!(
+        msg.to_ascii_lowercase().contains("cluster"),
+        "the diagnostic must say what is unsupported: {msg}"
+    );
+    assert!(
+        !msg.to_ascii_lowercase().contains("single node"),
+        "must not suggest pointing at a single node — every node refuses the \
+         same way: {msg}"
+    );
+}
+
 #[tokio::test]
 #[ignore = "needs docker"]
 async fn a_replica_turns_on_read_only_mode_before_any_write_is_attempted() {

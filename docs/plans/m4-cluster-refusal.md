@@ -1,6 +1,51 @@
 # M4 task 1: Refuse Cluster targets
 
-Status: **planning — not started.**
+Status: **done** (2026-10-03).
+
+## Resolved build-time decisions
+
+The three points this plan flagged "confirm at build time" were checked against real behaviour
+rather than guessed:
+
+1. **URL-scheme detection.** `fred::Config::from_url` matches on scheme *suffix*
+   (`fred-10.1.0/src/utils.rs`'s `url_is_clustered`: `url.scheme().ends_with("-cluster")`), which
+   covers `redis-cluster`, `rediss-cluster`, `valkey-cluster` and `valkeys-cluster` in one check.
+   `build_config` (`crates/app/src/redis/mod.rs`) checks `config.server.is_clustered()` right
+   after `Config::from_url` succeeds, per the plan's preference — this covers every spelling
+   `fred` accepts without a scheme string list of our own to keep in sync with fred's.
+2. **`INFO` field.** Confirmed against a real `redis:7-alpine --cluster-enabled yes` container:
+   both `INFO server`'s `redis_mode:cluster` and `INFO cluster`'s `cluster_enabled:1` are present,
+   and both are already included in the `InfoKind::Default` reply `server_conditions` fetches —
+   no extra round trip either way. `cluster_enabled:1` was chosen, for consistency with
+   `monitor_config`'s existing `config.server.is_clustered()` check and this ADR's own wording.
+   `server_conditions`'s single `client.info(Some(InfoKind::Default))` call was factored into a
+   private `fetch_conditions` that returns the cluster flag alongside the existing
+   `(read_only, condition)` pair; `server_conditions` itself keeps its old signature (and callers)
+   by discarding the flag, so `connect_with` is the only caller that acts on it.
+3. **Wording**, confirmed against a real run
+   (`cargo run -p redis-pane -- --url redis://127.0.0.1:<port>` against the container above):
+   ```
+   redis-pane: cannot connect to redis://127.0.0.1:<port> (local, from flag)
+     Redis Cluster is not supported yet (planned for M5, ADR-0021) — use `redis-cli -c` for this server meanwhile
+   ```
+   The first line is `main.rs`'s existing `startup_failure` format (target, Environment, Source);
+   the second is `ConnectError::Cluster`'s `Display`. It names ADR-0021, says what to do instead,
+   and does not suggest pointing at a single node. It is one line on purpose: the same text is the
+   in-app notification when a reconnect lands on a Cluster (see "Reconnect path"), and the status
+   bar has one row.
+
+**Reconnect path.** `Command::Reconnect`'s `Reconnect::schedule` (`crates/app/src/terminal.rs`)
+calls the same `crate::redis::connect_with`, so a server that becomes cluster-enabled mid-session
+is caught the same way on the next reconnect attempt: `ConnectError::Cluster`'s message reaches
+the user as a `Msg::Failed` notification naming ADR-0021, exactly like any other reconnect
+failure. It is not treated as terminal, though — `Reconnect::schedule` has no notion of a
+permanent failure, so it keeps retrying on the usual backoff (capped at 8s) and re-notifying on
+every attempt until the session is quit. `watch_link`'s own reconnect handler (the one driven by
+fred's own `reconnect_rx`, which only fires if a `ReconnectPolicy` is ever configured — it isn't
+today) calls `server_conditions` directly, which does *not* expose the cluster flag, so that path
+would not catch a mid-session flip to cluster mode. Left as-is per this task's scope: real
+per-node Cluster support, not a better mid-session refusal, is M5's job (ADR-0021's "what real
+support must solve").
 
 ## Context
 
