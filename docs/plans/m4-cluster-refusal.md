@@ -56,9 +56,12 @@ code facts that drive the fix:
    second independent check at the feed layer is a reasonable defense in depth even though the
    top-level startup refusal should mean it never fires in practice.
 5. **Wording.** The diagnostic should say what a reader can do about it, not just that it failed —
-   propose something like: `redis-pane does not support Cluster yet (ADR-0021). Target: <url>
-   (Source: <source>). Point at a single node or a Sentinel-fronted deployment instead.`
-   **Confirm the exact wording at build time** against ADR-0009's established diagnostic format.
+   propose something like: `redis-pane does not support Redis Cluster yet — it is planned for
+   milestone M5 (ADR-0021). Target: <url> (Source: <source>). Use redis-cli -c for this server
+   meanwhile.` Do **not** suggest pointing at a single node: every node of a Cluster reports
+   `cluster_enabled:1` and is refused the same way, so that advice would only lead to a second
+   refusal. **Confirm the exact wording at build time** against ADR-0009's established diagnostic
+   format.
 
 ## Architecture
 

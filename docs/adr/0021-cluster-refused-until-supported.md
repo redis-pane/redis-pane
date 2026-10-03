@@ -41,10 +41,11 @@ which is why it is the highest-risk task in M4's task table.
 
 ## Decision
 
-**Cluster stays out past M4.** It is no longer scheduled for M4 at all (PRD §9 previously named
-it there); real support is deferred again, to whenever it is next picked up.
+**Cluster stays out of M4 and becomes its own milestone, M5, after the beta** (decided
+2026-10-03; PRD §9). Its design is [`plans/m5-cluster.md`](../plans/m5-cluster.md). The refusal
+below is that plan's stage 0, and M5 will supersede it with an ADR of its own.
 
-**Until Cluster is supported, a Cluster target is refused at startup with a clear diagnostic,**
+**Until M5 delivers Cluster support, a Cluster target is refused at startup with a clear diagnostic,**
 rather than connected and silently served from one arbitrary node. Detection is two-layered, so
 neither a URL nor a topology check alone has to carry it:
 
@@ -79,7 +80,7 @@ exit — never a half-working session that looks connected while quietly coverin
 
 ## Consequences
 
-- R1.11 and PRD §3's non-goal both now say Cluster is past M4, not merely out of v1.
+- R1.11 and PRD §3's non-goal both now say Cluster is M5, not merely out of v1.
 - `infer_environment` (`crates/core/src/resolve.rs`) strips only the `redis://` and `rediss://`
   prefixes today, so a loopback `redis-cluster://` or `redis-sentinel://` URL falls through to
   `Environment::Unknown` rather than `Local` — correct by accident for Cluster (which this ADR

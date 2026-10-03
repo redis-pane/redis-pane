@@ -1,5 +1,42 @@
 # M4 — Scale & polish: task plan and per-task docs
 
+## Amendment (2026-10-03): Cluster becomes M5
+
+After the Cluster analysis, the user chose to make **Cluster its own milestone after the beta
+(M5)**. M4 still opens with the refusal (task 1), which is the safe state until M5 lands. Changes
+to the open planning PR #54, on the `m4-planning` branch, before it merges:
+
+- **`docs/plans/m5-cluster.md` (new):** the Cluster design from the 2026-10-03 analysis, so it
+  isn't lost:
+  - what a Cluster changes (slots, per-node commands, per-node tracking, db 0 only, `CROSSSLOT`,
+    topology changes);
+  - the design for each feature:
+    - title bar `cluster · N primaries`, and `redis-cli -c` for copied commands;
+    - a merged N-cursor scan with progress summed over primaries, and "the cluster changed during
+      the scan — r to rescan" on topology change;
+    - owner-pinned `CLIENT CACHING` (arming and read pinned to the key's slot), re-armed only when
+      the owner node reconnects, and re-armed on the new owner when a key moves;
+    - a `CROSSSLOT` guard for rename and copy, bulk delete grouped by node, and move-across-db
+      hidden;
+    - Dashboard aggregated by default with a node table and `Enter` to drill into one node, which
+      is a drill-down inside a view, not a connection switch, so ADR-0005 holds;
+    - a merged Slowlog with a NODE column, where reset confirms "on N nodes";
+    - Monitor merged across primaries, with a cost banner naming N;
+    - sharded Pub/Sub chips (`SSUBSCRIBE`);
+    - the `replica` read-only reason narrowed;
+  - the test-harness cost (a real 3-primary cluster in testcontainers, and the announce-address
+    pitfalls);
+  - the pros and cons;
+  - stages 1 to 4 as M5's task list (stage 0, the refusal, is M4 task 1).
+- **`docs/PRD.md`:** add an **M5 — Cluster** milestone after M4. The Cluster non-goal and R1.11
+  now point to M5, not "past M4".
+- **`docs/PLAN.md`:** §7 and §8 say Cluster is M5 (`m5-cluster.md`), not "deferred indefinitely".
+- **ADR-0021:** the decision reads "refused at startup until M5 delivers support". Link
+  `m5-cluster.md`.
+- **M4 task 1 ([`m4-cluster-refusal.md`](m4-cluster-refusal.md)):** the diagnostic wording points to M5. Scope unchanged.
+
+Everything below stands as approved.
+
 ## Context
 
 M3 is complete (alpha.18). The PRD defines M4 as "Cluster support, million-key performance
@@ -73,7 +110,7 @@ no `docs/plans/m4-*.md`. Research into the current code found:
 | 5 | **Themes** ([`m4-themes.md`](m4-themes.md)) | `Theme` becomes data: a token→colour palette per colour depth. Built-ins are dark (today's), light and high-contrast, all checked for WCAG AA contrast by a test. The theme is chosen by an additive config field `theme` and a `--theme` flag. User themes are token→colour maps in config, unknown tokens a parse error. Goldens exist for light and high-contrast (ADR-0011's promise). `NO_COLOR` treats an empty value as unset, per no-color.org. |
 | 6 | **ASCII glyph fallback** ([`m4-glyphs.md`](m4-glyphs.md)) | Every hard-coded glyph (`✕ ⊘ ✎ ▌ ● ○ ⁎ ⟡ ▶`, sparkline and bar blocks, box drawing where needed) goes through one glyph set with a Unicode and an ASCII variant. A test enforces width-identical variants. ASCII is chosen by config or flag, or automatically when the locale isn't UTF-8. Goldens exist in ASCII mode. |
 | 7 | **Session restore** ([`m4-session-restore.md`](m4-session-restore.md)) | Per ADR-0003, a state file at `$XDG_STATE_HOME/redis-pane/state.json`, keyed per target (no secrets), restores pane split, tree/flat, sort, filter and the selected key on relaunch. The app still never writes config. A corrupt or old file is ignored with a notice, never a crash. Writes are atomic (temp file plus rename) and happen on quit and on change, debounced. |
-| 8 | **Close out M4 → beta** ([`m4-close-out.md`](m4-close-out.md)) | PLAN/PRD marked complete. ALPHA.md becomes beta notes (what to try covers themes, glyphs, restore). README status says beta. Release `0.1.0-beta.1`. Packaging remains the open end-of-alpha decision, recorded in PRD §10. |
+| 8 | **Close out M4 → beta** | PLAN/PRD marked complete. ALPHA.md becomes beta notes (what to try covers themes, glyphs, restore). README status says beta. Release `0.1.0-beta.1`. Packaging remains the open end-of-alpha decision, recorded in PRD §10. |
 
 **Risk order:**
 1. Task 1, because it's a live correctness and safety gap today.

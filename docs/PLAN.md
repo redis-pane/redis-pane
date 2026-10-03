@@ -258,7 +258,8 @@ wants back exactly as they left it — without giving up anything M0–M3 settle
 PRD §9 previously listed under this milestone, does not ship here: a Cluster target quietly
 misbehaves today (one arbitrary node's `SCAN`/`INFO`/tracking reported as the whole truth), and
 the decision this milestone makes about it is to refuse it clearly rather than build it —
-[ADR-0021](adr/0021-cluster-refused-until-supported.md). M4 ends in a beta (`0.1.0-beta.1`), not
+[ADR-0021](adr/0021-cluster-refused-until-supported.md). Real support is its own milestone, M5,
+after the beta, designed in [`m5-cluster.md`](plans/m5-cluster.md). M4 ends in a beta (`0.1.0-beta.1`), not
 a 1.0.
 
 **Progress: not started.**
@@ -296,9 +297,9 @@ files touched, tests, the CLAUDE.md rules it binds, and what stays out of scope:
 ## 8. Explicitly not in M0–M3
 
 Palette, Console, dashboard, monitor, pub/sub, slowlog (M3) — Console cut, Palette shipped then
-withdrawn (ADR-0020), see §6 above. Cluster is past M4, not merely M4 — see §7 and
-[ADR-0021](adr/0021-cluster-refused-until-supported.md): until a Cluster target is supported it
-is refused at startup, not quietly served. Themes beyond the two M0 defaults, the ASCII glyph
+withdrawn (ADR-0020), see §6 above. Cluster is milestone M5, after the beta — designed in
+[`m5-cluster.md`](plans/m5-cluster.md); until it ships, a Cluster target is refused at startup,
+not quietly served (§7, [ADR-0021](adr/0021-cluster-refused-until-supported.md)). Themes beyond the two M0 defaults, the ASCII glyph
 fallback, session restore, and the million-key performance work are M4 (§7). Packaging and
 distribution beyond the alpha's raw GitHub Release archives is a decision parked to the end of
 alpha (PRD §9, §10) — M4 ships no official packages. Keybinding overrides from config are

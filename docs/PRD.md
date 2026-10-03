@@ -60,10 +60,10 @@ excuse.
 - **Not a multi-target workspace.** One Connection per process, one database per Connection.
   A second target means a second terminal. See
   [ADR-0005](adr/0005-one-connection-per-process.md).
-- **No Cluster support in v1, and not in M4 either.** Sentinel ships; Cluster is deferred past M4
-  because per-node `SCAN`, `INFO` and tracking reintroduce a node selector into a UI built on
-  having nothing to select. Until it is supported, a Cluster target is refused clearly at
-  startup rather than quietly served from one arbitrary node. See
+- **No Cluster support in v1 or M4.** Sentinel ships; Cluster is its own milestone, M5, after the
+  beta: per-node `SCAN`, `INFO` and tracking need real design work (see
+  [`plans/m5-cluster.md`](plans/m5-cluster.md)). Until it ships, a Cluster target is refused
+  clearly at startup rather than quietly served from one arbitrary node. See
   [ADR-0008](adr/0008-sentinel-in-v1-cluster-deferred.md) and
   [ADR-0021](adr/0021-cluster-refused-until-supported.md).
 - **Nothing older than Redis 6.0**, and RESP2 is not spoken at all
@@ -111,9 +111,10 @@ config file; a **Connection** is a live session, which may be **ad-hoc** (no Pro
   `--tls`/`--user`/`--password` flags, which always take precedence over a Profile's or the
   environment's credentials (ADR-0001).
 - **R1.11** Sentinel topology discovery, with failover surfacing as a reconnect to the new
-  address. Cluster is **not** in v1, and is now past M4 as well — a Cluster target (by URL
-  scheme or a detected `cluster_enabled:1`) is refused at startup with a clear diagnostic until
-  it is supported. See [ADR-0008](adr/0008-sentinel-in-v1-cluster-deferred.md),
+  address. Cluster is **not** in v1; it is milestone M5 (§9,
+  [`plans/m5-cluster.md`](plans/m5-cluster.md)). Until then a Cluster target (by URL scheme or a
+  detected `cluster_enabled:1`) is refused at startup with a clear diagnostic. See
+  [ADR-0008](adr/0008-sentinel-in-v1-cluster-deferred.md),
   [ADR-0021](adr/0021-cluster-refused-until-supported.md), and §5.
 - **R1.12** Exactly one Connection per process, against exactly one database, fixed at launch.
   There is no in-app connection switcher and no `SELECT`.
@@ -278,14 +279,20 @@ config file; a **Connection** is a live session, which may be **ad-hoc** (no Pro
   and 250MB RSS budgets measured and held at 1M keys), themes (light and high-contrast built-ins
   alongside today's dark default, plus user themes as config data), an ASCII glyph fallback for
   non-Nerd-Font and non-UTF-8 terminals, and session restore (pane split, tree/flat, sort, filter
-  and selected key, keyed per target, under `$XDG_STATE_HOME`). **Cluster support moves past M4**:
-  a Cluster target is refused clearly at startup instead — see
+  and selected key, keyed per target, under `$XDG_STATE_HOME`). **Cluster support moves to M5**;
+  in M4 a Cluster target is refused clearly at startup instead — see
   [ADR-0021](adr/0021-cluster-refused-until-supported.md). *Raw binary distribution (GitHub
   Release archives for macOS, Linux, and Windows, via `cargo-dist`) shipped ahead of M4 as a
   low-risk alpha-testing convenience — no code signing, no package manager.* Official packaging
   (Homebrew, musl/arm64 Linux, macOS signing and notarization, Windows signing) is wanted but its
   scheduling is **decided at the end of alpha**, not in M4 — see §10. M4 ends in a beta,
   `0.1.0-beta.1`, not a 1.0.
+- **M5 — Cluster.** After the beta. Browse, view, live updates and edit across every primary
+  (merged scan, liveness armed on the key's owner node, per-node reconnect), then the server
+  views made cluster-aware (an aggregated Dashboard with a node table, merged Slowlog and Monitor,
+  sharded Pub/Sub) — without a connection switcher, so ADR-0005 holds. Designed in
+  [`plans/m5-cluster.md`](plans/m5-cluster.md); until it ships a Cluster target is refused
+  ([ADR-0021](adr/0021-cluster-refused-until-supported.md)).
 
 ## 10. Open questions
 
