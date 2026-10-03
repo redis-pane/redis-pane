@@ -91,6 +91,15 @@ impl KeyView {
         self.order.is_empty()
     }
 
+    /// Heap bytes held by the order index alone (ADR-0010: "roughly 45MB of
+    /// names plus ~15MB of indices at 1M keys" — this is the indices half,
+    /// ~4MB/1M rows). Used by the M4 memory-budget test to account for the
+    /// `View` alongside [`LoadedSet::heap_bytes`](super::loaded::LoadedSet::heap_bytes),
+    /// which only covers the arena itself.
+    pub fn heap_bytes(&self) -> usize {
+        self.order.capacity() * std::mem::size_of::<u32>()
+    }
+
     /// The Loaded set index shown at this row.
     pub fn index_at(&self, row: usize) -> Option<usize> {
         self.order.get(row).map(|i| *i as usize)

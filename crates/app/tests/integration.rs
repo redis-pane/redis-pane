@@ -577,6 +577,99 @@ async fn cancelling_stops_the_traversal_promptly_and_keeps_what_arrived() {
     let _ = writer.quit().await;
 }
 
+// ── M4 task 2 — first ScanBatch and "interactive" are fast at 100k keys ────
+//
+// `docs/plans/m4-perf-harness.md` decision 3: PRD §7's "first ScanBatch
+// <150ms, interactive <1s" figures, measured against a real server rather
+// than a synthetic `State` — this is inherently about round-trip latency,
+// which `crates/core/tests/perf.rs`'s synthetic-`State` tests cannot see.
+// Run by the existing Docker-backed `integration` CI job, not a new one: it
+// already runs on every push, PR and nightly, and needs the same
+// container-per-test machinery every other test in this file uses.
+//
+// As with every budget in this task: a number the current code does not yet
+// meet must not turn CI red. Where the measured local baseline already beats
+// the PRD target, the assertion *is* the target. Where it does not, the
+// assertion is the measured baseline × 1.5 (rounded up), labelled as a
+// regression ceiling rather than the target, with the target named alongside
+// it — tightened once M4 task 3 (the `scan_batch`/`rebuild_list` hot path)
+// lands.
+#[tokio::test]
+#[ignore = "needs docker"]
+async fn first_scan_batch_and_interactive_are_fast_at_100k_keys() {
+    let (_c, url) = start("redis", "7-alpine").await;
+    let writer = seed(&url, 100_000).await;
+
+    let (client, _) = redis_pane::redis::connect(&url).await.unwrap();
+    let (tx, mut rx) = tokio::sync::mpsc::channel(64);
+    let cancel = CancellationToken::new();
+
+    // Measured from the moment the scan is issued (after `connect` has
+    // already completed above) — "connect → first ScanBatch" and
+    // "connect → interactive", exactly as PLAN names them.
+    let t0 = std::time::Instant::now();
+    let pump = tokio::spawn(async move {
+        let mut state = State::default();
+        let mut first_batch: Option<Duration> = None;
+        let mut interactive: Option<Duration> = None;
+        while let Some(msg) = rx.recv().await {
+            let is_batch = matches!(msg, Msg::ScanBatch { .. });
+            let done = matches!(msg, Msg::ScanComplete | Msg::ScanFailed { .. });
+            let (next, _cmds) = update(state, msg);
+            state = next;
+            if is_batch && first_batch.is_none() {
+                first_batch = Some(t0.elapsed());
+            }
+            // "Interactive" is defined precisely as: the first `ScanBatch`
+            // has been folded into the core (`state.keys` non-empty) *and* a
+            // frame has actually been rendered from that state — not merely
+            // received on the channel. Rendering, not just folding, is what
+            // proves the list is paintable right now, which is the thing a
+            // reader actually experiences as "the app responded."
+            if interactive.is_none() && !state.keys.is_empty() {
+                let _ = redis_pane_core::render::frame(
+                    &state,
+                    &redis_pane_core::theme::Theme::new(
+                        redis_pane_core::theme::ColorDepth::Monochrome,
+                    ),
+                    &redis_pane_core::clock::FixedClock(0),
+                    ratatui::layout::Rect::new(0, 0, 130, 26),
+                );
+                interactive = Some(t0.elapsed());
+            }
+            if done {
+                break;
+            }
+        }
+        (state, first_batch, interactive)
+    });
+
+    redis_pane::redis::scan::stream_keys(&client, None, tx, cancel).await;
+    let (state, first_batch, interactive) = pump.await.unwrap();
+
+    assert!(state.keys.len() >= 100_000, "scanned {}", state.keys.len());
+    let first_batch = first_batch.expect("at least one ScanBatch must have arrived");
+    let interactive = interactive.expect("the list must have become paintable");
+    println!("connect -> first ScanBatch @ 100k keys: {first_batch:?}");
+    println!("connect -> interactive @ 100k keys:     {interactive:?}");
+
+    // AT TARGET: PRD §7's 150ms. Measured locally (loopback Docker, debug
+    // build) in the low single-digit milliseconds — the connection and the
+    // first page are not the slow part of this path.
+    assert!(
+        first_batch < Duration::from_millis(150),
+        "first ScanBatch took {first_batch:?}, budget is 150ms"
+    );
+    // AT TARGET: PRD §7's 1s, same reasoning.
+    assert!(
+        interactive < Duration::from_secs(1),
+        "interactive took {interactive:?}, budget is 1s"
+    );
+
+    let _ = client.quit().await;
+    let _ = writer.quit().await;
+}
+
 // ── M1.4 — lazy metadata, fetched only for what is on screen ────────────────
 
 #[tokio::test]

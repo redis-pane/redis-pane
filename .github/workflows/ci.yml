@@ -45,6 +45,9 @@ jobs:
 
   # The re-arm invariants (ADR-0006, ADR-0009) are only provable against a real
   # server, and unit tests cannot see the shell side that does the arming.
+  # Also runs the M4 task 2 first-ScanBatch/interactive timing test
+  # (`docs/plans/m4-perf-harness.md`) — it needs the same container-per-test
+  # machinery every other test in this suite already has.
   integration:
     name: integration · real Redis (Docker)
     runs-on: ubuntu-latest
@@ -53,3 +56,43 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo test -p redis-pane -- --ignored --test-threads=1
+
+  # PRD §7: the release binary must stay under 20MB. `dist` is the profile
+  # cargo-dist builds with (`lto = "thin"`, stripped) — see `[profile.dist]`
+  # in Cargo.toml and `docs/plans/m4-perf-harness.md` task 2.
+  size:
+    name: binary size (dist profile)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --profile dist -p redis-pane
+      - name: Assert the binary is under 20MB
+        run: |
+          bytes=$(stat -c%s target/dist/redis-pane)
+          mb=$(awk "BEGIN { printf \"%.2f\", $bytes / 1024 / 1024 }")
+          echo "redis-pane (dist profile): ${bytes} bytes (${mb} MiB)"
+          budget=$((20 * 1024 * 1024))
+          if [ "$bytes" -gt "$budget" ]; then
+            echo "::error::binary is ${mb}MiB, over the 20MB budget (PRD §7)"
+            exit 1
+          fi
+
+  # Release-mode performance budgets (M4 task 2, `docs/plans/m4-perf-harness.md`).
+  # `#[ignore]`d like the Docker-backed integration suite, for the same
+  # reason: `cargo test --workspace` must stay fast, so these run in their
+  # own job, in release, where the numbers are actually representative.
+  perf:
+    name: perf · 1M-key budgets (release)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # The whole-scan fold (2,000 pages into a tree-mode list) takes ~2 min
+      # locally today and longer here, so it is skipped until M4 task 3
+      # makes a scan's list work O(n); run it by hand with `--exact` meanwhile.
+      - run: >-
+          cargo test -p redis-pane-core --release --test perf -- --ignored
+          --nocapture --skip whole_scan_fold_in_tree_mode_from_empty

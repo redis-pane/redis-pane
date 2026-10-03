@@ -19,3 +19,15 @@ all = { level = "deny", priority = -1 }
 [profile.dist]
 inherits = "release"
 lto = "thin"
+# `true` is Cargo's alias for `strip = "symbols"` (removes both the symbol
+# table and debug info) — not a looser alternative to it, so "true vs
+# symbols" is not actually a choice between two different outcomes. The real
+# alternative is `strip = "debuginfo"`, which keeps the symbol table so a
+# `RUST_BACKTRACE=1` panic still names functions, just without line numbers.
+# `true`/`"symbols"` is used here: this project's own rule is "never panic!
+# on a Redis error" (CLAUDE.md), so a release-build panic is a bug report,
+# not a supported diagnostic path, and reproducing one is done against a
+# debug build locally rather than by reading a stripped release backtrace.
+# The panic message itself (what `assert!`/`panic!` print) is a static
+# string baked in at compile time and is unaffected by stripping either way.
+strip = true
