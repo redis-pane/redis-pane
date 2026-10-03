@@ -268,7 +268,20 @@ server is refused via the `cluster_enabled:1` check folded into the same `INFO` 
 `connect_with` already made (no second round trip). `infer_environment` now strips
 `-sentinel`/`-cluster` scheme variants too, so a loopback Sentinel URL resolves `local`. See
 [`m4-cluster-refusal.md`](plans/m4-cluster-refusal.md) for the resolved build-time decisions.
-Tasks 2–8 are not started.
+Task 2 is done — `[profile.dist]` gained `strip = true` (8.21MiB stripped, well under the 20MB
+budget); a new `size` CI job builds `--profile dist` and fails over 20MB; `crates/core/tests/perf.rs`
+times `update`+render for a scroll keystroke, a filter keystroke, a sort change, toggling tree
+mode and a `ScanBatch` of 500 landing on an already-1M-key set, plus render alone at 1M and a
+memory-accounting test covering `LoadedSet`+`KeyView.order`+`Tree`, all `#[ignore]`d and run by a
+new `perf` CI job in release; `crates/app/tests/integration.rs` gained a Docker-backed timing test
+for first-`ScanBatch`/interactive at 100k keys, run by the existing `integration` job. Baseline
+numbers are in [`m4-perf-harness.md`](plans/m4-perf-harness.md)'s table: 9 of 13 timing/memory
+metrics already meet the PRD §7 target outright. Four are held to a regression ceiling (1.5× the
+measured baseline) pending tasks 3 and 4, all from the same two causes (`rebuild_list`'s full
+rescan and `Tree::rebuild` on every page): a filter keystroke, toggling tree mode, a scan page
+arriving in tree mode (~130 ms against ~7 ms flat), and the worst page of a whole scan. The
+headline: folding a full 1M-key scan in the default tree view costs about two minutes of CPU,
+during which every page blocks the UI for ~130 ms. Tasks 3–8 are not started.
 
 | # | Task | Proves |
 |---|---|---|

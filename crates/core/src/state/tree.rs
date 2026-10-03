@@ -72,6 +72,18 @@ impl Tree {
         self.rows.get(i).copied()
     }
 
+    /// Heap bytes held by the folded rows and the collapsed-prefix list.
+    /// `Row` carries no key names — every node borrows `(offset, len)` into
+    /// the same arena the `LoadedSet` already owns — so this is just the row
+    /// vector plus whatever a reader has actually clicked shut. Used
+    /// alongside `LoadedSet::heap_bytes` and `KeyView::heap_bytes` by the M4
+    /// memory-budget test.
+    pub fn heap_bytes(&self) -> usize {
+        self.rows.capacity() * std::mem::size_of::<Row>()
+            + self.collapsed.capacity() * std::mem::size_of::<String>()
+            + self.collapsed.iter().map(|s| s.capacity()).sum::<usize>()
+    }
+
     /// The Loaded set index at this row, if the row is a key rather than a group.
     pub fn key_index(&self, row: usize) -> Option<usize> {
         match self.rows.get(row) {

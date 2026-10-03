@@ -1,6 +1,6 @@
 # M4 task 2: Measure first
 
-Status: **planning — not started.**
+Status: **done.**
 
 ## Context
 
@@ -73,19 +73,49 @@ regression in task 3 or 4 would not be caught until someone noticed the app feel
      `#[ignore]`d like the rest of `crates/app/tests/integration.rs`, run by the existing
      integration CI job (it already runs on every push/PR/nightly) rather than a new one, since it
      needs the same container-per-test machinery that suite already has.
-4. **Baseline numbers are recorded in this doc once the harness exists and has run once against
-   this branch — not invented now.** The table below is a placeholder to be filled in during the
-   build, before task 3 touches `scan_batch` or `rebuild_list`:
+4. **Baseline numbers, measured against this branch** (machine: Apple Silicon, local; CI numbers
+   land once the new jobs run there — this table is the local baseline the override rule in the
+   build task compared every ceiling against):
 
-   | Metric | Baseline (fill in) | Budget | Release CI gate? |
-   |---|---|---|---|
-   | Binary size (dist profile, stripped) | — | <20MB | yes, new job |
-   | `update()` on a filter keystroke, 1M keys | — | <16ms | yes, `--release`, `#[ignore]`d |
-   | `update()` on a sort change, 1M keys | — | <16ms | yes, `--release`, `#[ignore]`d |
-   | Render, 1M keys (existing 200k case extended) | — | <16ms | yes, `--release`, `#[ignore]`d |
-   | `LoadedSet` + `View.order` heap bytes, 1M keys | — | <250MB RSS equivalent | yes, debug-safe (pure arithmetic) |
-   | First `ScanBatch`, 100k keys | — | <150ms | yes, integration job (Docker) |
-   | Interactive (list usable), 100k keys | — | <1s | yes, integration job (Docker) |
+   | Metric | Baseline (measured) | PRD §7 target | Gate used | Release CI gate? |
+   |---|---|---|---|---|
+   | Binary size (dist profile, stripped) | 8,607,904 bytes (~8.21 MiB) | <20MB | AT TARGET: <20MB | yes, new `size` job |
+   | `update`+render, scroll keystroke, 1M keys | 42.7µs | <16ms | AT TARGET: <16ms | yes, `--release`, `#[ignore]`d |
+   | `update`+render, filter keystroke, 1M keys | 22.27ms | <16ms | CEILING: <34ms (baseline × 1.5), tightened by task 3 | yes, `--release`, `#[ignore]`d |
+   | `update`+render, sort change, 1M keys | 3.76–3.82ms | <16ms | AT TARGET: <16ms | yes, `--release`, `#[ignore]`d |
+   | `update`+render, toggle tree mode, 1M keys | 124–129ms | <16ms | CEILING: <194ms (baseline × 1.5), tightened by task 4 | yes, `--release`, `#[ignore]`d |
+   | `update`+render, `ScanBatch` of 500 into 1M keys — flat, scan order | 2.29–2.52ms | n/a (held to the 16ms bar every update pays) | AT TARGET: <16ms | yes, `--release`, `#[ignore]`d |
+   | `update`+render, `ScanBatch` of 500 into 1M keys — **tree mode (the default view)** | 129.6–130.7ms | n/a (16ms bar) | CEILING: <195ms (baseline × 1.5), tightened by task 3/4 | yes, `--release`, `#[ignore]`d |
+   | `update`+render, `ScanBatch` of 500 into 1M keys — flat, sorted by Name | 6.79–7.01ms | n/a (16ms bar) | AT TARGET: <16ms | yes, `--release`, `#[ignore]`d |
+   | Whole scan, 2,000 pages of 500, folded into the core one page at a time, **tree mode from empty** — total | 120.4–121.8s | not named by PRD §7 directly; recorded for task 3/4's before/after | observed, not asserted | yes, `--release`, `#[ignore]`d (wall-capped at 240s; both runs finished uncapped) |
+   | Same run — worst single page | 137–251ms | <16ms (one frame) | CEILING: <378ms (baseline × 1.5, from the 251ms run), tightened by task 3/4 | yes, `--release`, `#[ignore]`d |
+   | Render alone, 1M keys | 40.4–42.6µs | <16ms | AT TARGET: <16ms | yes, `--release`, `#[ignore]`d |
+   | `LoadedSet` + `KeyView.order` + `Tree` heap bytes, 1M keys | 75.8MB (40.0 + 3.8 + 32.0) | <250MB RSS (half-budget margin, matching the existing arena-only test) | AT TARGET: <125MB | yes, `--release`, `#[ignore]`d (pure arithmetic, debug-safe too) |
+   | First `ScanBatch`, 100k keys | 1.93–2.08ms (loopback Docker, debug build) | <150ms | AT TARGET: <150ms | yes, integration job (Docker) |
+   | Interactive (first batch folded + a frame rendered), 100k keys | 2.70–2.92ms (loopback Docker, debug build) | <1s | AT TARGET: <1s | yes, integration job (Docker) |
+
+   **Revised picture after measuring tree mode specifically** (tree mode is the app's *default*
+   view — the first cut of this table measured only the flat/scan-order case, which understated
+   the real cost): the earlier note below that `ScanBatch`-into-1M "already lands inside the
+   16ms bar" was true only in flat scan order. In tree mode — what a fresh launch actually runs —
+   the same single page costs **~18× more** (130ms vs 7ms), because `rebuild_list` in tree mode
+   pays for a full Name sort *and* a full `Tree::rebuild` on every page, not just the final one.
+   The whole-scan-fold test confirms this compounds exactly as expected: folding a full 1M-key
+   scan page by page in tree mode takes ~2 minutes total locally, with the worst single page
+   (observed near the 900–995k mark, not uniformly at the end — some run-to-run jitter, both
+   values well above 16ms) costing 137–251ms. Total time tracks roughly linearly with keyspace
+   size reached so far (~120s actual vs. a back-of-envelope ~124s linear extrapolation from the
+   single-page-at-1M number), not the quadratic blowup a naive "rebuild cost scales with n,
+   charged n times" model would predict if it were badly superlinear — reassuring for task 3/4's
+   scope, but the *total* user-visible wait (two minutes to finish scanning 1M keys in the
+   default view) is the real finding here, not just the per-page ceiling.
+
+   Of the thirteen timing/memory metrics above, nine are already at the PRD §7 target; the
+   flat/scan-order `ScanBatch` case, the filter keystroke, and toggling tree mode remain at a
+   regression ceiling, and the two new tree-mode-specific cases (`ScanBatch` in tree mode, and the
+   whole-scan-fold's worst page) join them — all five ceiling rows point at the same two causes:
+   `rebuild_list`'s full-keyspace rescan (task 3) and `Tree::rebuild`'s per-page full rebuild
+   (task 4). Tree mode is where both tasks will be judged.
 
 ## Architecture
 
