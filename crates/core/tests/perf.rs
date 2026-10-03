@@ -154,11 +154,12 @@ fn filter_keystroke_at_1m_keys() {
     println!("filter keystroke @ 1M keys: {elapsed:?}");
     // CEILING: PRD §7 target is 16ms; a full-keyspace rescan on every
     // character is exactly what task 3 is scoped to fix. Local baseline
-    // measured ~22.3ms; ceiling = baseline × 1.5, rounded up to 34ms.
+    // measured ~22.3ms, but CI's ubuntu runner measured 31.2ms, so the
+    // ceiling is the slower machine's baseline × 1.5, rounded up: 47ms.
     // Tightened by M4 task 3.
     assert!(
-        elapsed < Duration::from_millis(34),
-        "filter keystroke took {elapsed:?}, ceiling is 34ms (target 16ms, M4 task 3)"
+        elapsed < Duration::from_millis(47),
+        "filter keystroke took {elapsed:?}, ceiling is 47ms (target 16ms, M4 task 3)"
     );
 }
 

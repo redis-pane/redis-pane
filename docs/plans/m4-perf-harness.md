@@ -81,7 +81,7 @@ regression in task 3 or 4 would not be caught until someone noticed the app feel
    |---|---|---|---|---|
    | Binary size (dist profile, stripped) | 8,607,904 bytes (~8.21 MiB) | <20MB | AT TARGET: <20MB | yes, new `size` job |
    | `update`+render, scroll keystroke, 1M keys | 42.7µs | <16ms | AT TARGET: <16ms | yes, `--release`, `#[ignore]`d |
-   | `update`+render, filter keystroke, 1M keys | 22.27ms | <16ms | CEILING: <34ms (baseline × 1.5), tightened by task 3 | yes, `--release`, `#[ignore]`d |
+   | `update`+render, filter keystroke, 1M keys | 22.27ms (CI: 31.2ms) | <16ms | CEILING: <47ms (CI baseline × 1.5 — CI is the slower machine here), tightened by task 3 | yes, `--release`, `#[ignore]`d |
    | `update`+render, sort change, 1M keys | 3.76–3.82ms | <16ms | AT TARGET: <16ms | yes, `--release`, `#[ignore]`d |
    | `update`+render, toggle tree mode, 1M keys | 124–129ms | <16ms | CEILING: <194ms (baseline × 1.5), tightened by task 4 | yes, `--release`, `#[ignore]`d |
    | `update`+render, `ScanBatch` of 500 into 1M keys — flat, scan order | 2.29–2.52ms | n/a (held to the 16ms bar every update pays) | AT TARGET: <16ms | yes, `--release`, `#[ignore]`d |
@@ -100,21 +100,23 @@ regression in task 3 or 4 would not be caught until someone noticed the app feel
    16ms bar" was true only in flat scan order. In tree mode — what a fresh launch actually runs —
    the same single page costs **~18× more** (130ms vs 7ms), because `rebuild_list` in tree mode
    pays for a full Name sort *and* a full `Tree::rebuild` on every page, not just the final one.
-   The whole-scan-fold test confirms this compounds exactly as expected: folding a full 1M-key
-   scan page by page in tree mode takes ~2 minutes total locally, with the worst single page
-   (observed near the 900–995k mark, not uniformly at the end — some run-to-run jitter, both
-   values well above 16ms) costing 137–251ms. Total time tracks roughly linearly with keyspace
-   size reached so far (~120s actual vs. a back-of-envelope ~124s linear extrapolation from the
-   single-page-at-1M number), not the quadratic blowup a naive "rebuild cost scales with n,
-   charged n times" model would predict if it were badly superlinear — reassuring for task 3/4's
-   scope, but the *total* user-visible wait (two minutes to finish scanning 1M keys in the
-   default view) is the real finding here, not just the per-page ceiling.
+   The whole-scan-fold test confirms the O(n²) the plan predicted: each page's cost is
+   proportional to the keys already loaded, so 2,000 pages cost roughly 2,000 × (130 ms ÷ 2) ≈
+   130 s — and ~120 s was measured locally. The worst single page (observed near the 900–995k
+   mark, with some run-to-run jitter) cost 137–251 ms. The user-visible result is the real
+   finding: about two minutes of CPU to finish scanning 1M keys in the default view, during which
+   every page blocks the UI for over 100 ms.
 
-   Of the thirteen timing/memory metrics above, nine are already at the PRD §7 target; the
-   flat/scan-order `ScanBatch` case, the filter keystroke, and toggling tree mode remain at a
-   regression ceiling, and the two new tree-mode-specific cases (`ScanBatch` in tree mode, and the
-   whole-scan-fold's worst page) join them — all five ceiling rows point at the same two causes:
-   `rebuild_list`'s full-keyspace rescan (task 3) and `Tree::rebuild`'s per-page full rebuild
+   **CI numbers** (ubuntu-latest, first run on PR #58): scroll 0.10 ms, sort change 5.4 ms, render
+   0.06 ms, scan page flat 3.8 ms / name-sorted 8.0 ms / tree mode 60.7 ms, tree toggle 60.2 ms,
+   filter keystroke 31.2 ms. CI is slower than the local machine on the flat paths and faster on
+   the tree paths. Only the filter ceiling needed raising (34 → 47 ms, from CI's own baseline);
+   every other gate has at least 2× headroom on both machines.
+
+   Of the thirteen timing/memory metrics above, nine are already at the PRD §7 target. Four sit on
+   a regression ceiling — the filter keystroke, toggling tree mode, a `ScanBatch` in tree mode, and
+   the whole-scan fold's worst page — and all four come from the same two causes:
+   `rebuild_list`'s full-keyspace rescan (task 3) and `Tree::rebuild`'s full rebuild on every page
    (task 4). Tree mode is where both tasks will be judged.
 
 ## Architecture
