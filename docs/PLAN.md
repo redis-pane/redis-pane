@@ -250,14 +250,64 @@ and Pub-Sub both depend on, so it is its own doc rather than duplicated in each)
 [`m3-pubsub.md`](plans/m3-pubsub.md), and [`m3-dashboard.md`](plans/m3-dashboard.md) — the last
 opens with the descope alternative as a named decision point, not buried in prose.
 
-## 7. Explicitly not in M0, M1 or M2
+## 7. M4 — Scale & polish
+
+Proves: the app holds up past the sizes and shapes M0–M3 were built and tested against — a
+million-key keyspace, a terminal that cannot show truecolor or Unicode, a session the reader
+wants back exactly as they left it — without giving up anything M0–M3 settled. Cluster, which
+PRD §9 previously listed under this milestone, does not ship here: a Cluster target quietly
+misbehaves today (one arbitrary node's `SCAN`/`INFO`/tracking reported as the whole truth), and
+the decision this milestone makes about it is to refuse it clearly rather than build it —
+[ADR-0021](adr/0021-cluster-refused-until-supported.md). Real support is its own milestone, M5,
+after the beta, designed in [`m5-cluster.md`](plans/m5-cluster.md). M4 ends in a beta (`0.1.0-beta.1`), not
+a 1.0.
+
+**Progress: not started.**
+
+| # | Task | Proves |
+|---|---|---|
+| 1 | Refuse Cluster targets ([`m4-cluster-refusal.md`](plans/m4-cluster-refusal.md)) | A `redis-cluster://` URL or a Cluster-mode server (detected via `INFO cluster`'s `cluster_enabled:1`, so a plain `redis://` URL to a cluster node is caught too) fails at startup with a diagnostic naming ADR-0021, never a half-working session. `infer_environment` recognises `-sentinel`/`-cluster` schemes, so a loopback Sentinel URL is `local`, not `unknown`. Integration test against a real `cluster-enabled yes` container |
+| 2 | Measure first ([`m4-perf-harness.md`](plans/m4-perf-harness.md)) | Each PRD §7 metric that can be measured has a repeatable check: release binary <20 MB as a CI step on the release profile; `update` + render at 1M keys within 16 ms (scroll, filter keystroke, sort); Loaded-set plus view memory at 1M keys inside 250 MB (core-side accounting); first `ScanBatch` <150 ms and interactive <1 s at 100k keys, as an integration timing test. The release profile gets `strip`. Baseline numbers are recorded in the doc before tasks 3–4, so the wins are measured, not claimed |
+| 3 | Million-key scan ([`m4-perf-scan.md`](plans/m4-perf-scan.md)) | Scanning 1M keys does O(n) total list work, not O(n²): the view extends incrementally per page in scan order, and a full re-sort runs only when a non-scan sort or tree mode is active, deferred or batched. The shell coalesces redraws (one frame per tick, not per `Msg`). The `ttl_read_at` leak in `LoadedSet::clear` is fixed, with a regression test. Task 2's budgets pass at 1M |
+| 4 | Million-key interaction ([`m4-perf-interaction.md`](plans/m4-perf-interaction.md)) | A filter keystroke at 1M keys meets the 16 ms frame budget: it narrows from the previous result when the query extends, and otherwise rebuilds once, debounced. The tree rebuild allocates no per-key `String` or `Vec`, and collapsed-group lookup is O(1). `row_of` uses an inverse index. Metadata fetches are deduplicated and the stale ones cancelled. Budgets pass |
+| 5 | Themes ([`m4-themes.md`](plans/m4-themes.md)) | `Theme` becomes data: a token→colour palette per colour depth. Built-ins are dark (today's), light and high-contrast, all checked for WCAG AA contrast by a test. The theme is chosen by an additive config field `theme` and a `--theme` flag. User themes are token→colour maps in config, unknown tokens a parse error. Goldens exist for light and high-contrast (ADR-0011's promise). `NO_COLOR` treats an empty value as unset, per no-color.org |
+| 6 | ASCII glyph fallback ([`m4-glyphs.md`](plans/m4-glyphs.md)) | Every hard-coded glyph (`✕ ⊘ ✎ ▌ ● ○ ⁎ ⟡ ▶`, sparkline and bar blocks, box drawing where needed) goes through one glyph set with a Unicode and an ASCII variant. A test enforces width-identical variants. ASCII is chosen by config or flag, or automatically when the locale isn't UTF-8. Goldens exist in ASCII mode |
+| 7 | Session restore ([`m4-session-restore.md`](plans/m4-session-restore.md)) | Per ADR-0003, a state file at `$XDG_STATE_HOME/redis-pane/state.json`, keyed per target (no secrets), restores pane split, tree/flat, sort, filter and the selected key on relaunch. The app still never writes config. A corrupt or old file is ignored with a notice, never a crash. Writes are atomic (temp file plus rename) and happen on quit and on change, debounced |
+| 8 | Close out M4 → beta ([`m4-close-out.md`](plans/m4-close-out.md)) | PLAN/PRD marked complete. `ALPHA.md` becomes beta notes (what to try covers themes, glyphs, restore). README status says beta. Release `0.1.0-beta.1`. Packaging remains the open end-of-alpha decision, recorded in PRD §10 |
+
+**Risk order:**
+1. Task 1, because it's a live correctness and safety gap today — a Cluster target already
+   connects and silently serves one node's view as though it were the whole keyspace.
+2. Task 2, before 3 and 4, so optimisations are proven against a measured baseline rather than
+   claimed.
+3. Task 5 before 6, because both reshape how render asks for presentation and task 6 reuses
+   task 5's "presentation as data" pattern.
+4. Task 7, which is independent of the rest and can land in any order relative to them.
+
+### 7.1 Individual plan docs
+
+Each row above has its own doc under `docs/plans/`, in the per-task shape M2 and M3 used —
+context, decisions (with recommended defaults flagged to confirm at build time), architecture,
+files touched, tests, the CLAUDE.md rules it binds, and what stays out of scope:
+[`m4-cluster-refusal.md`](plans/m4-cluster-refusal.md), [`m4-perf-harness.md`](plans/m4-perf-harness.md),
+[`m4-perf-scan.md`](plans/m4-perf-scan.md), [`m4-perf-interaction.md`](plans/m4-perf-interaction.md),
+[`m4-themes.md`](plans/m4-themes.md), [`m4-glyphs.md`](plans/m4-glyphs.md),
+[`m4-session-restore.md`](plans/m4-session-restore.md), and [`m4-close-out.md`](plans/m4-close-out.md).
+
+## 8. Explicitly not in M0–M3
 
 Palette, Console, dashboard, monitor, pub/sub, slowlog (M3) — Console cut, Palette shipped then
-withdrawn (ADR-0020), see §6 above. Cluster, themes beyond the two defaults, packaging (M4).
-Keys-pane liveness, and the other open questions
-in [DESIGN §9](DESIGN.md) — all decidable later without rework, which is why they are still open.
+withdrawn (ADR-0020), see §6 above. Cluster is milestone M5, after the beta — designed in
+[`m5-cluster.md`](plans/m5-cluster.md); until it ships, a Cluster target is refused at startup,
+not quietly served (§7, [ADR-0021](adr/0021-cluster-refused-until-supported.md)). Themes beyond the two M0 defaults, the ASCII glyph
+fallback, session restore, and the million-key performance work are M4 (§7). Packaging and
+distribution beyond the alpha's raw GitHub Release archives is a decision parked to the end of
+alpha (PRD §9, §10) — M4 ships no official packages. Keybinding overrides from config are
+explicitly **not** in M4 either, by the user's 2026-10-01 scope decision (see
+[`m4-planning.md`](plans/m4-planning.md)). Keys-pane liveness, and the other open questions in
+[DESIGN §9](DESIGN.md) — all decidable later without rework, which is why they are still open.
 
-## 8. Risk order
+## 9. Risk order
 
 The tasks most likely to invalidate something already decided, earliest first:
 

@@ -60,9 +60,12 @@ excuse.
 - **Not a multi-target workspace.** One Connection per process, one database per Connection.
   A second target means a second terminal. See
   [ADR-0005](adr/0005-one-connection-per-process.md).
-- **No Cluster support in v1.** Sentinel ships; Cluster is deferred to M4 because per-node
-  `SCAN`, `INFO` and tracking reintroduce a node selector into a UI built on having nothing to
-  select. See [ADR-0008](adr/0008-sentinel-in-v1-cluster-deferred.md).
+- **No Cluster support in v1 or M4.** Sentinel ships; Cluster is its own milestone, M5, after the
+  beta: per-node `SCAN`, `INFO` and tracking need real design work (see
+  [`plans/m5-cluster.md`](plans/m5-cluster.md)). Until it ships, a Cluster target is refused
+  clearly at startup rather than quietly served from one arbitrary node. See
+  [ADR-0008](adr/0008-sentinel-in-v1-cluster-deferred.md) and
+  [ADR-0021](adr/0021-cluster-refused-until-supported.md).
 - **Nothing older than Redis 6.0**, and RESP2 is not spoken at all
   ([ADR-0007](adr/0007-server-compatibility-floor.md)).
 - No export/import in v1. `y` yields a paste-ready `redis-cli` command, which is what actually
@@ -108,8 +111,11 @@ config file; a **Connection** is a live session, which may be **ad-hoc** (no Pro
   `--tls`/`--user`/`--password` flags, which always take precedence over a Profile's or the
   environment's credentials (ADR-0001).
 - **R1.11** Sentinel topology discovery, with failover surfacing as a reconnect to the new
-  address. Cluster is **not** in v1 — see [ADR-0008](adr/0008-sentinel-in-v1-cluster-deferred.md)
-  and §5.
+  address. Cluster is **not** in v1; it is milestone M5 (§9,
+  [`plans/m5-cluster.md`](plans/m5-cluster.md)). Until then a Cluster target (by URL scheme or a
+  detected `cluster_enabled:1`) is refused at startup with a clear diagnostic. See
+  [ADR-0008](adr/0008-sentinel-in-v1-cluster-deferred.md),
+  [ADR-0021](adr/0021-cluster-refused-until-supported.md), and §5.
 - **R1.12** Exactly one Connection per process, against exactly one database, fixed at launch.
   There is no in-app connection switcher and no `SELECT`.
 - **R1.13** The server floor is **RESP3 and Redis 6.0**, or an API-compatible fork. Older servers
@@ -269,13 +275,31 @@ config file; a **Connection** is a live session, which may be **ad-hoc** (no Pro
   alpha.18. (Console cut from M3 — see §10's resolved open question. The command palette shipped
   in alpha.14 and was withdrawn — [ADR-0020](adr/0020-no-command-palette.md); contextual `?`/`F1`
   help took over discovery.)
-- **M4 — Scale & polish.** Cluster support, million-key performance work, themes, packaging
-  and distribution. *Raw binary distribution (GitHub Release archives for macOS, Linux, and
-  Windows, via `cargo-dist`) shipped ahead of M4 as a low-risk alpha-testing convenience — no
-  code signing, no package manager. M4 still owns everything else in this bullet.*
+- **M4 — Scale & polish.** Million-key performance work (release binary <20MB, 16ms interaction
+  and 250MB RSS budgets measured and held at 1M keys), themes (light and high-contrast built-ins
+  alongside today's dark default, plus user themes as config data), an ASCII glyph fallback for
+  non-Nerd-Font and non-UTF-8 terminals, and session restore (pane split, tree/flat, sort, filter
+  and selected key, keyed per target, under `$XDG_STATE_HOME`). **Cluster support moves to M5**;
+  in M4 a Cluster target is refused clearly at startup instead — see
+  [ADR-0021](adr/0021-cluster-refused-until-supported.md). *Raw binary distribution (GitHub
+  Release archives for macOS, Linux, and Windows, via `cargo-dist`) shipped ahead of M4 as a
+  low-risk alpha-testing convenience — no code signing, no package manager.* Official packaging
+  (Homebrew, musl/arm64 Linux, macOS signing and notarization, Windows signing) is wanted but its
+  scheduling is **decided at the end of alpha**, not in M4 — see §10. M4 ends in a beta,
+  `0.1.0-beta.1`, not a 1.0.
+- **M5 — Cluster.** After the beta. Browse, view, live updates and edit across every primary
+  (merged scan, liveness armed on the key's owner node, per-node reconnect), then the server
+  views made cluster-aware (an aggregated Dashboard with a node table, merged Slowlog and Monitor,
+  sharded Pub/Sub) — without a connection switcher, so ADR-0005 holds. Designed in
+  [`plans/m5-cluster.md`](plans/m5-cluster.md); until it ships a Cluster target is refused
+  ([ADR-0021](adr/0021-cluster-refused-until-supported.md)).
 
 ## 10. Open questions
 
+- **Packaging, scheduled for a decision at the end of alpha (not M4):** all four items are
+  wanted — Homebrew (plus release notes), musl and arm64 Linux builds, macOS code signing and
+  notarization, and Windows code signing. None is built in M4; raw GitHub Release archives
+  (`cargo-dist`, unsigned) remain the only distribution until this is decided.
 - Should Profiles be shareable across a team (checked-in config)? ADR-0002's reference-only
   credential path makes this plausible — is it worth designing for in v1?
 - With one Connection per process, is there any in-app Profile surface left to build, or do
