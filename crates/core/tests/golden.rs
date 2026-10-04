@@ -4412,6 +4412,39 @@ fn golden_dashboard_error_with_stale_values() {
     );
 }
 
+// ── M4 task 6 — the ASCII glyph set ─────────────────────────────────────────
+
+use redis_pane_core::glyphs::GlyphSet;
+
+/// The same frame drawn with the Unicode and the ASCII glyph set.
+fn draw_both(state: &State, w: u16, h: u16, clock: &dyn Clock) -> (String, String) {
+    let at = |set| {
+        let buf = render::frame(
+            state,
+            &Theme::new(ColorDepth::Monochrome).with_glyphs(set),
+            clock,
+            Rect::new(0, 0, w, h),
+        );
+        render::to_text(&buf)
+    };
+    (at(GlyphSet::Unicode), at(GlyphSet::Ascii))
+}
+
+fn ascii_frame(state: &State, w: u16, h: u16, clock: &dyn Clock) -> String {
+    draw_both(state, w, h, clock).1
+}
+
+fn help_state() -> State {
+    State {
+        link: up(Tk::Armed),
+        help: Some(HelpView {
+            pane: redis_pane_core::render::layout::Pane::Keys,
+        }),
+        rows: 14,
+        ..base()
+    }
+}
+
 // ── M4 task 5: light and high-contrast, which ADR-0011 promised ─────────────
 
 use redis_pane_core::theme::Palette;
@@ -4465,6 +4498,125 @@ fn a_theme_changes_the_styles_but_never_the_text() {
             text_of(&other),
             "{name} must not move a cell"
         );
+    }
+}
+
+#[test]
+fn golden_browser_130_ascii() {
+    assert_golden(
+        "browser_130_ascii",
+        &ascii_frame(&browsing(), 130, 26, &CLOCK),
+    );
+}
+
+#[test]
+fn golden_viewer_detached_ascii() {
+    let mut state = opened("user:8812:session", hash_value(), 2_537);
+    state.view.selected = 0;
+    assert_golden(
+        "viewer_detached_ascii",
+        &ascii_frame(&state, 130, 22, &CLOCK),
+    );
+}
+
+#[test]
+fn golden_dashboard_grid_130_ascii() {
+    assert_golden(
+        "dashboard_grid_130_ascii",
+        &ascii_frame(&dashboard_state(), 130, 26, &FixedClock(DASHBOARD_NOW_MS)),
+    );
+}
+
+#[test]
+fn golden_help_overlay_ascii() {
+    assert_golden(
+        "help_overlay_ascii",
+        &ascii_frame(&help_state(), 100, 14, &CLOCK),
+    );
+}
+
+#[test]
+fn golden_slowlog_130_ascii() {
+    assert_golden(
+        "slowlog_130_ascii",
+        &ascii_frame(
+            &slowlog_with_entries(),
+            130,
+            26,
+            &FixedClock(SLOWLOG_NOW_MS),
+        ),
+    );
+}
+
+/// The claim DESIGN §5 makes: choosing ASCII does not move anything. Every row
+/// of the ASCII frame is the same width as the Unicode frame's, and none of it
+/// is outside ASCII — which also proves no draw site was left holding a
+/// literal glyph.
+#[test]
+fn the_ascii_frame_has_the_unicode_frames_layout_and_no_non_ascii() {
+    use ratatui::text::Line;
+    let mut detached = opened("user:8812:session", hash_value(), 2_537);
+    detached.view.selected = 0;
+    type Fixture = (&'static str, State, u16, u16, Box<dyn Clock>);
+    let fixtures: Vec<Fixture> = vec![
+        ("browser", browsing(), 130, 26, Box::new(CLOCK)),
+        ("browser narrow", browsing(), 70, 20, Box::new(CLOCK)),
+        ("gone key", with_a_gone_key(), 130, 26, Box::new(CLOCK)),
+        ("pending", pending(), 130, 26, Box::new(CLOCK)),
+        (
+            "tree",
+            {
+                let mut s = many_keys();
+                s.tree_mode = true;
+                s.rebuild_list();
+                s
+            },
+            100,
+            24,
+            Box::new(CLOCK),
+        ),
+        (
+            "hash open",
+            opened("user:8812:session", hash_value(), 2_537),
+            130,
+            22,
+            Box::new(CLOCK),
+        ),
+        ("detached", detached, 130, 22, Box::new(CLOCK)),
+        ("help", help_state(), 100, 14, Box::new(CLOCK)),
+        (
+            "dashboard",
+            dashboard_state(),
+            130,
+            26,
+            Box::new(FixedClock(DASHBOARD_NOW_MS)),
+        ),
+        (
+            "slowlog",
+            slowlog_with_entries(),
+            130,
+            26,
+            Box::new(FixedClock(SLOWLOG_NOW_MS)),
+        ),
+        (
+            "monitor",
+            monitor_with_lines(),
+            130,
+            26,
+            Box::new(FixedClock(MONITOR_NOW_MS)),
+        ),
+    ];
+    for (name, state, w, h, clock) in &fixtures {
+        let (uni, ascii) = draw_both(state, *w, *h, clock.as_ref());
+        assert_eq!(uni.lines().count(), ascii.lines().count(), "{name}");
+        for (u, a) in uni.lines().zip(ascii.lines()) {
+            assert_eq!(
+                Line::from(u).width(),
+                Line::from(a).width(),
+                "{name}: layout moved\n  unicode | {u}\n  ascii   | {a}"
+            );
+            assert!(a.is_ascii(), "{name}: a glyph escaped the table: {a}");
+        }
     }
 }
 

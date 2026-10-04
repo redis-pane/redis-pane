@@ -9,6 +9,7 @@
 //! coloured cell *and* the word `hash`. Losing colour must lose emphasis, never
 //! information.
 
+use crate::glyphs::{GlyphSet, Glyphs};
 use ratatui::style::{Color, Modifier, Style};
 
 /// What the terminal can actually display. Detected by the shell, injected like
@@ -606,6 +607,10 @@ pub fn select(
 pub struct Theme {
     pub depth: ColorDepth,
     styles: [Style; Token::COUNT],
+    /// Which glyph variant draws (DESIGN §5). An independent capability from
+    /// colour depth, carried here only because `Theme` is already what every
+    /// draw function is handed.
+    pub glyphs: Glyphs,
 }
 
 impl Theme {
@@ -637,7 +642,17 @@ impl Theme {
             }
             styles[i] = style;
         }
-        Theme { depth, styles }
+        Theme {
+            depth,
+            styles,
+            glyphs: Glyphs::default(),
+        }
+    }
+
+    /// The same theme drawing with the given glyph set.
+    pub fn with_glyphs(mut self, set: GlyphSet) -> Self {
+        self.glyphs = Glyphs::new(set);
+        self
     }
 
     /// The style for a token, degraded to what the terminal can show.
