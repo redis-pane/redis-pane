@@ -83,6 +83,14 @@ pub(super) fn scan_batch(mut state: State, keys: Vec<Vec<u8>>) -> (State, Vec<Co
         Some(open) if open.index.is_none() => Some(open.name.clone()),
         _ => None,
     };
+    // A restored selection (M4 task 7) is only honoured while the cursor is
+    // still where a fresh session puts it; once the reader has moved, theirs
+    // wins and the restore is abandoned silently.
+    if state.view.selected != 0 {
+        state.restore_key = None;
+    }
+    let restoring = state.restore_key.clone();
+    let mut restore_found = None;
     let prior_len = state.keys.len();
     for key in keys {
         let index = state.keys.len();
@@ -95,6 +103,7 @@ pub(super) fn scan_batch(mut state: State, keys: Vec<Vec<u8>>) -> (State, Vec<Co
             // leave the view fully rebuilt (decision 2) — a partial
             // incremental append would otherwise be the last thing the
             // reader sees for the rest of the session.
+            state.restore_key = None;
             state.rebuild_list();
             return (state, vec![Command::CancelScan]);
         }
@@ -104,6 +113,9 @@ pub(super) fn scan_batch(mut state: State, keys: Vec<Vec<u8>>) -> (State, Vec<Co
             && let Some(open) = &mut state.open
         {
             open.index = Some(index);
+        }
+        if restoring.as_deref() == Some(key.as_slice()) {
+            restore_found = Some(index);
         }
     }
     if let ScanState::Running {
@@ -142,6 +154,18 @@ pub(super) fn scan_batch(mut state: State, keys: Vec<Vec<u8>>) -> (State, Vec<Co
         // on the geometric schedule instead keeps the total rebuild cost
         // across the whole scan at O(n log n).
         state.rebuild_list();
+    }
+
+    if let Some(index) = restore_found {
+        // One extra rebuild, once: the row is only meaningful against a list
+        // that includes the key, whichever sort or mode is showing. If the
+        // key has no row (filtered out) the restore is dropped.
+        state.rebuild_list();
+        if let Some(row) = state.row_of(index) {
+            state.view.selected = row;
+            state.view = state.view.scrolled_to_selection(state.visible_rows());
+        }
+        state.restore_key = None;
     }
 
     // Keys render as they arrive; their metadata should follow, but only for
@@ -212,6 +236,7 @@ pub(super) fn metadata_batch(
 /// gap must not be the state a reader is left looking at for the rest of
 /// the session.
 pub(super) fn scan_complete(mut state: State) -> (State, Vec<Command>) {
+    state.restore_key = None;
     // A cap reached mid-scan already told its own story; completing
     // afterwards must not overwrite it with a smaller truth.
     if !matches!(state.scan, ScanState::Capped { .. }) {
@@ -224,6 +249,7 @@ pub(super) fn scan_complete(mut state: State) -> (State, Vec<Command>) {
 }
 
 pub(super) fn scan_cancelled(mut state: State) -> (State, Vec<Command>) {
+    state.restore_key = None;
     if !matches!(state.scan, ScanState::Capped { .. }) {
         state.scan = ScanState::Cancelled {
             scanned: state.keys.len() as u64,
@@ -234,6 +260,7 @@ pub(super) fn scan_cancelled(mut state: State) -> (State, Vec<Command>) {
 }
 
 pub(super) fn scan_failed(mut state: State, error: String) -> (State, Vec<Command>) {
+    state.restore_key = None;
     state.scan = ScanState::Failed { error };
     state.rebuild_list();
     (state, Vec::new())
