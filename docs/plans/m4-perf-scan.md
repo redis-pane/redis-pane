@@ -1,6 +1,84 @@
 # M4 task 3: Million-key scan
 
-Status: **planning — not started.**
+Status: **done.**
+
+## Resolved decisions (build-time)
+
+1. **The incremental-append split (decision 1) landed exactly as sketched**:
+   `KeyView::extend(&mut self, keys: &LoadedSet, new_from: usize)`
+   (`crates/core/src/state/view.rs`) appends indices `new_from..keys.len()`,
+   applying the filter to just the new keys, and is only called when
+   `!state.tree_mode && state.list.sort == SortBy::Scan` — the common case,
+   since a scan starts in flat/scan order and stays there until a reader
+   changes it. `scan_batch` (`crates/core/src/update/scan.rs`) captures
+   `prior_len` before pushing a page, calls `extend` after, and — rather than
+   `relocate_open_key`'s linear `row_of` scan — patches the Open key's `row`
+   directly when its index landed in that page, by searching only the rows
+   `extend` just appended (bounded by the page size, 500, not the row
+   count).
+2. **The batched-rebuild cadence (decision 2): a geometric growth
+   threshold, not a page count or a wall-clock interval.** Confirmed at
+   build time: a page-count or time-based cadence would need to know how
+   large the keyspace already is to avoid being too eager early and too
+   lazy late; a growth-*fraction* threshold scales itself automatically.
+   `SCAN_REBUILD_GROWTH_PCT: usize = 25` (`crates/core/src/update/scan.rs`)
+   — rebuild once the Loaded set has grown 25% past the size it was last
+   rebuilt at, tracked in a new `State::scan_last_rebuild_len` field that
+   every call to `rebuild_list` updates (not only the ones `scan_batch`
+   itself triggers, so the bookkeeping stays correct across a mid-scan sort
+   change or tree-mode toggle, both of which call `rebuild_list` directly).
+   `scan_last_rebuild_len == 0` always triggers a rebuild, which is what
+   makes the scan's first page land on screen rather than leaving the list
+   empty until growth crosses the threshold. 25% means a 1M-key scan does
+   on the order of 60 rebuilds rather than 2,000, and the sum of
+   geometrically-growing rebuild sizes is a convergent series — O(n log n)
+   total, not O(n²). Measured: the whole-scan fold in tree mode dropped
+   from ~120s to ~0.6–0.8s locally; the worst single page (the one that
+   lands on a scheduled rebuild near the end of the scan) dropped from
+   ~251ms to ~100–145ms — still well above the 16ms frame budget, since
+   that page still pays for `rebuild_list`'s own Name-sort-plus-
+   `Tree::rebuild` cost, which is M4 task 4's scope, not this one's.
+3. **`row_of` itself is untouched**, as scoped — the incremental-append path
+   avoids calling it at all for the common case, rather than making it
+   faster.
+4. **Redraw coalescing (decision 4): a dirty flag plus a minimum frame
+   interval, not a fixed tick.** `crates/app/src/terminal.rs`'s loop sets
+   `dirty` on every `update()`, and the top of the loop draws when `dirty`
+   is set and at least 16 ms (`FRAME`) have passed since the last draw.
+   After any pause a keystroke is drawn immediately; under a flood of
+   `Msg::ScanBatch`es drawing is capped at one frame per 16 ms, and because
+   the check runs at the top of every iteration rather than in a `select!`
+   arm, the flood cannot starve it. A change landing inside the interval is
+   drawn when a `sleep_until(frame_due)` arm fires — armed only while
+   `dirty`, so an idle screen does not wake 60 times a second. The old 1 s
+   countdown arm now just sets `dirty`. `biased` stays, messages first.
+   *Revised in review:* the first cut drew only on a fixed 16 ms tick, which
+   delayed every keystroke by up to one frame (spending the very budget the
+   change protects) and woke an idle app ~60 times a second. This removes
+   the ~2,000 `Msg::ScanBatch`-driven `render::frame` calls a 1M-key scan
+   used to cause, plus the once-a-second unconditional one, with no change
+   to the core (the cadence stays shell-side, per CLAUDE.md's
+   injected-clock discipline).
+5. **The `ttl_read_at` leak (decision 5) is fixed** exactly as described —
+   `LoadedSet::clear` (`crates/core/src/state/loaded.rs`) now clears it
+   alongside the other six arrays, with a regression test
+   (`clear_does_not_leak_the_ttl_read_at_array`) asserting `heap_bytes`
+   does not grow across repeated clear/push cycles at the same size.
+
+## Testing, confirmed
+
+The correctness proof (decision/testing section's "equivalence test, not
+just a timing test") is
+`update::scan::incremental_equivalence_tests` in `crates/core/src/update/scan.rs`:
+it folds a synthetic keyspace through the real `update`/`Msg::ScanBatch`
+dispatch, page by page, ending in `Msg::ScanComplete`, and asserts the
+final `KeyView`, `Tree` and selected row are identical to building the same
+keyspace directly and calling `rebuild_list` once — covering flat scan
+order, flat sorted by name, flat sorted by a lazy column (TTL), tree mode,
+each with and without a filter, and a sort/tree-mode/filter change
+mid-scan. A further test pins the incremental-append path's narrower claim:
+in flat scan order the view is exact after *every single page*, not only
+once the scan ends.
 
 ## Context
 

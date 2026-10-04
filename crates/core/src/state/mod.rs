@@ -905,6 +905,21 @@ pub struct State {
     /// Every key scanned so far, columnar and capped (ADR-0010).
     pub keys: LoadedSet,
     pub scan: ScanState,
+    /// `self.keys.len()` as of the last full [`State::rebuild_list`] during
+    /// the running scan — the geometric-schedule bookkeeping behind
+    /// `scan_batch`'s batched rebuild of a sorted or tree-mode view (M4
+    /// task 3, `docs/plans/m4-perf-scan.md` decision 2). Reset to `0` by
+    /// `scan_started`; `0` also means "rebuild on the next page regardless
+    /// of growth," which is what makes the first page of a scan land on
+    /// screen rather than an empty list. Irrelevant outside a scan, and in
+    /// scan order (`SortBy::Scan`, no tree mode) — `scan_batch`'s
+    /// incremental-append path never reads or writes it.
+    ///
+    /// `pub`, not `pub(crate)`: the `tests/` integration/golden suites build
+    /// a `State` via struct-update syntax (`..base()`) from outside the
+    /// crate, which needs every field nameable, the same reason every other
+    /// field here is `pub`.
+    pub scan_last_rebuild_len: usize,
     /// Which rows are on screen and which is selected. Scrolling changes this,
     /// never the Loaded set (R2.6).
     pub view: crate::render::keys::Viewport,
@@ -1170,6 +1185,16 @@ impl State {
     /// new row count, same as before this existed. Folding a group open or
     /// shut must not fling the cursor to the top of the list.
     pub fn rebuild_list(&mut self) {
+        // Bookkeeping for `scan_batch`'s geometric rebuild schedule (M4 task
+        // 3, `docs/plans/m4-perf-scan.md` decision 2): *every* full rebuild,
+        // whatever called it — a scan page, a sort change, a filter
+        // keystroke, a tree-mode toggle — resets the "grown enough since
+        // the last rebuild" clock, not only the ones `scan_batch` itself
+        // triggers. That keeps the invariant simple: this field is always
+        // `self.keys.len()` as of the most recent full rebuild, full stop,
+        // so `scan_batch` never has to reason about *why* the view happens
+        // to be freshly rebuilt, only whether it is.
+        self.scan_last_rebuild_len = self.keys.len();
         let selected_index = self.key_at(self.view.selected);
         // Tree mode folds one pass over a name-ordered view (`Tree::rebuild`'s
         // own doc comment says so); any other sort scatters same-prefix keys

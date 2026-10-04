@@ -307,6 +307,7 @@ impl LoadedSet {
         self.lens.clear();
         self.kinds.clear();
         self.ttls.clear();
+        self.ttl_read_at.clear();
         self.sizes.clear();
         self.capped = false;
     }
@@ -511,6 +512,46 @@ mod tests {
         s.clear();
         assert!(s.is_empty());
         assert!(!s.is_capped());
+    }
+
+    /// `clear` used to leave `ttl_read_at` out of the six arrays it reset
+    /// (M4 task 3, `docs/plans/m4-perf-scan.md` decision 5): every rescan
+    /// (`r` in the keys pane, which calls `clear()` before re-streaming)
+    /// appended to `ttl_read_at` without ever truncating it, leaking one
+    /// entry per previously-scanned key on every rescan of a long session.
+    /// The regression this pins: after repeated clear/push cycles, every
+    /// parallel array — including `ttl_read_at` — stays in lockstep with
+    /// `len()`, and `heap_bytes` does not grow across cycles that end up
+    /// holding the same number of keys.
+    #[test]
+    fn clear_does_not_leak_the_ttl_read_at_array() {
+        let mut s = LoadedSet::default();
+        for i in 0..1_000 {
+            s.push(format!("k:{i}").as_bytes());
+            s.set_ttl(i, 30, 0);
+        }
+        let heap_after_first_fill = s.heap_bytes();
+
+        for _ in 0..5 {
+            s.clear();
+            assert_eq!(s.len(), 0);
+            for i in 0..1_000 {
+                s.push(format!("k:{i}").as_bytes());
+                s.set_ttl(i, 30, 0);
+            }
+            // Every array, `ttl_read_at` included, is exactly as long as the
+            // set claims to be — the leak let this one silently outgrow it.
+            assert_eq!(s.ttl_read_at.len(), s.len());
+        }
+
+        // Five extra clear/push cycles at the same size must not have grown
+        // the allocations — a leaking array would show up here as capacity
+        // climbing cycle over cycle.
+        assert_eq!(
+            s.heap_bytes(),
+            heap_after_first_fill,
+            "heap_bytes grew across clear/push cycles that end at the same size"
+        );
     }
 
     /// M1.1's proof (R2.6, PRD §7): a million keys inside the memory budget.

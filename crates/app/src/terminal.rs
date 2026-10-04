@@ -245,22 +245,65 @@ pub async fn run(
     let mut dashboard_poll = tokio::time::interval(std::time::Duration::from_secs(2));
     dashboard_poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
-    loop {
-        term.draw(|f| {
-            let buf = render::frame(&state, &theme, clock.as_ref(), f.area());
-            *f.buffer_mut() = buf;
-        })?;
+    // Redraw coalescing (M4 task 3, `docs/plans/m4-perf-scan.md` decision
+    // 4): the loop used to call `term.draw` unconditionally on every single
+    // iteration — once per `Msg`, including every one of the ~2,000
+    // `Msg::ScanBatch`es a 1M-key scan produces, and once a second from the
+    // countdown tick below even when nothing had changed. `render::frame`
+    // is pure, but it still walks the whole of `State` to build a frame, so
+    // that was real CPU spent on frames nobody was about to see, on top of
+    // the terminal write itself.
+    //
+    // The fix is a dirty flag plus a minimum frame interval, not a fixed
+    // tick: every `update()` sets `dirty`, and the top of the loop draws
+    // when `dirty` is set *and* at least `FRAME` has passed since the last
+    // draw. A keystroke after any pause is therefore drawn immediately —
+    // waiting for a 16ms tick would spend the very budget (PRD §7, "a
+    // keystroke must be answerable in one frame") the coalescing exists to
+    // protect. Under a flood (scan batches arriving back to back) the same
+    // check caps drawing at one frame per `FRAME`, and because it runs at
+    // the top of every iteration rather than in a `select!` arm, a flood
+    // can never starve it. When a change arrives inside the interval, the
+    // `frame_due` arm wakes the loop once the interval is up; it is only
+    // armed while `dirty`, so an idle screen does not wake 60 times a
+    // second for nothing.
+    //
+    // The old 1-second countdown arm (which forced a redraw so a TTL
+    // countdown visibly moves on an otherwise idle screen) now just sets
+    // `dirty`. `update()` is still never called on it — the countdown is a
+    // function of the injected clock and the render pass alone (R3.9).
+    const FRAME: std::time::Duration = std::time::Duration::from_millis(16);
+    let mut countdown_tick = tokio::time::interval(std::time::Duration::from_secs(1));
+    countdown_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let mut dirty = true;
+    let mut last_draw: Option<tokio::time::Instant> = None;
 
-        // A tick with no message of its own: `update` is never called on it,
-        // only the redraw above runs again with a fresher clock reading. This
-        // is the whole of what makes a TTL countdown actually move on an
-        // otherwise idle screen — the number was already computed correctly
-        // per frame (R3.9), it just had nothing asking for a new frame once a
-        // second. Ratatui diffs the buffer before writing to the terminal, so
-        // a tick where only a few digits changed writes only those cells.
+    loop {
+        let now = tokio::time::Instant::now();
+        if dirty && last_draw.is_none_or(|at| now.duration_since(at) >= FRAME) {
+            term.draw(|f| {
+                let buf = render::frame(&state, &theme, clock.as_ref(), f.area());
+                *f.buffer_mut() = buf;
+            })?;
+            dirty = false;
+            last_draw = Some(now);
+        }
+        let frame_due = last_draw.map_or(now, |at| at + FRAME);
+
         let msg = tokio::select! {
+            // Messages first, as before coalescing: input and replies are
+            // what the reader is waiting on. Drawing is never starved by
+            // this, since it happens at the top of the loop, not here.
             biased;
             msg = rx.recv() => msg,
+            () = tokio::time::sleep_until(frame_due), if dirty => continue,
+            // Ratatui diffs the buffer before writing to the terminal, so a
+            // frame where only a few digits changed writes only those
+            // cells — this just has to ask for that frame to happen.
+            _ = countdown_tick.tick() => {
+                dirty = true;
+                continue;
+            }
             Some((client, established)) = landed_rx.recv() => {
                 Some(shell.reconnected(client, &established))
             },
@@ -274,7 +317,6 @@ pub async fn run(
                     None => continue,
                 }
             },
-            () = tokio::time::sleep(std::time::Duration::from_secs(1)) => continue,
             _ = dashboard_poll.tick() => Some(Msg::DashboardPollTick),
         };
         let Some(msg) = msg else {
@@ -282,6 +324,7 @@ pub async fn run(
         };
         let commands;
         (state, commands) = update(state, msg);
+        dirty = true;
 
         for command in commands {
             if shell.execute(command, &state, &mut term).await.is_break() {

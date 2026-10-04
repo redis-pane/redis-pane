@@ -276,12 +276,36 @@ memory-accounting test covering `LoadedSet`+`KeyView.order`+`Tree`, all `#[ignor
 new `perf` CI job in release; `crates/app/tests/integration.rs` gained a Docker-backed timing test
 for first-`ScanBatch`/interactive at 100k keys, run by the existing `integration` job. Baseline
 numbers are in [`m4-perf-harness.md`](plans/m4-perf-harness.md)'s table: 9 of 13 timing/memory
-metrics already meet the PRD §7 target outright. Four are held to a regression ceiling (1.5× the
+metrics already meet the PRD §7 target outright. Four were held to a regression ceiling (1.5× the
 measured baseline) pending tasks 3 and 4, all from the same two causes (`rebuild_list`'s full
 rescan and `Tree::rebuild` on every page): a filter keystroke, toggling tree mode, a scan page
 arriving in tree mode (~130 ms against ~7 ms flat), and the worst page of a whole scan. The
-headline: folding a full 1M-key scan in the default tree view costs about two minutes of CPU,
-during which every page blocks the UI for ~130 ms. Tasks 3–8 are not started.
+headline at the time: folding a full 1M-key scan in the default tree view cost about two minutes
+of CPU, during which every page blocked the UI for ~130 ms.
+
+Task 3 is done — `scan_batch` (`crates/core/src/update/scan.rs`) no longer rebuilds the whole view
+on every page. In the common case (flat, scan order — a scan's default) it appends the new page
+straight into `KeyView::extend`, `O(page)`, and patches the Open key's row directly if it landed
+in that page, without `rebuild_list`'s linear `row_of` scan. In a sorted or tree-mode view, where a
+new key can land anywhere in the order, it instead rebuilds on a geometric schedule — every time
+the Loaded set has grown 25% (`SCAN_REBUILD_GROWTH_PCT`) since the last rebuild, plus always on the
+first page and once more whenever the scan ends (`ScanComplete`/`ScanCancelled`/`Capped`/
+`ScanFailed` all call `rebuild_list` unconditionally) — turning total rebuild work across a whole
+scan into a convergent geometric series, O(n log n) instead of O(n²). An equivalence test suite
+(`update::scan::incremental_equivalence_tests`) pins that every shortcut still lands on the
+identical final `KeyView`/`Tree`/selection a full rebuild-every-page would have produced, across
+every sort, tree mode, filtering, and a sort/tree/filter change mid-scan. The shell
+(`crates/app/src/terminal.rs`) now coalesces redraws: a dirty flag, drawn at most once per 16 ms rather
+than once per `Msg` or once a second — a keystroke after any pause draws immediately, and an idle
+screen does not wake up. `LoadedSet::clear` now clears
+`ttl_read_at` too, with a regression test. Measured after task 3: the whole 1M-key scan in tree
+mode dropped from ~120s to well under a second locally (~0.6–0.8s), the per-page tree-mode and
+flat-sorted-by-name `ScanBatch` cases are now `AT TARGET` (<16ms, down from 130ms/7ms), and the
+`perf` CI job no longer skips the whole-scan-fold test. What remains above the 16ms target — the
+filter keystroke, toggling tree mode, and the worst single page of a scan (now ~100–145ms, down
+from ~130–251ms) — is `rebuild_list`'s own Name-sort/`Tree::rebuild` cost, M4 task 4's scope, not
+task 3's. See [`m4-perf-scan.md`](plans/m4-perf-scan.md) for the resolved decisions. Tasks 4–8 are
+not started.
 
 | # | Task | Proves |
 |---|---|---|

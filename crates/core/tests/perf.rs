@@ -9,15 +9,20 @@
 //! ```
 //!
 //! **The override that shapes every budget below:** a budget the current code
-//! does not yet meet must not turn CI red. Tasks 3–4 (`scan_batch`,
-//! `rebuild_list`'s hot paths) fix the slow cases; this task only measures
-//! and gates against a named constant. Where the current code already meets
-//! the PRD §7 target, the constant *is* the target, labelled `AT TARGET`.
-//! Where it does not, the constant is a **regression ceiling** — the
-//! measured local baseline × 1.5, rounded up — labelled `CEILING`, with the
-//! PRD target named in a comment and "tightened by M4 task 3/4". Every test
-//! prints its measured number first, so a CI log carries the real value even
-//! though the assertion is against the (looser) ceiling.
+//! does not yet meet must not turn CI red. Where the current code already
+//! meets the PRD §7 target, the constant *is* the target, labelled
+//! `AT TARGET`. Where it does not, the constant is a **regression ceiling**
+//! — the measured local baseline × 1.5, rounded up — labelled `CEILING`, with
+//! the PRD target named in a comment. Every test prints its measured number
+//! first, so a CI log carries the real value even though the assertion is
+//! against the (looser) ceiling.
+//!
+//! M4 task 3 (`scan_batch`'s incremental-append path and geometric rebuild
+//! schedule, `docs/plans/m4-perf-scan.md`) has landed: every case that was a
+//! CEILING because of the per-page quadratic rebuild is now `AT TARGET`.
+//! What remains above 16ms is M4 task 4's scope — `rebuild_list`'s own
+//! Name-sort/`Tree::rebuild` cost on the pages (and keystrokes) that still
+//! pay for a full rebuild — labelled "tightened by M4 task 4" below.
 //!
 //! Keys are realistic: `user:{i:08}:session`, the same generator
 //! `crates/core/examples/memreport.rs` already uses, with two `:` separators
@@ -144,8 +149,11 @@ fn filter_keystroke_at_1m_keys() {
     // Mid-typing: a filter is already active and capturing, and one more
     // character arrives. `KeyView::rebuild` scans the *whole* Loaded set on
     // every keystroke (ADR-0010's `rebuild` doc comment: "cheap enough to
-    // run on every change") — this is task 3's hot path, measured here, not
-    // fixed here.
+    // run on every change") — this is M4 task 4's hot path
+    // (`m4-perf-interaction.md`), not M4 task 3's: task 3's scope is
+    // `scan_batch`'s per-*page* rebuild during a scan, explicitly not
+    // interactive edits to the filter or tree state
+    // (`m4-perf-scan.md`, "Out of scope"). Measured here, not fixed here.
     base.list.filter = "user:0000".into();
     base.filtering = true;
     base.rebuild_list();
@@ -153,13 +161,12 @@ fn filter_keystroke_at_1m_keys() {
         time_update_and_render(&base, 11, || Msg::Key(KeyPress::plain(KeyCode::Char('1'))));
     println!("filter keystroke @ 1M keys: {elapsed:?}");
     // CEILING: PRD §7 target is 16ms; a full-keyspace rescan on every
-    // character is exactly what task 3 is scoped to fix. Local baseline
-    // measured ~22.3ms, but CI's ubuntu runner measured 31.2ms, so the
-    // ceiling is the slower machine's baseline × 1.5, rounded up: 47ms.
-    // Tightened by M4 task 3.
+    // character is M4 task 4's scope. Local baseline measured ~22.3ms, but
+    // CI's ubuntu runner measured 31.2ms, so the ceiling is the slower
+    // machine's baseline × 1.5, rounded up: 47ms. Tightened by M4 task 4.
     assert!(
         elapsed < Duration::from_millis(47),
-        "filter keystroke took {elapsed:?}, ceiling is 47ms (target 16ms, M4 task 3)"
+        "filter keystroke took {elapsed:?}, ceiling is 47ms (target 16ms, M4 task 4)"
     );
 }
 
@@ -212,12 +219,14 @@ fn scan_batch_of_500_into_1m_keys() {
         .collect();
     let elapsed = time_update_and_render(&base, 11, || Msg::ScanBatch { keys: page.clone() });
     println!("ScanBatch of 500 into 1M keys: {elapsed:?}");
-    // AT TARGET: this is task 3's named hot path — `scan_batch` calls
-    // `rebuild_list` on every batch, so each page pays for a full-keyspace
-    // rebuild rather than an incremental append — but at 1M keys that full
-    // rebuild already lands at ~2.3ms locally, comfortably inside PLAN's
-    // "update + render at 1M keys within 16ms" bar every per-keystroke
-    // update is held to.
+    // AT TARGET: this is task 3's named hot path. Before task 3,
+    // `scan_batch` called `rebuild_list` on every batch — a full-keyspace
+    // rebuild rather than an incremental append — which at 1M keys already
+    // landed at ~2.3ms locally, comfortably inside PLAN's "update + render
+    // at 1M keys within 16ms" bar every per-keystroke update is held to.
+    // After task 3, flat scan order (this case) takes `KeyView::extend`'s
+    // `O(page)` path instead (`docs/plans/m4-perf-scan.md` decision 1),
+    // which measures faster still — ~1.1ms locally.
     assert!(
         elapsed < Duration::from_millis(16),
         "ScanBatch(500) into 1M took {elapsed:?}, budget is 16ms"
@@ -229,26 +238,32 @@ fn scan_batch_of_500_into_1m_keys() {
 #[test]
 #[ignore]
 fn scan_batch_of_500_into_1m_keys_tree_mode() {
-    // Tree mode is the app's *default* view (DESIGN §1), and `rebuild_list`
-    // in tree mode forces a Name sort plus a full `Tree::rebuild` on every
-    // `ScanBatch`, not only on the final one — so the flat/scan-order case
-    // above, while a real data point, is not the number a fresh launch
-    // actually pays per page. This is.
+    // Tree mode is the app's *default* view (DESIGN §1). Before M4 task 3,
+    // `rebuild_list` in tree mode forced a Name sort plus a full
+    // `Tree::rebuild` on *every* `ScanBatch`, not only the final one — ~130ms
+    // for this exact page, which is what made this a CEILING case.
+    //
+    // After task 3: `scan_batch` only pays for a full rebuild when the
+    // Loaded set has grown by `SCAN_REBUILD_GROWTH_PCT` (25%) since the last
+    // one (`docs/plans/m4-perf-scan.md` decision 2). `make_state` already
+    // rebuilds once at 1,000,000 keys, so the single extra page here
+    // (1,000,500) is nowhere near the next scheduled rebuild at 1,250,000 —
+    // this now measures the geometric schedule's "most pages are free"
+    // case, not a worst case. The worst case — a page that *does* land on a
+    // scheduled rebuild — is what `whole_scan_fold_in_tree_mode_from_empty`
+    // below measures instead, since it folds every page of a real scan
+    // rather than isolating one.
     let base = make_state(1_000_000, true, SortBy::Scan);
     let page: Vec<Vec<u8>> = (1_000_000..1_000_500)
         .map(|i| key_name(i).into_bytes())
         .collect();
     let elapsed = time_update_and_render(&base, 11, || Msg::ScanBatch { keys: page.clone() });
     println!("ScanBatch of 500 into 1M keys, tree mode: {elapsed:?}");
-    // CEILING: PRD §7 target is 16ms; every page in tree mode pays for a
-    // full-keyspace Name sort *and* a full `Tree::rebuild`, which is why
-    // this is far more expensive than the flat/scan-order case just above.
-    // Local baseline measured ~130ms; ceiling = baseline × 1.5, rounded up
-    // to 195ms. Tightened by M4 task 3 (scan_batch/rebuild_list) and task 4
-    // (Tree's own representation).
+    // AT TARGET (tightened by M4 task 3 from a 195ms CEILING): measured
+    // ~1.0ms locally now that this page falls between scheduled rebuilds.
     assert!(
-        elapsed < Duration::from_millis(195),
-        "ScanBatch(500) into 1M (tree mode) took {elapsed:?}, ceiling is 195ms (target 16ms, M4 task 3/4)"
+        elapsed < Duration::from_millis(16),
+        "ScanBatch(500) into 1M (tree mode) took {elapsed:?}, budget is 16ms"
     );
 }
 
@@ -258,19 +273,21 @@ fn scan_batch_of_500_into_1m_keys_tree_mode() {
 #[ignore]
 fn scan_batch_of_500_into_1m_keys_flat_sorted_by_name() {
     // The middle case between the cheap scan-order default and the
-    // expensive tree-mode default: flat (no folding), but already sorted by
-    // Name rather than Scan order, so every page still pays for a full
-    // re-sort — just not the `Tree::rebuild` on top of it.
+    // tree-mode default: flat (no folding), but already sorted by Name
+    // rather than Scan order, so every page that *does* trigger a rebuild
+    // still pays for a full re-sort — just not the `Tree::rebuild` on top
+    // of it. This was already AT TARGET before M4 task 3 (a re-sort alone,
+    // with no folding, was never what blew the budget) — ~7ms locally —
+    // and after task 3's geometric rebuild schedule this single page is
+    // also, like the tree-mode case above, nowhere near the next scheduled
+    // rebuild, so it now measures even cheaper (~2ms).
     let base = make_state(1_000_000, false, SortBy::Name);
     let page: Vec<Vec<u8>> = (1_000_000..1_000_500)
         .map(|i| key_name(i).into_bytes())
         .collect();
     let elapsed = time_update_and_render(&base, 11, || Msg::ScanBatch { keys: page.clone() });
     println!("ScanBatch of 500 into 1M keys, flat sorted by name: {elapsed:?}");
-    // AT TARGET: PRD §7's 16ms. A full re-sort by name over the index
-    // vector on every page (never touching the arena, ADR-0010) already
-    // lands at ~7ms locally — the `Tree::rebuild` in the tree-mode case
-    // above is what actually blows the budget, not the re-sort by itself.
+    // AT TARGET: PRD §7's 16ms.
     assert!(
         elapsed < Duration::from_millis(16),
         "ScanBatch(500) into 1M (flat, sorted by name) took {elapsed:?}, budget is 16ms"
@@ -285,20 +302,26 @@ fn whole_scan_fold_in_tree_mode_from_empty() {
     // Tree mode is the default view, so this is what a fresh launch against
     // a 1M-key server actually does: 2,000 pages of 500 keys each, folded
     // one at a time via `update(state, Msg::ScanBatch { .. })`, exactly as
-    // `crates/app/src/update/scan.rs`'s real dispatch loop does it. The
+    // `crates/app/src/redis/scan.rs`'s real dispatch loop does it. The
     // isolated `scan_batch_of_500_into_1m_keys_tree_mode` case above times
     // one page *at* 1M keys; this one times every page *on the way there*,
     // which is the only way to see whether the per-page cost stays flat
     // (true O(n) total work) or grows with the keyspace already loaded
-    // (O(n²) total, since tree mode rebuilds proportional to the *current*
-    // size on every page, not just the page that just arrived).
+    // (O(n²) total, which is what the pre-task-3 always-rebuild code did).
     //
-    // Capped by wall time, not by page count: if per-page cost grows with
-    // keyspace size (plausible — Name-sorting and tree-rebuilding a larger
-    // index on every page), running all 2,000 pages could take minutes even
-    // in release, which would make this test the thing it is trying to
-    // avoid: a number nobody can afford to generate in CI. If the cap
-    // trips, the loop stops early, reports how far it got, and prints a
+    // Before M4 task 3 this took ~120s locally (and tripped the wall cap
+    // below every time) — rebuilding tree mode's full index on every page
+    // meant each page cost more than the last. After task 3's geometric
+    // rebuild schedule (`docs/plans/m4-perf-scan.md` decision 2) the whole
+    // scan finishes in well under a second: most pages are a plain
+    // `O(page)` append, and only the ~60 pages that cross the 25%-growth
+    // threshold pay for a full rebuild, at geometrically growing (and so,
+    // on average, proportionally shrinking) sizes.
+    //
+    // Still capped by wall time, not by page count, as a safety net: this
+    // test runs in release in CI, and a future regression that reintroduces
+    // O(n²) behaviour should time out and report how far it got rather than
+    // hang the job. If the cap trips, the loop stops early and prints a
     // *linear* extrapolation of the full-scan total from the completed
     // pages — likely optimistic if the real cost is superlinear, which is
     // called out explicitly in the printed line rather than asserted on.
@@ -324,6 +347,7 @@ fn whole_scan_fold_in_tree_mode_from_empty() {
     };
 
     let run_started = Instant::now();
+    let mut page_times = Vec::with_capacity(TOTAL_PAGES);
     let mut worst_page_time = Duration::ZERO;
     let mut worst_page_index = 0usize;
     let mut pages_done = 0usize;
@@ -335,6 +359,7 @@ fn whole_scan_fold_in_tree_mode_from_empty() {
         let (next, _cmds) = update(state, Msg::ScanBatch { keys: batch });
         let elapsed = started.elapsed();
         state = next;
+        page_times.push(elapsed);
         if elapsed > worst_page_time {
             worst_page_time = elapsed;
             worst_page_index = page;
@@ -346,9 +371,15 @@ fn whole_scan_fold_in_tree_mode_from_empty() {
     }
     let total = run_started.elapsed();
     let capped = pages_done < TOTAL_PAGES;
+    // The median, not just the worst page: most pages take the `O(page)`
+    // incremental-append-equivalent path or skip the rebuild entirely
+    // (decision 2), so the median is the number a reader actually feels on
+    // a typical page, with the worst page (below) answering "how bad does
+    // it get on the pages that do pay for a rebuild."
+    let median_page_time = median(page_times);
 
     println!(
-        "whole-scan fold, tree mode: {pages_done}/{TOTAL_PAGES} pages ({} keys loaded), total {total:?}, worst page #{worst_page_index} (at {} keys) took {worst_page_time:?}{}",
+        "whole-scan fold, tree mode: {pages_done}/{TOTAL_PAGES} pages ({} keys loaded), total {total:?}, median page {median_page_time:?}, worst page #{worst_page_index} (at {} keys) took {worst_page_time:?}{}",
         pages_done * 500,
         (worst_page_index + 1) * 500,
         if capped {
@@ -365,16 +396,33 @@ fn whole_scan_fold_in_tree_mode_from_empty() {
         );
     }
 
-    // CEILING on the worst single page: PRD §7's target is 16ms (one
-    // frame) — not remotely met once tree mode is rebuilding a
-    // near-1M-key index on every page, which is exactly what this test
-    // exists to surface. Local baseline (full, uncapped run) measured a
-    // worst page of ~251ms; ceiling = baseline × 1.5, rounded up to 378ms.
-    // Tightened by M4 task 3/4; this is the number that should move the
-    // most once they land.
+    // AT TARGET (tightened by M4 task 3 from an observed, not asserted,
+    // figure): the whole scan used to take ~120s locally and trip the wall
+    // cap every run; it now measures ~0.6–0.8s. "Well under 10s" is the
+    // plan doc's own target for this gate — the measured figure has well
+    // over 10× headroom on top of it, which also covers a slower CI
+    // runner.
     assert!(
-        worst_page_time < Duration::from_millis(378),
-        "worst page took {worst_page_time:?}, ceiling is 378ms (target 16ms, M4 task 3/4)"
+        total < Duration::from_secs(10),
+        "whole scan took {total:?}, gate is 10s"
+    );
+    // CEILING on the worst single page: PRD §7's target is 16ms (one
+    // frame) — still not met, because the pages that land on a scheduled
+    // rebuild still pay for a full Name sort plus a full `Tree::rebuild`
+    // (M4 task 4's scope, not this one's). Local baseline across repeated
+    // runs measured a worst page of ~103–143ms; ceiling = the higher of
+    // those × 1.5, rounded up to 220ms (down from 378ms pre-task-3).
+    // Tightened further by M4 task 4 (`Tree`'s own representation).
+    assert!(
+        worst_page_time < Duration::from_millis(220),
+        "worst page took {worst_page_time:?}, ceiling is 220ms (target 16ms, M4 task 4)"
+    );
+    // AT TARGET: the median page, by contrast, already meets PRD §7's 16ms
+    // bar — proof that the geometric schedule, not merely a faster rebuild,
+    // is what fixed the common case.
+    assert!(
+        median_page_time < Duration::from_millis(16),
+        "median page took {median_page_time:?}, budget is 16ms"
     );
 }
 
