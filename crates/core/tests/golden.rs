@@ -4411,3 +4411,67 @@ fn golden_dashboard_error_with_stale_values() {
         &draw_dashboard_at(&state, 80, 24),
     );
 }
+
+// ── M4 task 5: light and high-contrast, which ADR-0011 promised ─────────────
+
+use redis_pane_core::theme::Palette;
+
+/// The keys pane in a named built-in theme: the selection bar, every type
+/// colour, the Environment band and the Muted metadata in one frame.
+fn browser_in(palette: Palette, depth: ColorDepth) -> String {
+    let frame = render::frame(
+        &many_keys(),
+        &Theme::with_palette(depth, &palette),
+        &CLOCK,
+        Rect::new(0, 0, 90, 12),
+    );
+    render::to_golden(&frame)
+}
+
+#[test]
+fn golden_browser_style_light_truecolor() {
+    assert_golden(
+        "browser_style_light_truecolor",
+        &browser_in(Palette::light(), ColorDepth::TrueColor),
+    );
+}
+
+#[test]
+fn golden_browser_style_high_contrast_truecolor() {
+    assert_golden(
+        "browser_style_high_contrast_truecolor",
+        &browser_in(Palette::high_contrast(), ColorDepth::TrueColor),
+    );
+}
+
+#[test]
+fn golden_browser_style_light_ansi256() {
+    assert_golden(
+        "browser_style_light_ansi256",
+        &browser_in(Palette::light(), ColorDepth::Ansi256),
+    );
+}
+
+#[test]
+fn a_theme_changes_the_styles_but_never_the_text() {
+    let text_of = |g: &str| g.split("--- styles ---").next().unwrap().to_string();
+    let dark = browser_in(Palette::dark(), ColorDepth::TrueColor);
+    for palette in [Palette::light(), Palette::high_contrast()] {
+        let name = palette.name.clone();
+        let other = browser_in(palette, ColorDepth::TrueColor);
+        assert_ne!(dark, other, "{name} must restyle the frame");
+        assert_eq!(
+            text_of(&dark),
+            text_of(&other),
+            "{name} must not move a cell"
+        );
+    }
+}
+
+#[test]
+fn monochrome_frames_are_identical_in_every_theme() {
+    let dark = browser_in(Palette::dark(), ColorDepth::Monochrome);
+    for palette in [Palette::light(), Palette::high_contrast()] {
+        assert_eq!(dark, browser_in(palette, ColorDepth::Monochrome));
+    }
+}

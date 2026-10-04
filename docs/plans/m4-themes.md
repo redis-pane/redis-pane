@@ -1,6 +1,8 @@
 # M4 task 5: Themes
 
-Status: **planning — not started.**
+Status: **done.** Decisions confirmed by the user 2026-10-04: `EnvLocal` becomes a neutral
+grey (code brought in line with DESIGN §5); `Token` names are kept and DESIGN §5's role table is
+updated to name the tokens that exist (no rename).
 
 ## Context
 
@@ -169,3 +171,29 @@ here is purely "gather inputs and hand them to the pure constructor," no new run
 - **Renaming `Token` variants to match DESIGN's `accent`/`surface` prose exactly** — flagged as a
   decision (7) but the recommended default is not to rename; if that default is overridden, the
   rename becomes its own, larger mechanical change across every render call site.
+
+## Outcome
+
+Built as planned, with these build-time resolutions and deviations:
+
+- **Shape:** `Palette` holds a fixed array per depth indexed by `Token::index()`; a token a palette
+  does not set sets nothing (the terminal's colours show through). `Theme` resolves it once into a
+  `[Style; Token::COUNT]` and stays `Copy`. `Theme::new(depth)` is still `dark`.
+- **Token names** in user themes are DESIGN's: `text`, `muted`, `border`, `border-focus`,
+  `selected`, `env.*`, `type.*`, `ok`, `warn`, `danger`, `surface-detached`. `open-row` is not
+  themable (a modifier) and is refused with a message saying so. Values are `"#rrggbb"` or
+  `{ "fg", "bg" }`; `selected` needs the object form to set its foreground.
+- **256 colours** for `light`, `high-contrast` and user themes is the nearest cube/grey index;
+  `dark`'s are the original hand-picked ones. Light's `warn`/`env.staging`/`type.hash` are an
+  olive-brown (`#6B5A00`) and `type.zset` a brown-orange, because the 256-colour grid has no
+  amber dark enough for AA on white that is also distinct from the zset hue.
+- **Dark changed in two ways:** `env.local` (decided), and `muted` (`#8A8A8A` → `#8C8C8C`; 256:
+  245 → 248, and `env.unknown` 246 → 247). The contrast test found `muted` at 4.49:1 on the
+  detached wash, and the 256-colour wash is lighter still. Only goldens containing `muted`
+  changed.
+- **Config validation:** `theme` must name a built-in or a user theme, a user theme's `base` must be
+  a built-in, and a user theme may not reuse a built-in's name — each a `ConfigError`. An unknown
+  `--theme` exits with the config exit code, listing what is available.
+- **Rollback gap:** accepted; one note in the `Config::theme` doc and DESIGN §5.
+- **Not done:** the by-hand `--theme light` run against seeded data (needs a TTY and Redis).
+

@@ -218,13 +218,16 @@ when focus was inferred from "is a key open" instead of tracked.
 
 | Token | Use |
 |---|---|
-| `surface` / `surface-alt` | Pane background; `surface-alt` washes the Viewer while it holds a key that is not the Selected key (§6.4) |
+| `surface-detached` | A background wash on the Viewer while it holds a key that is not the Selected key (§6.4). There is no `surface` token: the app never paints the pane background, the terminal's own shows through |
 | `border` / `border-focus` | Pane edges; focused pane gets `border-focus` + bold title |
-| `text` / `text-muted` | Primary content vs. metadata (TTL, sizes, counts) |
-| `accent` | Selection, cursor row, active tab |
-| `type.*` | One hue per Redis type — consistent everywhere a type appears |
+| `text` / `muted` | Primary content vs. metadata (TTL, sizes, counts) |
+| `selected` | Selection and cursor row: a full bar, a fixed foreground and background pair |
+| `type.string` … `type.json` | One hue per Redis type — consistent everywhere a type appears |
 | `env.local` / `env.staging` / `env.prod` / `env.unknown` | Title bar band and confirmation dialogs |
 | `danger` / `warn` / `ok` | Destructive actions, expiring TTLs, success toasts |
+
+The Open key's underline is not a colour token's concern: it is a modifier, the same in every
+theme, and cannot be themed.
 
 **Environment signaling.** `local` is neutral, `staging` is amber, `prod` is red, and `unknown`
 is a distinct fourth treatment — deliberately not a shade of the others, because it means "nobody
@@ -248,8 +251,38 @@ glyph breaks alignment instead of falling back. Chords keep their compact form (
 **Motion.** Used sparingly and only to explain state: progress bar during scan, a 120ms fade on
 toasts, a subtle pulse on a value that just changed under a live view. No decorative animation.
 
-**Themes.** Ship a dark default and a light default, both truecolor, both contrast-checked.
-Themes are data (a token → color map in config), so users can add their own.
+**Themes.** Three built-ins: `dark` (the default), `light` and `high-contrast`. Each is a token →
+colour palette with a truecolor and a 256-colour column, and a test measures WCAG contrast for
+every readable token against the background the palette is designed for (AA, 4.5:1; AAA, 7:1 for
+`high-contrast`). Monochrome is not themed: with no hue to vary, every theme degrades to the
+same thing. `light` is for light terminals and `dark` for dark ones — the app does not paint the
+terminal background, so it cannot make either work on the wrong one (OSC 11 detection is not
+attempted).
+
+Chosen with `--theme <name>`, else the config's `"theme"`, else `dark`. Users add their own under
+`"themes"`; a theme names the tokens it changes and inherits the rest from a built-in `"base"`
+(default `dark`). An unknown token name is a parse error, like any unknown config field.
+
+```json
+{
+  "theme": "mine",
+  "themes": {
+    "mine": {
+      "base": "light",
+      "border-focus": "#0b5cad",
+      "selected": { "fg": "#000000", "bg": "#ffd27f" }
+    }
+  }
+}
+```
+
+A bare `"#rrggbb"` sets a token's foreground (its background for `selected` and
+`surface-detached`); `{ "fg", "bg" }` sets either or both. The 256-colour value is derived from it
+by nearest match. A user theme is not contrast-checked: the test covers the built-ins only.
+
+`env.local` is a neutral grey in every theme and distinct from `env.unknown`; green belongs to
+`ok` alone. Config files with `theme`/`themes` are refused by binaries that predate them
+(unknown fields are a parse error everywhere), so remove them before rolling back.
 
 ## 6. Key screens
 
@@ -748,7 +781,7 @@ scope from Cluster being out of v1 entirely, not a new limitation this screen in
 ## 8. Accessibility
 
 - Never encode meaning in color alone — pair every color signal with a glyph, label, or weight.
-- WCAG AA contrast for both shipped themes; a high-contrast theme as a third option.
+- WCAG AA contrast for every built-in theme, enforced by a test; `high-contrast` is the third, at AAA.
 - Full monochrome fallback that remains navigable. The type name stays in the key list when
   color is gone, so a hash is still distinguishable from a sorted set.
 - Screen-reader-friendly mode: linearized rendering, no box-drawing, announced focus changes.

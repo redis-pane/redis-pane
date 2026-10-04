@@ -11,15 +11,15 @@
                                              │
 
 --- styles ---
-a fg=#444444 bg=Reset
-b fg=#e0af68 bg=Reset
-c fg=#8c8c8c bg=Reset
-d fg=#e6e6e6 bg=Reset
-e fg=#7ac78e bg=Reset
-f fg=#11131a bg=#f5a742
-g fg=#73daca bg=Reset
-h fg=#ff9e64 bg=Reset
-i fg=#9ece6a bg=Reset
+a fg=#999999 bg=Reset
+b fg=#ffd700 bg=Reset
+c fg=#cccccc bg=Reset
+d fg=#ffffff bg=Reset
+e fg=#5fff5f bg=Reset
+f fg=#000000 bg=#ffd700
+g fg=#5fffd7 bg=Reset
+h fg=#ffaf5f bg=Reset
+i fg=#87ff5f bg=Reset
 --- map ---
 aaaaaaaaaaaaaaabbbbbbbbbcccdddddddddddddddcccccccccccccccccccccccaaaaaaaaaaaaaaaaaeeeeeeaa
 ..........................................................................................
