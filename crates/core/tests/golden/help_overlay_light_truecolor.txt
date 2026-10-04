@@ -1,0 +1,57 @@
+─ redis-pane ─ ● staging · cache-01:6379/0 · from profile staging ─────────────── ● live ─
+
+ KEY                           TYPE      TTL │ → to open
+┌─ help · keys pane ─────────────────────────────────────────────────────────────────────┐
+│ →         open / expand                                                                │
+│ /         filter                                                                       │
+│ s         sort                                                                         │
+│ t         tree view                                                                    │
+│ d         delete                                                                       │
+│ c         copy                                                                         │
+│ r         rescan                                                                       │
+│ C         copy redis-cli command                                                       │
+│ ↑↓ jk     move                                                                         │
+│ PgUp/PgDn page                                                                         │
+│ Home/End  top/bottom                                                                   │
+│                                                                                        │
+│ ⌃R read-only   g s slowlog   g m monitor   g p pub/sub   g d dashboard   Esc back   q qu
+│                                                                                        │
+│ Tab value keys · Esc close                                                             │
+└────────────────────────────────────────────────────────────────────────────────────────┘
+                                             │
+                                             │
+
+ → open / expand   / filter   s sort   t tree view   d delete   c copy   ? F1 help
+--- styles ---
+a fg=#bfc5cc bg=#ffffff
+b fg=#6b5a00 bg=#ffffff
+c fg=#57606a bg=#ffffff
+d fg=#1f2328 bg=#ffffff
+e fg=#166b2e bg=#ffffff
+f fg=Reset bg=#ffffff
+g fg=#0550ae bg=#ffffff
+--- map ---
+aaaaaaaaaaaaaaabbbbbbbbbcccdddddddddddddddcccccccccccccccccccccccaaaaaaaaaaaaaaaaaeeeeeeaa
+ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+fdddfffffffffffffffffffffffffffddddffffffdddfafcccccccccffffffffffffffffffffffffffffffffff
+ggddddddddddddddddddgggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg
+ggdddddddddddddddddddddddggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg
+ggddddddddddddddddgggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg
+ggddddddddddddddgggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg
+ggdddddddddddddddddddggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg
+ggddddddddddddddddgggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg
+ggddddddddddddddgggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg
+ggddddddddddddddddgggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg
+ggddddddddddddddddddddddddddddddddgggggggggggggggggggggggggggggggggggggggggggggggggggggggg
+ggddddddddddddddgggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg
+ggddddddddddddddgggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg
+ggddddddddddddddddddddgggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg
+gggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg
+ggcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+gggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg
+ggccccccccccccccccccccccccccgggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg
+gggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg
+fffffffffffffffffffffffffffffffffffffffffffffaffffffffffffffffffffffffffffffffffffffffffff
+fffffffffffffffffffffffffffffffffffffffffffffaffffffffffffffffffffffffffffffffffffffffffff
+ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+fcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccffffffff
