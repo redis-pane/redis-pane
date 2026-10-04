@@ -259,7 +259,8 @@ PRD §9 previously listed under this milestone, does not ship here: a Cluster ta
 misbehaves today (one arbitrary node's `SCAN`/`INFO`/tracking reported as the whole truth), and
 the decision this milestone makes about it is to refuse it clearly rather than build it —
 [ADR-0021](adr/0021-cluster-refused-until-supported.md). Real support is its own milestone, M5,
-after the beta, designed in [`m5-cluster.md`](plans/m5-cluster.md). M4 ends in a beta (`0.1.0-beta.1`), not
+after the beta, designed in [`m5-cluster.md`](plans/m5-cluster.md). Rebuild cost at real `SCAN`
+order (below) is likewise deferred, to M6, designed in [`m6-perf-rebuild.md`](plans/m6-perf-rebuild.md). M4 ends in a beta (`0.1.0-beta.1`), not
 a 1.0.
 
 **Progress: in flight.** Task 1 is done — a Cluster-scheme URL is refused in `build_config`
@@ -324,6 +325,14 @@ processing `ScanStarted`. Still above 16 ms, on ceilings of 1.5× the CI measure
 debounced full rebuild (~22 ms) and the worst scan page. See
 [`m4-perf-interaction.md`](plans/m4-perf-interaction.md) for the resolved decisions.
 
+**These task 2–4 figures are for keys loaded in name order, which is the easy case.** The perf
+harness pushes `user:00000000`, `user:00000001`, … in order; real `SCAN` order is effectively
+random, which defeats the sort and the tree fold's memory locality. Measured on 2026-10-04 at 1M
+random-order keys, a tree toggle (sort plus fold) takes ~373 ms, or ~482 ms with deep names, against
+~42 ms in the harness. Fixing that — an honest harness, a name order maintained as keys arrive, and
+large rebuilds sliced across frames — is milestone M6, after the beta:
+[`m6-perf-rebuild.md`](plans/m6-perf-rebuild.md).
+
 Task 5 is done — `Theme` is data: a `Palette` (a fixed array indexed by token, truecolor and 256
 colour slots) resolved once into a `Copy` `Theme`. Built-ins are `dark`, `light` and
 `high-contrast`; a test measures WCAG AA (AAA for high-contrast) for every readable token over the
@@ -382,7 +391,8 @@ files touched, tests, the CLAUDE.md rules it binds, and what stays out of scope:
 
 Palette, Console, dashboard, monitor, pub/sub, slowlog (M3) — Console cut, Palette shipped then
 withdrawn (ADR-0020), see §6 above. Cluster is milestone M5, after the beta — designed in
-[`m5-cluster.md`](plans/m5-cluster.md); until it ships, a Cluster target is refused at startup,
+[`m5-cluster.md`](plans/m5-cluster.md). Rebuild cost at real `SCAN` order is milestone M6, also
+after the beta — [`m6-perf-rebuild.md`](plans/m6-perf-rebuild.md); until it ships, a Cluster target is refused at startup,
 not quietly served (§7, [ADR-0021](adr/0021-cluster-refused-until-supported.md)). Themes beyond the two M0 defaults, the ASCII glyph
 fallback, session restore, and the million-key performance work are M4 (§7). Packaging and
 distribution beyond the alpha's raw GitHub Release archives is a decision parked to the end of

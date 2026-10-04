@@ -280,7 +280,9 @@ config file; a **Connection** is a live session, which may be **ad-hoc** (no Pro
   in alpha.14 and was withdrawn — [ADR-0020](adr/0020-no-command-palette.md); contextual `?`/`F1`
   help took over discovery.)
 - **M4 — Scale & polish.** Million-key performance work (release binary <20MB, 16ms interaction
-  and 250MB RSS budgets measured and held at 1M keys), themes (light and high-contrast built-ins
+  and 250MB RSS budgets measured and held at 1M keys — though the 16ms figures for tree toggle,
+  sort and filter rebuilds hold only for keys arriving in name order; at real `SCAN` order they
+  are ~0.4–0.5 s at 1M, which is M6), themes (light and high-contrast built-ins
   alongside today's dark default, plus user themes as config data), an ASCII glyph fallback for
   non-Nerd-Font and non-UTF-8 terminals, and session restore (pane split, tree/flat, sort, filter
   and selected key, keyed per target, under `$XDG_STATE_HOME`). **Cluster support moves to M5**;
@@ -297,6 +299,13 @@ config file; a **Connection** is a live session, which may be **ad-hoc** (no Pro
   sharded Pub/Sub) — without a connection switcher, so ADR-0005 holds. Designed in
   [`plans/m5-cluster.md`](plans/m5-cluster.md); until it ships a Cluster target is refused
   ([ADR-0021](adr/0021-cluster-refused-until-supported.md)).
+- **M6 — Rebuilds at real SCAN order.** After the beta. M4's perf harness loaded keys in name
+  order; real `SCAN` order is effectively random, and at 1M keys a tree toggle, a sort change or a
+  full filter rebuild then takes ~0.4–0.5 s instead of fitting in a 16 ms frame. M6 makes the
+  harness measure the real case, keeps a name order up to date as keys arrive instead of sorting
+  at rebuild time, and runs large rebuilds as a resumable job sliced across frames, with the old
+  list on screen and a visible rebuilding readout until the new one is ready. Designed in
+  [`plans/m6-perf-rebuild.md`](plans/m6-perf-rebuild.md).
 
 ## 10. Open questions
 
