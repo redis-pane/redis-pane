@@ -72,11 +72,21 @@ pub enum Token {
     /// is obviously the junior, and underline is the one modifier still free in
     /// monochrome once the selection has taken reverse video.
     OpenRow,
+    /// The colour the app paints behind everything it draws — DESIGN §5's
+    /// `background`.
+    ///
+    /// A *background only*, and **optional**: a theme that does not set it
+    /// (`dark`) paints nothing and the reader's terminal shows through. A theme
+    /// that does (`light`, `high-contrast`) gets that colour in every cell the
+    /// frame does not otherwise colour, overlays included, so what the contrast
+    /// test measures is what is on screen. In monochrome it is nothing, like
+    /// every other hue.
+    Background,
 }
 
 impl Token {
     /// How many tokens there are — the length of a palette's arrays.
-    pub const COUNT: usize = 21;
+    pub const COUNT: usize = 22;
 
     /// Every token, in the order a palette stores them.
     pub const ALL: [Token; Token::COUNT] = [
@@ -101,6 +111,7 @@ impl Token {
         Token::Danger,
         Token::SurfaceDetached,
         Token::OpenRow,
+        Token::Background,
     ];
 
     /// The token's slot in a palette's arrays — its position in [`Token::ALL`].
@@ -136,6 +147,7 @@ impl Token {
             Token::Warn => "warn",
             Token::Danger => "danger",
             Token::SurfaceDetached => "surface-detached",
+            Token::Background => "background",
             Token::OpenRow => return None,
         })
     }
@@ -148,7 +160,10 @@ impl Token {
     /// The channel a bare `"#rrggbb"` in a user theme sets: the background for
     /// the two tokens that are backgrounds, the foreground for the rest.
     fn primary_is_background(self) -> bool {
-        matches!(self, Token::Selected | Token::SurfaceDetached)
+        matches!(
+            self,
+            Token::Selected | Token::SurfaceDetached | Token::Background
+        )
     }
 }
 
@@ -267,7 +282,15 @@ impl<C> Slot<C> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ColorSpec {
     Primary(Rgb),
-    Channels { fg: Option<Rgb>, bg: Option<Rgb> },
+    Channels {
+        fg: Option<Rgb>,
+        bg: Option<Rgb>,
+    },
+    /// `"terminal"`: the token sets nothing, so the terminal's own colour shows
+    /// through. Only meaningful for [`Token::Background`] — it is how a user
+    /// theme turns off the painting it inherited from a light base — and the
+    /// config parser refuses it anywhere else.
+    Terminal,
 }
 
 /// A theme's colours: for every token, what it sets at truecolor and at 256
@@ -280,10 +303,13 @@ pub enum ColorSpec {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Palette {
     pub name: String,
-    /// The terminal background this palette was designed against. Never
-    /// painted — the app does not set the terminal's background — but it is
-    /// what the contrast test measures every foreground against, and why
-    /// `light` is for light terminals.
+    /// The terminal background this palette was designed against. It is **not**
+    /// what gets painted — that is the [`Token::Background`] slot, which only
+    /// `light` and `high-contrast` set — but it is what the contrast test
+    /// measures against for a palette that paints nothing (`dark`, whose
+    /// guarantee therefore rests on an assumed terminal). For a palette that
+    /// does paint, the test measures [`Palette::ground`] instead, which is
+    /// what is actually on screen.
     pub background: Rgb,
     true_color: [Slot<Rgb>; Token::COUNT],
     ansi_256: [Slot<u8>; Token::COUNT],
@@ -418,6 +444,7 @@ impl Palette {
                 (Warn, h(0x6B5A00)),
                 (Danger, h(0xB4162B)),
                 (SurfaceDetached, Slot::bg(Rgb::hex(0xE6ECF7))),
+                (Background, Slot::bg(Rgb::hex(0xFFFFFF))),
             ],
         )
     }
@@ -451,6 +478,7 @@ impl Palette {
                 (Warn, h(0xFFD700)),
                 (Danger, h(0xFF8080)),
                 (SurfaceDetached, Slot::bg(Rgb::hex(0x10264D))),
+                (Background, Slot::bg(Rgb::hex(0x000000))),
             ],
         )
     }
@@ -471,6 +499,7 @@ impl Palette {
         let i = token.index();
         let mut slot = self.true_color[i];
         match spec {
+            ColorSpec::Terminal => slot = Slot::NONE,
             ColorSpec::Primary(c) if token.primary_is_background() => slot.bg = Some(c),
             ColorSpec::Primary(c) => slot.fg = Some(c),
             ColorSpec::Channels { fg, bg } => {
@@ -480,6 +509,24 @@ impl Palette {
         }
         self.true_color[i] = slot;
         self.ansi_256[i] = quantize_slot(slot);
+    }
+
+    /// The colour this palette paints behind everything at `depth`, if it
+    /// paints one. `None` for `dark`, for a user theme that says
+    /// `"background": "terminal"`, and always in monochrome.
+    pub fn painted_background(&self, depth: ColorDepth) -> Option<Rgb> {
+        match depth {
+            ColorDepth::TrueColor => self.true_color(Token::Background).bg,
+            ColorDepth::Ansi256 => self.ansi_256(Token::Background).bg.map(xterm_rgb),
+            ColorDepth::Monochrome => None,
+        }
+    }
+
+    /// The background every foreground is actually read against at `depth`:
+    /// the painted one when there is one, otherwise [`Palette::background`],
+    /// the terminal this palette assumes.
+    pub fn ground(&self, depth: ColorDepth) -> Rgb {
+        self.painted_background(depth).unwrap_or(self.background)
     }
 
     /// What `token` sets at truecolor.
@@ -601,6 +648,12 @@ impl Theme {
     /// position, somewhere on screen.
     pub fn style(&self, token: Token) -> Style {
         self.styles[token.index()]
+    }
+
+    /// The colour this theme paints behind the whole frame, or `None` when it
+    /// lets the terminal's show through (`dark`, monochrome, `"terminal"`).
+    pub fn background(&self) -> Option<Color> {
+        self.style(Token::Background).bg
     }
 }
 
@@ -812,7 +865,9 @@ mod tests {
                 let floor = if p.name == "high-contrast" { AAA } else { AA };
                 for t in READABLE {
                     let fg = fg_rgb(&p, depth, t);
-                    let over_ground = contrast_ratio(fg, p.background);
+                    // Against what is on screen: the painted background where
+                    // the palette paints one, the assumed terminal otherwise.
+                    let over_ground = contrast_ratio(fg, p.ground(depth));
                     assert!(
                         over_ground >= floor,
                         "{} {depth:?} {t:?} on the ground: {over_ground:.2}",
@@ -840,6 +895,10 @@ mod tests {
         for p in builtins() {
             for t in Token::ALL {
                 if t == Token::OpenRow {
+                    continue;
+                }
+                // `dark` deliberately paints nothing (DESIGN §5).
+                if t == Token::Background && p.name == "dark" {
                     continue;
                 }
                 let (tc, c256) = (p.true_color(t), p.ansi_256(t));
@@ -1028,6 +1087,86 @@ mod tests {
         assert_eq!(
             p.true_color(Token::Muted),
             Palette::dark().true_color(Token::Muted)
+        );
+    }
+
+    #[test]
+    fn only_light_and_high_contrast_paint_a_background() {
+        for p in builtins() {
+            for depth in [ColorDepth::TrueColor, ColorDepth::Ansi256] {
+                let painted = p.painted_background(depth);
+                match p.name.as_str() {
+                    "dark" => assert_eq!(painted, None, "dark must stay transparent"),
+                    _ => {
+                        let want = match depth {
+                            ColorDepth::TrueColor => p.background,
+                            _ => xterm_rgb(quantize(p.background)),
+                        };
+                        assert_eq!(
+                            painted,
+                            Some(want),
+                            "{} paints the ground it is designed against ({depth:?})",
+                            p.name
+                        );
+                    }
+                }
+            }
+            assert_eq!(p.painted_background(ColorDepth::Monochrome), None);
+            assert_eq!(
+                Theme::with_palette(ColorDepth::Monochrome, &p).background(),
+                None
+            );
+        }
+        assert_eq!(Theme::new(ColorDepth::TrueColor).background(), None);
+        assert_eq!(
+            Theme::with_palette(ColorDepth::TrueColor, &Palette::light()).background(),
+            Some(Color::Rgb(255, 255, 255))
+        );
+        assert_eq!(
+            Theme::with_palette(ColorDepth::Ansi256, &Palette::light()).background(),
+            Some(Color::Indexed(231))
+        );
+    }
+
+    #[test]
+    fn ground_is_the_painted_background_or_the_assumed_terminal() {
+        let dark = Palette::dark();
+        assert_eq!(dark.ground(ColorDepth::TrueColor), dark.background);
+        let cfg =
+            config(r##"{"theme":"m","themes":{"m":{"base":"light","background":"#fafafa"}}}"##);
+        let p = select(None, Some(&cfg)).unwrap();
+        assert_eq!(p.ground(ColorDepth::TrueColor), Rgb(0xFA, 0xFA, 0xFA));
+        // The 256-colour slot is the nearest index, and the ground says so.
+        assert_eq!(
+            p.ground(ColorDepth::Ansi256),
+            xterm_rgb(quantize(Rgb(0xFA, 0xFA, 0xFA)))
+        );
+        assert_ne!(p.ground(ColorDepth::TrueColor), p.background);
+    }
+
+    #[test]
+    fn a_user_theme_inherits_its_bases_background_and_can_turn_it_off() {
+        let cfg = config(
+            r##"{"themes":{"on_light":{"base":"light"},"on_dark":{"base":"dark"},"off":{"base":"light","background":"terminal"},"set":{"base":"dark","background":"#102030"}}}"##,
+        );
+        let get = |n| select(Some(n), Some(&cfg)).unwrap();
+        let tc = ColorDepth::TrueColor;
+        assert_eq!(
+            get("on_light").painted_background(tc),
+            Some(Rgb(255, 255, 255))
+        );
+        assert_eq!(get("on_dark").painted_background(tc), None);
+        let off = get("off");
+        assert_eq!(off.painted_background(tc), None);
+        assert_eq!(off.painted_background(ColorDepth::Ansi256), None);
+        // Turning painting off leaves the rest of the base alone.
+        assert_eq!(
+            off.true_color(Token::Text),
+            Palette::light().true_color(Token::Text)
+        );
+        assert_eq!(
+            get("set").painted_background(tc),
+            Some(Rgb(0x10, 0x20, 0x30))
         );
     }
 

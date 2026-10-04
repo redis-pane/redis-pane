@@ -197,3 +197,97 @@ Built as planned, with these build-time resolutions and deviations:
 - **Rollback gap:** accepted; one note in the `Config::theme` doc and DESIGN §5.
 - **Not done:** the by-hand `--theme light` run against seeded data (needs a TTY and Redis).
 
+
+## Follow-up: themes paint their own background
+
+Status: **built (2026-10-04).** Build-time resolutions are under Outcome below.
+
+### Why
+
+By-hand testing found `--theme light` unreadable on a dark terminal: key names, column headers
+and the title bar's target are near-black on near-black. That is the design as written ("the app
+does not paint the terminal background, so it cannot make either work on the wrong one"), but the
+design has two defects:
+
+1. **The contrast test certifies a background nobody sees.** `Palette::background` is what every
+   foreground is measured against, and it is never painted. On a real terminal the test passes
+   whatever the reader actually sees.
+2. **The failure is silent.** Nothing says "this theme wants a light terminal"; the most natural
+   first thing anyone tries, `--theme light`, looks broken.
+
+Chosen (user decision, over OSC 11 detection and over documenting the limitation): **a theme may
+paint its own background.**
+
+### Decisions
+
+1. **A `background` token.** A new themable token whose value is the colour the app paints behind
+   everything it draws. `light` and `high-contrast` set it to the background they are already
+   designed against (`Palette::background`), so on those themes what the contrast test measures is
+   what is on screen. **`dark` does not set it**: the default keeps blending with the reader's
+   terminal, and `main`'s look is unchanged — no `dark` golden may change.
+2. **Painted at every depth that has colour.** Truecolor and 256 (quantized like every other
+   slot). **Monochrome paints nothing** — no theme varies there, consistent with the rest of §5.
+3. **Painted everywhere the app draws, with no holes.** The whole frame first; then every overlay
+   (help, confirm dialogs, add forms, notifications, the INFO overlay — anything that uses
+   ratatui's `Clear` or resets a cell) must re-paint the background rather than reset to the
+   terminal default, or a light theme shows dark rectangles. `Selected` and `surface-detached`
+   keep their own backgrounds on top. Find every `Clear`/`Color::Reset`/`Style::reset()` in
+   `crates/core/src/render` and decide each one.
+4. **User themes.** `background` is settable like any token (`"#rrggbb"` — a bare value sets the
+   background, as for `selected`/`surface-detached`). A user theme inherits its base's: `base:
+   light` paints, `base: dark` does not. To *not* paint on a painting base, `"background":
+   "terminal"` (the terminal's own shows through). Any other non-colour value is a parse error.
+5. **The contrast test measures against the painted background when there is one**, and against
+   `Palette::background` (the assumed terminal) only for a theme that does not paint. Document in
+   `Palette::background`'s doc comment which it now is.
+6. **`dark` stays transparent on purpose**, and that is the one remaining case where the contrast
+   claim rests on an assumed terminal background. Say so in DESIGN §5.
+
+### Testing
+
+- Goldens: light and high-contrast golden frames now show the painted background in every cell
+  (re-blessing *those* is expected); add one with an overlay open (help or a confirm dialog) in
+  `light`, proving the overlay has no unpainted hole. **Every `dark` golden must be unchanged.**
+- A unit/golden test that in `light` no cell of a rendered frame (including under an overlay) has
+  a default/reset background at truecolor and at 256.
+- Monochrome: unchanged for every theme.
+- Config: `background` parses as a colour; `"terminal"` parses and disables painting on a light
+  base; a typo'd value is a parse error with line/column.
+
+### Docs
+
+DESIGN §5 (themes paragraph, token table gains `background`, the "app does not paint" sentence is
+replaced), this doc's Outcome, and the CLAUDE.md "Colors are semantic tokens" bullet if it needs it.
+
+### Outcome of the follow-up
+
+Built as decided, with these build-time resolutions:
+
+- **One post-pass, not a pre-fill.** `render::paint_background` runs last in `frame()`, after the
+  final overlay. A pre-filled background cannot survive: `put` replaces a cell's style
+  (`Style::reset()` first), and overlays blank their rectangles with spaces written through it, so
+  each would reset the cell to the terminal's. Painting once at the end means no draw path can
+  leave a hole and none has to remember to avoid one. It touches only cells whose background is
+  still the terminal default, so `Selected` and `surface-detached` keep theirs, and it returns
+  before touching the buffer when `Theme::background()` is `None` — which is why no `dark` golden
+  changed.
+- **Foreground too.** A cell showing text with no foreground gets `text`'s. Not in the spec, but a
+  default foreground is light on a dark terminal, and light-on-light is the original bug again.
+  Blank cells are left with a default foreground.
+- **`Clear` / `Color::Reset` / `Style::reset()` audit** over `crates/core/src/render`: there is no
+  ratatui `Clear` and no `Color::Reset` written anywhere. The only `Style::reset()` is in `put`,
+  which every overlay uses to blank and draw; it is deliberate (it stops a border's DIM or a
+  Selected background bleeding into text drawn over it) and is left as is, the post-pass
+  repainting what it resets. `Color::Reset` appears only in `is_plain`/`to_golden`, which read it.
+  Direct `set_style`/`set_symbol` writes (selection fill, editor area, the reversed-cursor repaint)
+  set their own colours and are unaffected.
+- **Shape:** `Token::Background` (`"background"`), appended last so existing indices are stable.
+  `Palette::painted_background(depth)` is the slot; `Palette::ground(depth)` is that or the
+  assumed `Palette::background`, and is what the contrast test measures. `Theme::background()`
+  is the resolved colour. `ColorSpec::Terminal` clears the slot; the config parser accepts
+  `"terminal"` for `background` only, via a seed that knows which token it is reading.
+- **256 colours:** the painted background is quantised like every slot (`#FFFFFF` is 231,
+  `#000000` is 16).
+- **Goldens re-blessed:** `browser_style_light_truecolor`, `browser_style_light_ansi256` and
+  `browser_style_high_contrast_truecolor` (styles and map only; the text is unchanged). New:
+  `help_overlay_light_truecolor`. No `dark` or monochrome golden changed.

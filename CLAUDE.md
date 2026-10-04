@@ -177,7 +177,9 @@ they are expensive to retrofit:
   `crates/app/src/clipboard.rs`.
 - **Colors are semantic tokens, never literals.** Themes remap tokens; widgets ask for
   `border-focus` or `type.hash`, never a hex value. Same for icons (Nerd Font vs. ASCII must be
-  width-identical).
+  width-identical). A theme may paint its own `background` (`light`, `high-contrast`; not `dark`,
+  not monochrome); it is applied by one post-pass at the end of `render::frame`, so a new overlay
+  needs nothing to avoid a hole — do not paint backgrounds anywhere else.
 - **Terminal capability degrades gracefully.** Truecolor → 256 → monochrome; Nerd Font → ASCII;
   ≥140 cols → 80 cols → single-pane. Layout breakpoints are in DESIGN.md §2.
 - **Keybindings are data.** The keymap, the help overlay and the on-screen hint bar all read from

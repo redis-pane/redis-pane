@@ -66,7 +66,11 @@ impl<'de> Deserialize<'de> for ThemeDef {
                     let Some(token) = Token::from_name(&key) else {
                         return Err(de::Error::custom(unknown_token_message(&key)));
                     };
-                    let spec = map.next_value::<ColorSpecDef>()?.0;
+                    let spec = map
+                        .next_value_seed(ColorSpecSeed {
+                            allows_terminal: token == Token::Background,
+                        })?
+                        .0;
                     def.colors.push((token, spec));
                 }
                 Ok(def)
@@ -87,12 +91,22 @@ fn unknown_token_message(key: &str) -> String {
     )
 }
 
-/// `"#rrggbb"` or `{ "fg": "#rrggbb", "bg": "#rrggbb" }`.
+/// `"#rrggbb"` or `{ "fg": "#rrggbb", "bg": "#rrggbb" }` — and, for the
+/// `background` token alone, `"terminal"` (paint nothing).
 struct ColorSpecDef(ColorSpec);
 
-impl<'de> Deserialize<'de> for ColorSpecDef {
-    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        struct V;
+/// Deserialises one token's colour, knowing which token it is for: `"terminal"`
+/// is a value of `background` and a mistake anywhere else.
+struct ColorSpecSeed {
+    allows_terminal: bool,
+}
+
+impl<'de> de::DeserializeSeed<'de> for ColorSpecSeed {
+    type Value = ColorSpecDef;
+    fn deserialize<D: Deserializer<'de>>(self, d: D) -> Result<ColorSpecDef, D::Error> {
+        struct V {
+            allows_terminal: bool,
+        }
         fn hex<E: de::Error>(s: &str) -> Result<Rgb, E> {
             Rgb::parse(s).ok_or_else(|| E::custom(format!("`{s}` is not a colour (use #rrggbb)")))
         }
@@ -102,6 +116,24 @@ impl<'de> Deserialize<'de> for ColorSpecDef {
                 f.write_str("a \"#rrggbb\" colour, or { \"fg\": .., \"bg\": .. }")
             }
             fn visit_str<E: de::Error>(self, v: &str) -> Result<ColorSpecDef, E> {
+                if v == "terminal" {
+                    return if self.allows_terminal {
+                        Ok(ColorSpecDef(ColorSpec::Terminal))
+                    } else {
+                        Err(E::custom(
+                            "`terminal` is a value of `background` only (use #rrggbb)",
+                        ))
+                    };
+                }
+                if self.allows_terminal {
+                    return Rgb::parse(v)
+                        .map(|c| ColorSpecDef(ColorSpec::Primary(c)))
+                        .ok_or_else(|| {
+                            E::custom(format!(
+                                "`{v}` is not a colour (use #rrggbb, or \"terminal\" to paint nothing)"
+                            ))
+                        });
+                }
                 Ok(ColorSpecDef(ColorSpec::Primary(hex(v)?)))
             }
             fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<ColorSpecDef, A::Error> {
@@ -121,7 +153,9 @@ impl<'de> Deserialize<'de> for ColorSpecDef {
                 Ok(ColorSpecDef(ColorSpec::Channels { fg, bg }))
             }
         }
-        d.deserialize_any(V)
+        d.deserialize_any(V {
+            allows_terminal: self.allows_terminal,
+        })
     }
 }
 
@@ -413,6 +447,48 @@ mod tests {
                 bg: Some(Rgb(255, 255, 255))
             }
         );
+    }
+
+    #[test]
+    fn background_is_a_colour_or_terminal_and_nothing_else() {
+        let c = parse(r##"{"themes":{"m":{"background":"#fafafa"}}}"##).unwrap();
+        assert_eq!(
+            c.themes["m"].colors,
+            vec![(Token::Background, ColorSpec::Primary(Rgb(0xFA, 0xFA, 0xFA)))]
+        );
+        let c = parse(r#"{"themes":{"m":{"base":"light","background":"terminal"}}}"#).unwrap();
+        assert_eq!(
+            c.themes["m"].colors,
+            vec![(Token::Background, ColorSpec::Terminal)]
+        );
+    }
+
+    #[test]
+    fn a_typod_background_is_a_parse_error_with_a_position() {
+        for bad in ["terminl", "white", "#fff", "Terminal"] {
+            let text = format!(
+                "{{\n  \"themes\": {{\n    \"m\": {{ \"background\": \"{bad}\" }}\n  }}\n}}"
+            );
+            match parse(&text).unwrap_err() {
+                ConfigError::Parse {
+                    line,
+                    column,
+                    detail,
+                    ..
+                } => {
+                    assert_eq!(line, 3, "{bad}");
+                    assert!(column > 0, "{bad}");
+                    assert!(detail.contains(bad), "{detail}");
+                }
+                other => panic!("{bad}: expected a parse error, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn terminal_is_refused_on_every_other_token() {
+        let err = parse(r#"{"themes":{"m":{"text":"terminal"}}}"#).unwrap_err();
+        assert!(err.to_string().contains("background"), "{err}");
     }
 
     #[test]

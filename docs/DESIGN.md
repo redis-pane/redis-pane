@@ -218,7 +218,8 @@ when focus was inferred from "is a key open" instead of tracked.
 
 | Token | Use |
 |---|---|
-| `surface-detached` | A background wash on the Viewer while it holds a key that is not the Selected key (§6.4). There is no `surface` token: the app never paints the pane background, the terminal's own shows through |
+| `background` | The colour painted behind everything the app draws, overlays included. Optional: `dark` does not set it and the terminal's own shows through; `light` and `high-contrast` do. Never painted in monochrome |
+| `surface-detached` | A background wash on the Viewer while it holds a key that is not the Selected key (§6.4), over whatever `background` is. There is no `surface` token |
 | `border` / `border-focus` | Pane edges; focused pane gets `border-focus` + bold title |
 | `text` / `muted` | Primary content vs. metadata (TTL, sizes, counts) |
 | `selected` | Selection and cursor row: a full bar, a fixed foreground and background pair |
@@ -253,11 +254,18 @@ toasts, a subtle pulse on a value that just changed under a live view. No decora
 
 **Themes.** Three built-ins: `dark` (the default), `light` and `high-contrast`. Each is a token →
 colour palette with a truecolor and a 256-colour column, and a test measures WCAG contrast for
-every readable token against the background the palette is designed for (AA, 4.5:1; AAA, 7:1 for
-`high-contrast`). Monochrome is not themed: with no hue to vary, every theme degrades to the
-same thing. `light` is for light terminals and `dark` for dark ones — the app does not paint the
-terminal background, so it cannot make either work on the wrong one (OSC 11 detection is not
-attempted).
+every readable token (AA, 4.5:1; AAA, 7:1 for `high-contrast`) against the background that is
+actually on screen. Monochrome is not themed: with no hue to vary, every theme degrades to the
+same thing, and it paints no background.
+
+**A theme may paint its own background.** `light` and `high-contrast` set the `background` token,
+so they read the same on a dark terminal as on a light one (OSC 11 detection is not attempted).
+The frame is painted once, last, over everything it drew: every cell with no background of its
+own gets `background`, so an overlay cannot leave a hole where it blanked its rectangle, and
+`selected` and `surface-detached` keep theirs. Text with no foreground of its own gets `text`'s.
+`dark` deliberately sets nothing: it keeps blending with the reader's terminal. That is the one
+case where the contrast claim rests on an assumed terminal background (`#1A1B26`) rather than a
+painted one, and `dark` is only as readable as that assumption is true.
 
 Chosen with `--theme <name>`, else the config's `"theme"`, else `dark`. Users add their own under
 `"themes"`; a theme names the tokens it changes and inherits the rest from a built-in `"base"`
@@ -276,8 +284,11 @@ Chosen with `--theme <name>`, else the config's `"theme"`, else `dark`. Users ad
 }
 ```
 
-A bare `"#rrggbb"` sets a token's foreground (its background for `selected` and
-`surface-detached`); `{ "fg", "bg" }` sets either or both. The 256-colour value is derived from it
+A bare `"#rrggbb"` sets a token's foreground (its background for `selected`,
+`surface-detached` and `background`); `{ "fg", "bg" }` sets either or both. A user theme inherits
+its base's `background`: `base: light` paints, `base: dark` does not. `"background": "terminal"`
+turns painting off on a base that paints; it is accepted for `background` alone, and any other
+non-colour value is a parse error with its line and column. The 256-colour value is derived from it
 by nearest match. A user theme is not contrast-checked: the test covers the built-ins only.
 
 `env.local` is a neutral grey in every theme and distinct from `env.unknown`; green belongs to

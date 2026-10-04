@@ -11,25 +11,26 @@
                                              │
 
 --- styles ---
-a fg=#999999 bg=Reset
-b fg=#ffd700 bg=Reset
-c fg=#cccccc bg=Reset
-d fg=#ffffff bg=Reset
-e fg=#5fff5f bg=Reset
-f fg=#000000 bg=#ffd700
-g fg=#5fffd7 bg=Reset
-h fg=#ffaf5f bg=Reset
-i fg=#87ff5f bg=Reset
+a fg=#999999 bg=#000000
+b fg=#ffd700 bg=#000000
+c fg=#cccccc bg=#000000
+d fg=#ffffff bg=#000000
+e fg=#5fff5f bg=#000000
+f fg=Reset bg=#000000
+g fg=#000000 bg=#ffd700
+h fg=#5fffd7 bg=#000000
+i fg=#ffaf5f bg=#000000
+j fg=#87ff5f bg=#000000
 --- map ---
 aaaaaaaaaaaaaaabbbbbbbbbcccdddddddddddddddcccccccccccccccccccccccaaaaaaaaaaaaaaaaaeeeeeeaa
-..........................................................................................
-.ddd...........................dddd......ddd.a.ccccccccc..................................
-fffffffffffffffffffffffffffffffffffffffffffffa............................................
-.g.ddddddddddddddddd...........gggg........c.a............................................
-.b.ddddddddddddddddd...........bbbb......ccc.a............................................
-.b.ddddddddddddddddd...........bbbb......ccc.a............................................
-.h.ddddddddddddddd.............hhhh......ccc.a............................................
-.i.ddddddddddddddd.............iiii........c.a............................................
-.............................................a............................................
-.............................................a............................................
-..........................................................................................
+ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+fdddfffffffffffffffffffffffffffddddffffffdddfafcccccccccffffffffffffffffffffffffffffffffff
+gggggggggggggggggggggggggggggggggggggggggggggaffffffffffffffffffffffffffffffffffffffffffff
+fhfdddddddddddddddddfffffffffffhhhhffffffffcfaffffffffffffffffffffffffffffffffffffffffffff
+fbfdddddddddddddddddfffffffffffbbbbffffffcccfaffffffffffffffffffffffffffffffffffffffffffff
+fbfdddddddddddddddddfffffffffffbbbbffffffcccfaffffffffffffffffffffffffffffffffffffffffffff
+fifdddddddddddddddfffffffffffffiiiiffffffcccfaffffffffffffffffffffffffffffffffffffffffffff
+fjfdddddddddddddddfffffffffffffjjjjffffffffcfaffffffffffffffffffffffffffffffffffffffffffff
+fffffffffffffffffffffffffffffffffffffffffffffaffffffffffffffffffffffffffffffffffffffffffff
+fffffffffffffffffffffffffffffffffffffffffffffaffffffffffffffffffffffffffffffffffffffffffff
+ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
