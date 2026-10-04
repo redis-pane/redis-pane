@@ -1378,7 +1378,8 @@ fn confirm_overlay(
             lines.push((pending.command_text(), Token::Text));
             if *last_element {
                 lines.push((
-                    g.text("last element — the key will be deleted").into_owned(),
+                    g.text("last element — the key will be deleted")
+                        .into_owned(),
                     Token::Warn,
                 ));
             }
