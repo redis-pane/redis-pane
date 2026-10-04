@@ -14,7 +14,7 @@ refresh needed.*
 
 ## Status
 
-This is an early alpha. It handles browsing a keyspace, viewing every Redis type, and live updates
+This is a beta (`0.1.0-beta.1`). It handles browsing a keyspace, viewing every Redis type, and live updates
 when a value changes on the server. You can edit every core type in place — a String value, Hash
 fields, List elements, Set members, Sorted set scores — change a key's TTL, and delete a key (`e`
 to edit, `a` to add, `d` to delete, `t` for the TTL, `y` to confirm). Every change previews the
@@ -22,8 +22,15 @@ exact command before it runs, and Read-only Mode refuses it where it should. Edi
 inline, so a value that reads as JSON stays visible while you type.
 
 It can also watch the server itself: a live Monitor tail, the Slowlog, and a Dashboard of the
-server's own vitals, each a keystroke away. Rename, copy, and bulk operations across several keys
-are coming next.
+server's own vitals, each a keystroke away. It ships dark, light and high-contrast themes, an ASCII
+fallback for terminals without Unicode, and restores your pane split, filter, sort and selected key
+when you relaunch against the same server.
+
+Known limits: Cluster is not supported yet and a Cluster target is refused at startup, not served
+half-right. At a million keys, scrolling, typing into the filter and drawing are fast, but toggling
+the tree, changing the sort or rebuilding the whole filter takes roughly half a second when keys
+arrive in a real `SCAN` order. Rename, copy, and bulk operations across several keys are not built
+yet and are still coming next.
 
 Requires Redis 6.0 or newer (Valkey works too).
 
@@ -32,16 +39,16 @@ Requires Redis 6.0 or newer (Valkey works too).
 Download the binary for your OS from the [Releases page](https://github.com/vinodsantharam/redis-pane/releases) — macOS, Linux, and Windows are all covered. Or run the install script:
 
 ```bash
-curl --proto '=https' --tlsv1.2 -LsSf https://github.com/vinodsantharam/redis-pane/releases/download/v0.1.0-alpha.18/redis-pane-installer.sh | sh
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/vinodsantharam/redis-pane/releases/download/v0.1.0-beta.1/redis-pane-installer.sh | sh
 ```
 
 On Windows, from PowerShell:
 
 ```powershell
-irm https://github.com/vinodsantharam/redis-pane/releases/download/v0.1.0-alpha.18/redis-pane-installer.ps1 | iex
+irm https://github.com/vinodsantharam/redis-pane/releases/download/v0.1.0-beta.1/redis-pane-installer.ps1 | iex
 ```
 
-These alpha builds are unsigned, so your OS may flag them on first run — on macOS, right-click the
+These beta builds are unsigned, so your OS may flag them on first run — on macOS, right-click the
 binary → Open → confirm; on Windows, click "More info" → "Run anyway" in the SmartScreen prompt.
 
 Prefer to build it yourself? You'll need [Rust](https://rustup.rs):

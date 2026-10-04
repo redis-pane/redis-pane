@@ -1,6 +1,17 @@
 # M4 task 8: Close out M4 → beta
 
-Status: **planning — not started.**
+Status: **done.**
+
+## Outcome
+
+Built as planned. `Cargo.toml` and both install URLs moved to `0.1.0-beta.1`; `ALPHA.md` keeps its
+filename (decision 1) and was rewritten for the beta, including the stale "read-only" framing
+(decision 2); README's Status says beta and its "coming next" line stays, because rename, copy and
+bulk operations are still unbuilt, with the Cluster refusal and the million-key limitation added
+beside it (decision 3); PLAN §7 now has a "Progress: done" paragraph (decision 5); PRD §9's M4
+bullet already matched what shipped and was left alone (decision 6); PRD §10's packaging question
+stays open (decision 7). The perf claims in the user-facing docs are stated for what was measured:
+rebuilds at real `SCAN` order take about half a second at 1M keys, which is M6, not 16 ms.
 
 ## Context
 
