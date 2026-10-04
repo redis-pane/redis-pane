@@ -5,8 +5,11 @@
 //! shape as the Docker-backed integration suite already uses:
 //!
 //! ```text
-//! cargo test -p redis-pane-core --release --test perf -- --ignored --nocapture
+//! cargo test -p redis-pane-core --release --test perf -- --ignored --nocapture --test-threads=1
 //! ```
+//!
+//! One test at a time: these are wall-clock timings, and in parallel they
+//! contend for CPU and read slower than they are.
 //!
 //! **The override that shapes every budget below:** a budget the current code
 //! does not yet meet must not turn CI red. Where the current code already
