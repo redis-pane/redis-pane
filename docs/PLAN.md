@@ -304,8 +304,16 @@ flat-sorted-by-name `ScanBatch` cases are now `AT TARGET` (<16ms, down from 130m
 `perf` CI job no longer skips the whole-scan-fold test. What remains above the 16ms target — the
 filter keystroke, toggling tree mode, and the worst single page of a scan (now ~100–145ms, down
 from ~130–251ms) — is `rebuild_list`'s own Name-sort/`Tree::rebuild` cost, M4 task 4's scope, not
-task 3's. See [`m4-perf-scan.md`](plans/m4-perf-scan.md) for the resolved decisions. Tasks 4–8 are
-not started.
+task 3's. See [`m4-perf-scan.md`](plans/m4-perf-scan.md) for the resolved decisions.
+
+Task 7 is done — session restore. `$XDG_STATE_HOME/redis-pane/state.json` (falling back to
+`~/.local/state`) holds one entry per target (the credential-free `host:port/db`): pane split,
+tree/flat, sort, filter and the selected key (hex, byte-safe). The format and `State::session_snapshot`/
+`apply_session` are pure core (`crates/core/src/state/session.rs`); `crates/app/src/state_file.rs`
+does the I/O on a dedicated writer thread (atomic temp-and-rename, `0600`, 1s debounce, flushed on
+quit). A corrupt, unreadable or unknown-version file is ignored with an error notification, never a
+crash. See [`m4-session-restore.md`](plans/m4-session-restore.md) for the resolved decisions. Tasks
+4 and 8 (and 5–6, where not yet merged) are not started.
 
 | # | Task | Proves |
 |---|---|---|
