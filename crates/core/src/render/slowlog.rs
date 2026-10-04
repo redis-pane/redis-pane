@@ -14,6 +14,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 
 use crate::clock::Clock;
+use crate::glyphs::Glyph;
 use crate::state::State;
 use crate::state::slowlog::SlowlogEntry;
 use crate::state::value::cell_text;
@@ -145,8 +146,9 @@ pub fn render(state: &State, theme: &Theme, clock: &dyn Clock, area: Rect, buf: 
 fn summary_line(state: &State, theme: &Theme, area: Rect, y: u16, buf: &mut Buffer) {
     let count = state.slowlog.len();
     let noun = if count == 1 { "entry" } else { "entries" };
+    let sep = theme.glyphs.get(Glyph::Separator);
     let text = format!(
-        "SLOWLOG · {count} {noun} · sort: {}",
+        "SLOWLOG {sep} {count} {noun} {sep} sort: {}",
         state.slowlog.sort.label()
     );
     put(buf, area.x + 1, y, &text, theme.style(Token::Text));
@@ -156,7 +158,7 @@ fn summary_line(state: &State, theme: &Theme, area: Rect, y: u16, buf: &mut Buff
             area.x,
             y,
             area.width.saturating_sub(1),
-            "⟳ fetching…",
+            &theme.glyphs.text("⟳ fetching…"),
             theme.style(Token::Muted),
         );
     }
@@ -170,13 +172,23 @@ fn summary_line(state: &State, theme: &Theme, area: Rect, y: u16, buf: &mut Buff
 /// reasons.
 fn empty_state(state: &State, theme: &Theme, area: Rect, y: u16, buf: &mut Buffer) {
     let (text, token) = if let Some(detail) = &state.slowlog.error {
-        (format!("✕ SLOWLOG GET failed: {detail}"), Token::Danger)
+        (
+            format!(
+                "{} SLOWLOG GET failed: {detail}",
+                theme.glyphs.get(Glyph::Deleted)
+            ),
+            Token::Danger,
+        )
     } else if state.slowlog.loading {
-        ("⟳ fetching…".to_string(), Token::Muted)
+        (theme.glyphs.text("⟳ fetching…").into_owned(), Token::Muted)
     } else {
         (
-            "no slow commands — nothing has crossed the server's threshold since the last reset"
-                .to_string(),
+            theme
+                .glyphs
+                .text(
+                    "no slow commands — nothing has crossed the server's threshold since the last reset",
+                )
+                .into_owned(),
             Token::Muted,
         )
     };
@@ -184,7 +196,7 @@ fn empty_state(state: &State, theme: &Theme, area: Rect, y: u16, buf: &mut Buffe
         buf,
         area.x + 1,
         y,
-        &truncate(&text, area.width.saturating_sub(2) as usize),
+        &truncate(&text, area.width.saturating_sub(2) as usize, theme.glyphs),
         theme.style(token),
     );
 }
@@ -263,7 +275,7 @@ fn entry_row(ctx: RowCtx<'_>, y: u16, entry: &SlowlogEntry, selected: bool, buf:
         buf,
         area.x + cols.duration.0,
         y,
-        &format_duration_us(entry.duration_us),
+        &theme.glyphs.text(&format_duration_us(entry.duration_us)),
         duration_style,
     );
     let command = cell_text(&entry.command);
@@ -271,7 +283,7 @@ fn entry_row(ctx: RowCtx<'_>, y: u16, entry: &SlowlogEntry, selected: bool, buf:
         buf,
         area.x + cols.command.0,
         y,
-        &truncate(&command, cols.command.1 as usize),
+        &truncate(&command, cols.command.1 as usize, theme.glyphs),
         text_style,
     );
     if let Some((x, w)) = cols.client {
@@ -280,7 +292,7 @@ fn entry_row(ctx: RowCtx<'_>, y: u16, entry: &SlowlogEntry, selected: bool, buf:
             buf,
             area.x + x,
             y,
-            &truncate(&client, w as usize),
+            &truncate(&client, w as usize, theme.glyphs),
             muted_style,
         );
     }
@@ -288,13 +300,22 @@ fn entry_row(ctx: RowCtx<'_>, y: u16, entry: &SlowlogEntry, selected: bool, buf:
 
 fn detail_strip(theme: &Theme, area: Rect, y: u16, entry: &SlowlogEntry, buf: &mut Buffer) {
     let w = area.width as usize;
-    put(buf, area.x, y, &"─".repeat(w), theme.style(Token::Border));
+    put(
+        buf,
+        area.x,
+        y,
+        &theme.glyphs.get(Glyph::Horizontal).repeat(w),
+        theme.style(Token::Border),
+    );
     let command = cell_text(&entry.command);
     put(
         buf,
         area.x + 1,
         y + 1,
-        &format!("cmd    {}", truncate(&command, w.saturating_sub(9))),
+        &format!(
+            "cmd    {}",
+            truncate(&command, w.saturating_sub(9), theme.glyphs)
+        ),
         theme.style(Token::Text),
     );
     // The exact moment, UTC with date — the age column is coarse and
@@ -303,15 +324,16 @@ fn detail_strip(theme: &Theme, area: Rect, y: u16, entry: &SlowlogEntry, buf: &m
     // there is room to spell it out in full (Decision 5,
     // `docs/plans/m3-slowlog.md`).
     let when_and_client = format!(
-        "at {}  ·  client {}",
+        "at {}  {}  client {}",
         format_timestamp_utc(entry.timestamp),
+        theme.glyphs.get(Glyph::Separator),
         client_label(entry)
     );
     put(
         buf,
         area.x + 1,
         y + 2,
-        &truncate(&when_and_client, w.saturating_sub(1)),
+        &truncate(&when_and_client, w.saturating_sub(1), theme.glyphs),
         theme.style(Token::Muted),
     );
 }

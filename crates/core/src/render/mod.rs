@@ -18,6 +18,7 @@ use ratatui::style::Style;
 use ratatui::widgets::Widget;
 
 use crate::clock::Clock;
+use crate::glyphs::Glyph;
 use crate::help;
 use crate::keymap::Action;
 use crate::state::HelpView;
@@ -101,7 +102,7 @@ pub fn frame(state: &State, theme: &Theme, clock: &dyn Clock, area: Rect) -> Buf
             &mut buf,
             1,
             area.height - 1,
-            &hints,
+            &theme.glyphs.text(&hints),
             theme.style(Token::Muted),
         );
     }
@@ -139,6 +140,7 @@ fn value_pane(
     if area.height == 0 || area.width < 6 {
         return;
     }
+    let g = theme.glyphs;
     let now = clock.now_epoch_ms();
 
     // A read is in flight for a key that isn't (yet) what's on screen — a
@@ -172,7 +174,13 @@ fn value_pane(
         } else {
             "no key selected"
         };
-        put(buf, area.x + 1, area.y, label, theme.style(Token::Muted));
+        put(
+            buf,
+            area.x + 1,
+            area.y,
+            &g.text(label),
+            theme.style(Token::Muted),
+        );
         return;
     };
 
@@ -201,7 +209,13 @@ fn value_pane(
                 &format!("{hint} back"),
                 theme.style(Token::Muted),
             );
-            let x1 = put(buf, x1, area.y, "  ·  ", theme.style(Token::Border));
+            let x1 = put(
+                buf,
+                x1,
+                area.y,
+                &g.text("  ·  "),
+                theme.style(Token::Border),
+            );
             put(
                 buf,
                 x1,
@@ -213,7 +227,7 @@ fn value_pane(
                 buf,
                 area.x + 1,
                 area.y + 1,
-                "✕ gone",
+                &g.text("✕ gone"),
                 theme.style(Token::Danger),
             );
         } else {
@@ -229,7 +243,7 @@ fn value_pane(
                 area.x,
                 area.y,
                 area.width.saturating_sub(1),
-                "✕ gone",
+                &g.text("✕ gone"),
                 theme.style(Token::Danger),
             );
         }
@@ -264,24 +278,34 @@ fn value_pane(
     // being read, and a glyph rather than a hue so it survives monochrome.
     if !standalone {
         let x = area.x.saturating_sub(1);
-        let rule = if detached { "┊" } else { "│" };
+        let rule = g.get(if detached {
+            Glyph::VerticalDashed
+        } else {
+            Glyph::Vertical
+        });
         for y in 0..area.height {
             put(buf, x, area.y + y, rule, theme.style(Token::Border));
         }
         // …and tied to the Open key's row where that row is on screen, so the
         // two panes are visibly one thing rather than two.
         match open_row {
-            keys::OpenRowMark::At(y) => put(buf, x, y, "├", theme.style(Token::Warn)),
+            keys::OpenRowMark::At(y) => {
+                put(buf, x, y, g.get(Glyph::TeeRight), theme.style(Token::Warn))
+            }
             // Scrolled out of the window: point the reader the right way rather
             // than leaving `not in view` to be searched for by hand.
-            keys::OpenRowMark::Above if detached => {
-                put(buf, x, area.y, "▲", theme.style(Token::Warn))
-            }
+            keys::OpenRowMark::Above if detached => put(
+                buf,
+                x,
+                area.y,
+                g.get(Glyph::OffAbove),
+                theme.style(Token::Warn),
+            ),
             keys::OpenRowMark::Below if detached => put(
                 buf,
                 x,
                 area.y + area.height.saturating_sub(1),
-                "▼",
+                g.get(Glyph::OffBelow),
                 theme.style(Token::Warn),
             ),
             _ => 0,
@@ -299,7 +323,7 @@ fn value_pane(
             .hint(crate::keymap::Action::Cancel)
             .unwrap_or_default();
         let x1 = put(buf, x0, area.y, &format!("{hint} back"), sty(Token::Muted));
-        put(buf, x1, area.y, "  ·  ", sty(Token::Border));
+        put(buf, x1, area.y, &g.text("  ·  "), sty(Token::Border));
         put(buf, x1 + 5, area.y, &open.name.display(), sty(Token::Text))
     } else {
         // The key name is this pane's header, and like the keys pane's column
@@ -331,6 +355,7 @@ fn value_pane(
     if let Some(chips) = detached_chip(attachment) {
         let right = area.width.saturating_sub(1);
         for chip in chips {
+            let chip = &*g.text(chip);
             let width = chip.chars().count() as u16;
             // One space of daylight, so a long name and the chip can never read
             // as one string.
@@ -356,7 +381,7 @@ fn value_pane(
         buf,
         x1,
         area.y + 1,
-        &format!(" · {}", viewer.measure()),
+        &g.text(&format!(" · {}", viewer.measure())),
         sty(Token::Muted),
     );
     // `measure` is the value's real length; the body can only show what the
@@ -370,7 +395,7 @@ fn value_pane(
             buf,
             x2,
             area.y + 1,
-            &format!(" · {shown} shown"),
+            &g.text(&format!(" · {shown} shown")),
             sty(Token::Warn),
         ),
         None => x2,
@@ -379,7 +404,7 @@ fn value_pane(
         buf,
         x3,
         area.y + 1,
-        &format!(" · {}", keys::format_size(open.size_bytes)),
+        &g.text(&format!(" · {}", keys::format_size(open.size_bytes))),
         sty(Token::Muted),
     );
 
@@ -390,7 +415,7 @@ fn value_pane(
         buf,
         x0,
         area.y + 2,
-        &format!("ttl {ttl}"),
+        &g.text(&format!("ttl {ttl}")),
         sty(Token::Muted),
     );
     // Whether the inline editor's current text still parses as JSON, when
@@ -402,7 +427,7 @@ fn value_pane(
         } else {
             (" · json ✗", Token::Warn)
         };
-        put(buf, ttl_end, area.y + 2, label, sty(token));
+        put(buf, ttl_end, area.y + 2, &g.text(label), sty(token));
     }
 
     // A Refetch of this same key is in flight (invalidation re-arm, reconnect
@@ -431,7 +456,7 @@ fn value_pane(
         // to, nothing broken. Checked before the plain `●` case below, or an
         // idle edit with no pending change would render as plain green live.
         Token::Warn
-    } else if currency.starts_with('●') {
+    } else if currency.starts_with(Glyph::Live.unicode()) {
         Token::Ok
     } else {
         Token::Muted
@@ -441,7 +466,7 @@ fn value_pane(
         area.x,
         area.y + 2,
         area.width.saturating_sub(1),
-        &currency,
+        &g.text(&currency),
         sty(token),
     );
     // A held update needs a way to ask for it, and the hint must name the
@@ -551,7 +576,7 @@ fn value_pane(
                     Err(refusal) => format!("·· {}", refusal.reason()),
                 }
             };
-            put(buf, content_x, line_row, &line, sty(Token::Muted));
+            put(buf, content_x, line_row, &g.text(&line), sty(Token::Muted));
             return;
         }
         if let Some(name) = editor.field_name() {
@@ -586,7 +611,13 @@ fn value_pane(
             };
             let label_w = name_label.len().max(value_label.len()) as u16;
             let content_x = x0 + 1 + label_w + 2;
-            let mark = |active: bool| if active { "▌" } else { " " };
+            let mark = |active: bool| {
+                if active {
+                    g.get(Glyph::ActiveHalf)
+                } else {
+                    " "
+                }
+            };
             let mark_token = |active: bool| {
                 if active {
                     Token::Selected
@@ -617,7 +648,13 @@ fn value_pane(
                     open.hash_field_shown_duplicate()
                 };
                 if duplicate {
-                    put(buf, name_end + 2, body_top, "⚠ exists", sty(Token::Warn));
+                    put(
+                        buf,
+                        name_end + 2,
+                        body_top,
+                        &g.text("⚠ exists"),
+                        sty(Token::Warn),
+                    );
                 }
             }
 
@@ -658,7 +695,7 @@ fn value_pane(
                         buf,
                         content_x,
                         value_row,
-                        "·· Enter to write the value",
+                        &g.text("·· Enter to write the value"),
                         sty(Token::Muted),
                     );
                 } else {
@@ -714,7 +751,11 @@ fn value_pane(
                 buf,
                 x0 + c as u16 * col_w,
                 y + r as u16,
-                &clip(&cell, width.saturating_sub(1) as usize),
+                &clip(
+                    &cell,
+                    width.saturating_sub(1) as usize,
+                    g.get(Glyph::Ellipsis),
+                ),
                 sty(if cursor_row {
                     Token::Selected
                 } else if c == 0 && cols.len() > 1 {
@@ -744,6 +785,7 @@ fn opening_placeholder(
     buf: &mut Buffer,
 ) {
     solid_divider(buf, area, standalone, theme);
+    let g = theme.glyphs;
 
     let body_top = if standalone {
         let hint = state
@@ -757,7 +799,13 @@ fn opening_placeholder(
             &format!("{hint} back"),
             theme.style(Token::Muted),
         );
-        let x1 = put(buf, x1, area.y, "  ·  ", theme.style(Token::Border));
+        let x1 = put(
+            buf,
+            x1,
+            area.y,
+            &g.text("  ·  "),
+            theme.style(Token::Border),
+        );
         put(
             buf,
             x1,
@@ -769,7 +817,7 @@ fn opening_placeholder(
             buf,
             area.x + 1,
             area.y + 1,
-            "⟳ fetching…",
+            &g.text("⟳ fetching…"),
             theme.style(Token::Muted),
         );
         area.y + 2
@@ -786,7 +834,7 @@ fn opening_placeholder(
             area.x,
             area.y,
             area.width.saturating_sub(1),
-            "⟳ fetching…",
+            &g.text("⟳ fetching…"),
             theme.style(Token::Muted),
         );
         area.y + 1
@@ -796,7 +844,7 @@ fn opening_placeholder(
     if inner == 0 {
         return;
     }
-    let dash: String = "┈".repeat(inner);
+    let dash: String = g.get(Glyph::HorizontalDashed).repeat(inner);
     for y in body_top..area.y + area.height {
         put(buf, area.x + 1, y, &dash, theme.style(Token::Muted));
     }
@@ -813,7 +861,13 @@ fn solid_divider(buf: &mut Buffer, area: Rect, standalone: bool, theme: &Theme) 
     }
     let x = area.x.saturating_sub(1);
     for y in 0..area.height {
-        put(buf, x, area.y + y, "│", theme.style(Token::Border));
+        put(
+            buf,
+            x,
+            area.y + y,
+            theme.glyphs.get(Glyph::Vertical),
+            theme.style(Token::Border),
+        );
     }
 }
 
@@ -837,7 +891,7 @@ fn detached_chip(attachment: Option<Attachment>) -> Option<&'static [&'static st
     }
 }
 
-fn clip(s: &str, width: usize) -> String {
+fn clip(s: &str, width: usize, ellipsis: &str) -> String {
     if s.chars().count() <= width {
         return s.to_string();
     }
@@ -845,7 +899,7 @@ fn clip(s: &str, width: usize) -> String {
         return String::new();
     }
     let mut out: String = s.chars().take(width - 1).collect();
-    out.push('…');
+    out.push_str(ellipsis);
     out
 }
 
@@ -887,9 +941,10 @@ fn status_bar(state: &State, theme: &Theme, clock: &dyn Clock, area: Rect, buf: 
             _ => Token::Muted,
         }
     };
-    let mut line = readout;
+    let g = theme.glyphs;
+    let mut line = g.text(&readout).into_owned();
     if let Some(sort) = sort_readout {
-        line = format!("{line}   {sort}");
+        line = format!("{line}   {}", g.text(&sort));
     }
     // A copy confirmation displaces the scan readout for a moment rather than
     // claiming another row (G7). A failure outranks both and stays until it is
@@ -902,7 +957,7 @@ fn status_bar(state: &State, theme: &Theme, clock: &dyn Clock, area: Rect, buf: 
             .keymap
             .hint(crate::keymap::Action::Cancel)
             .unwrap_or_default();
-        line = format!("✕ {error}   {dismiss} dismiss");
+        line = format!("{} {error}   {dismiss} dismiss", g.get(Glyph::Deleted));
     }
     let x = put(buf, 1, y, &line, theme.style(token));
     if on_keys
@@ -1007,7 +1062,10 @@ fn here_row_text(row: &help::HelpRow) -> String {
 /// here — it is already "de-emphasised text" by its own doc comment, and the
 /// plan only asks for *a* token that reads as dimmed, not a new one.
 fn draw_help_row(buf: &mut Buffer, x: u16, y: u16, theme: &Theme, row: &help::HelpRow) {
-    let key_and_label = format!("{:<10}{}", row.keys, row.label);
+    let g = theme.glyphs;
+    let key_and_label = g
+        .text(&format!("{:<10}{}", row.keys, row.label))
+        .into_owned();
     let base = if row.refused.is_some() {
         Token::Muted
     } else {
@@ -1015,7 +1073,13 @@ fn draw_help_row(buf: &mut Buffer, x: u16, y: u16, theme: &Theme, row: &help::He
     };
     let end = put(buf, x, y, &key_and_label, theme.style(base));
     if let Some(refusal) = &row.refused {
-        put(buf, end + 2, y, &refusal.text(), theme.style(Token::Warn));
+        put(
+            buf,
+            end + 2,
+            y,
+            &g.text(&refusal.text()),
+            theme.style(Token::Warn),
+        );
     }
 }
 
@@ -1031,13 +1095,16 @@ fn help_overlay(state: &State, _view: HelpView, theme: &Theme, area: Rect, buf: 
     let ctx = help::context(state);
     let here_rows = help::here(state, ctx);
     let everywhere_rows = help::everywhere(state);
-    let status = help::status(state);
+    let status = help::status(state).map(|s| theme.glyphs.text(&s).into_owned());
     let everywhere_line = join_rows(&everywhere_rows);
     let footer = match other_pane_pointer(ctx) {
         Some(phrase) => format!("Tab {phrase} · Esc close"),
         None => "Esc close".to_string(),
     };
     let title = format!(" help · {} ", context_title(ctx));
+    let g = theme.glyphs;
+    let (footer, title) = (g.text(&footer).into_owned(), g.text(&title).into_owned());
+    let everywhere_line = g.text(&everywhere_line).into_owned();
 
     // Sizing: top border + status line(s) + one row per HERE row + a blank +
     // the EVERYWHERE line + a blank + the footer + bottom border. Every
@@ -1048,7 +1115,10 @@ fn help_overlay(state: &State, _view: HelpView, theme: &Theme, area: Rect, buf: 
     if let Some(s) = status.as_deref() {
         plain_lines.push(s);
     }
-    let here_text: Vec<String> = here_rows.iter().map(here_row_text).collect();
+    let here_text: Vec<String> = here_rows
+        .iter()
+        .map(|r| g.text(&here_row_text(r)).into_owned())
+        .collect();
     for line in &here_text {
         plain_lines.push(line);
     }
@@ -1074,12 +1144,24 @@ fn help_overlay(state: &State, _view: HelpView, theme: &Theme, area: Rect, buf: 
         let line = if y == 0 || y == h - 1 {
             format!(
                 "{}{}{}",
-                if y == 0 { "┌" } else { "└" },
-                "─".repeat(w.saturating_sub(2)),
-                if y == 0 { "┐" } else { "┘" }
+                g.get(if y == 0 {
+                    Glyph::CornerTopLeft
+                } else {
+                    Glyph::CornerBottomLeft
+                }),
+                g.get(Glyph::Horizontal).repeat(w.saturating_sub(2)),
+                g.get(if y == 0 {
+                    Glyph::CornerTopRight
+                } else {
+                    Glyph::CornerBottomRight
+                })
             )
         } else {
-            format!("│{}│", " ".repeat(w.saturating_sub(2)))
+            format!(
+                "{v}{}{v}",
+                " ".repeat(w.saturating_sub(2)),
+                v = g.get(Glyph::Vertical)
+            )
         };
         put(buf, x0 as u16, row, &line, border);
     }
@@ -1127,7 +1209,7 @@ const MAX_DIFF_LINES: usize = 8;
 /// Truncate from the *right*, keeping the start — the complement of
 /// [`truncate_left`]. Diff content is read left-to-right like code, so what
 /// distinguishes one line from the next is usually at the front.
-fn truncate_right(s: &str, width: usize) -> String {
+fn truncate_right(s: &str, width: usize, ellipsis: &str) -> String {
     let len = s.chars().count();
     if len <= width {
         return s.to_string();
@@ -1137,14 +1219,20 @@ fn truncate_right(s: &str, width: usize) -> String {
     }
     let keep = width - 1;
     let mut out: String = s.chars().take(keep).collect();
-    out.push('…');
+    out.push_str(ellipsis);
     out
 }
 
 /// Renders one side of a String-edit diff into `lines`: up to
 /// [`MAX_DIFF_LINES`] rows of `bytes`, each prefixed with `mark`, plus a
 /// "N more lines" footer when it was longer than that.
-fn push_diff_side(lines: &mut Vec<(String, Token)>, mark: &str, bytes: &[u8], token: Token) {
+fn push_diff_side(
+    lines: &mut Vec<(String, Token)>,
+    mark: &str,
+    bytes: &[u8],
+    token: Token,
+    ellipsis: &str,
+) {
     let text = String::from_utf8_lossy(bytes);
     let rows: Vec<&str> = text.split('\n').collect();
     for row in rows.iter().take(MAX_DIFF_LINES) {
@@ -1152,7 +1240,7 @@ fn push_diff_side(lines: &mut Vec<(String, Token)>, mark: &str, bytes: &[u8], to
     }
     if rows.len() > MAX_DIFF_LINES {
         lines.push((
-            format!("  … {} more lines", rows.len() - MAX_DIFF_LINES),
+            format!("  {ellipsis} {} more lines", rows.len() - MAX_DIFF_LINES),
             Token::Muted,
         ));
     }
@@ -1192,6 +1280,9 @@ fn confirm_overlay(
         Some(reason) => format!("read-only ({}) · Esc dismiss", reason.label()),
         None => "y confirm · Esc cancel".to_string(),
     };
+    let g = theme.glyphs;
+    let hint = g.text(&hint).into_owned();
+    let ell = g.get(Glyph::Ellipsis);
 
     let mut lines: Vec<(String, Token)> = Vec::new();
     match pending {
@@ -1204,10 +1295,10 @@ fn confirm_overlay(
         PendingMutation::SetString { name, old, new, .. } => {
             // The value itself is the `+` side of the diff below.
             lines.push((format!("SET {} KEEPTTL XX", name.display()), Token::Text));
-            push_diff_side(&mut lines, "-", old, Token::Danger);
-            push_diff_side(&mut lines, "+", new, Token::Ok);
+            push_diff_side(&mut lines, "-", old, Token::Danger, ell);
+            push_diff_side(&mut lines, "+", new, Token::Ok, ell);
             if pending.json_warning() == Some(true) {
-                lines.push(("⚠ no longer valid JSON".to_string(), Token::Warn));
+                lines.push((g.text("⚠ no longer valid JSON").into_owned(), Token::Warn));
             }
         }
         // Guarded Hash writes (D1, D2, ADR-0015): the command line is the
@@ -1217,27 +1308,27 @@ fn confirm_overlay(
         PendingMutation::SetHashField { old, new, .. } => {
             lines.push((pending.command_text(), Token::Text));
             if let Some(guard) = pending.guard_text() {
-                lines.push((guard.to_string(), Token::Muted));
+                lines.push((g.text(&guard).into_owned(), Token::Muted));
             }
-            push_diff_side(&mut lines, "-", old, Token::Danger);
-            push_diff_side(&mut lines, "+", new, Token::Ok);
+            push_diff_side(&mut lines, "-", old, Token::Danger, ell);
+            push_diff_side(&mut lines, "+", new, Token::Ok, ell);
             if pending.json_warning() == Some(true) {
-                lines.push(("⚠ no longer valid JSON".to_string(), Token::Warn));
+                lines.push((g.text("⚠ no longer valid JSON").into_owned(), Token::Warn));
             }
         }
         PendingMutation::AddHashField { value, .. } => {
             lines.push((pending.command_text(), Token::Text));
             if let Some(guard) = pending.guard_text() {
-                lines.push((guard.to_string(), Token::Muted));
+                lines.push((g.text(&guard).into_owned(), Token::Muted));
             }
             // `+` side only: there is no prior value to diff against.
-            push_diff_side(&mut lines, "+", value, Token::Ok);
+            push_diff_side(&mut lines, "+", value, Token::Ok, ell);
         }
         PendingMutation::DeleteHashField { last_field, .. } => {
             lines.push((pending.command_text(), Token::Text));
             if *last_field {
                 lines.push((
-                    "last field — the key will be deleted".to_string(),
+                    g.text("last field — the key will be deleted").into_owned(),
                     Token::Warn,
                 ));
             }
@@ -1247,15 +1338,15 @@ fn confirm_overlay(
         PendingMutation::AddSetMember { member, .. } => {
             lines.push((pending.command_text(), Token::Text));
             if let Some(guard) = pending.guard_text() {
-                lines.push((guard.to_string(), Token::Muted));
+                lines.push((g.text(&guard).into_owned(), Token::Muted));
             }
-            push_diff_side(&mut lines, "+", member, Token::Ok);
+            push_diff_side(&mut lines, "+", member, Token::Ok, ell);
         }
         PendingMutation::DeleteSetMember { last_member, .. } => {
             lines.push((pending.command_text(), Token::Text));
             if *last_member {
                 lines.push((
-                    "last member — the key will be deleted".to_string(),
+                    g.text("last member — the key will be deleted").into_owned(),
                     Token::Warn,
                 ));
             }
@@ -1268,26 +1359,26 @@ fn confirm_overlay(
         PendingMutation::SetListElement { old, new, .. } => {
             lines.push((pending.command_text(), Token::Text));
             if let Some(guard) = pending.guard_text() {
-                lines.push((guard, Token::Muted));
+                lines.push((g.text(&guard).into_owned(), Token::Muted));
             }
-            push_diff_side(&mut lines, "-", old, Token::Danger);
-            push_diff_side(&mut lines, "+", new, Token::Ok);
+            push_diff_side(&mut lines, "-", old, Token::Danger, ell);
+            push_diff_side(&mut lines, "+", new, Token::Ok, ell);
             if pending.json_warning() == Some(true) {
-                lines.push(("⚠ no longer valid JSON".to_string(), Token::Warn));
+                lines.push((g.text("⚠ no longer valid JSON").into_owned(), Token::Warn));
             }
         }
         PendingMutation::AddListElement { value, .. } => {
             lines.push((pending.command_text(), Token::Text));
             if let Some(guard) = pending.guard_text() {
-                lines.push((guard, Token::Muted));
+                lines.push((g.text(&guard).into_owned(), Token::Muted));
             }
-            push_diff_side(&mut lines, "+", value, Token::Ok);
+            push_diff_side(&mut lines, "+", value, Token::Ok, ell);
         }
         PendingMutation::DeleteListElement { last_element, .. } => {
             lines.push((pending.command_text(), Token::Text));
             if *last_element {
                 lines.push((
-                    "last element — the key will be deleted".to_string(),
+                    g.text("last element — the key will be deleted").into_owned(),
                     Token::Warn,
                 ));
             }
@@ -1309,7 +1400,7 @@ fn confirm_overlay(
         } => {
             lines.push((pending.command_text(), Token::Text));
             if let Some(guard) = pending.guard_text() {
-                lines.push((guard, Token::Muted));
+                lines.push((g.text(&guard).into_owned(), Token::Muted));
             }
             lines.push((
                 format!("member {}", String::from_utf8_lossy(member)),
@@ -1317,8 +1408,9 @@ fn confirm_overlay(
             ));
             lines.push((
                 format!(
-                    "score {} → {}",
+                    "score {} {} {}",
                     format_score(*old_score),
+                    g.get(Glyph::Right),
                     format_score(*new_score)
                 ),
                 Token::Text,
@@ -1330,7 +1422,7 @@ fn confirm_overlay(
         PendingMutation::AddZSetMember { member, score, .. } => {
             lines.push((pending.command_text(), Token::Text));
             if let Some(guard) = pending.guard_text() {
-                lines.push((guard, Token::Muted));
+                lines.push((g.text(&guard).into_owned(), Token::Muted));
             }
             push_diff_side(
                 &mut lines,
@@ -1342,6 +1434,7 @@ fn confirm_overlay(
                 )
                 .as_bytes(),
                 Token::Ok,
+                ell,
             );
         }
         PendingMutation::DeleteZSetMember {
@@ -1350,10 +1443,10 @@ fn confirm_overlay(
             ..
         } => {
             lines.push((pending.command_text(), Token::Text));
-            push_diff_side(&mut lines, "-", member, Token::Danger);
+            push_diff_side(&mut lines, "-", member, Token::Danger, ell);
             if *last_member {
                 lines.push((
-                    "last member — the key will be deleted".to_string(),
+                    g.text("last member — the key will be deleted").into_owned(),
                     Token::Warn,
                 ));
             }
@@ -1379,12 +1472,13 @@ fn confirm_overlay(
         } => {
             lines.push((pending.command_text(), Token::Text));
             if let Some(guard) = pending.guard_text() {
-                lines.push((guard, Token::Muted));
+                lines.push((g.text(&guard).into_owned(), Token::Muted));
             }
             lines.push((
                 format!(
-                    "ttl {} → {}",
+                    "ttl {} {} {}",
                     ttl_before(*old_ttl),
+                    g.get(Glyph::Right),
                     keys::format_duration(*new_ttl)
                 ),
                 Token::Text,
@@ -1394,15 +1488,18 @@ fn confirm_overlay(
             // warning for a short resulting TTL, which is a normal thing to
             // ask for (D9's explicit rejection).
             if *old_ttl == crate::state::loaded::TTL_NONE {
-                lines.push(("⚠ this key had no expiry".to_string(), Token::Warn));
+                lines.push((g.text("⚠ this key had no expiry").into_owned(), Token::Warn));
             }
         }
         PendingMutation::PersistTtl { old_ttl, .. } => {
             lines.push((pending.command_text(), Token::Text));
             if let Some(guard) = pending.guard_text() {
-                lines.push((guard, Token::Muted));
+                lines.push((g.text(&guard).into_owned(), Token::Muted));
             }
-            lines.push((format!("ttl {} → never", ttl_before(*old_ttl)), Token::Text));
+            lines.push((
+                format!("ttl {} {} never", ttl_before(*old_ttl), g.get(Glyph::Right)),
+                Token::Text,
+            ));
         }
         PendingMutation::ShiftTtl {
             old_ttl,
@@ -1411,7 +1508,7 @@ fn confirm_overlay(
         } => {
             lines.push((pending.command_text(), Token::Text));
             if let Some(guard) = pending.guard_text() {
-                lines.push((guard, Token::Muted));
+                lines.push((g.text(&guard).into_owned(), Token::Muted));
             }
             // A local courtesy figure for display only (D4, D7) — the
             // server applies the delta to the TTL as it sees it at write
@@ -1420,8 +1517,9 @@ fn confirm_overlay(
             let resulting = resulting.min(i64::from(i32::MAX)) as i32;
             lines.push((
                 format!(
-                    "ttl {} → {}",
+                    "ttl {} {} {}",
                     ttl_before(*old_ttl),
+                    g.get(Glyph::Right),
                     keys::format_duration(resulting)
                 ),
                 Token::Text,
@@ -1467,6 +1565,7 @@ fn draw_confirm_box(
     area: Rect,
     buf: &mut Buffer,
 ) {
+    let g = theme.glyphs;
     // Capped well short of the frame, so one long JSON line never turns the
     // dialog into the whole screen — width and line count are both bounded,
     // so render cost here is a function of the cap, not of the value.
@@ -1489,12 +1588,20 @@ fn draw_confirm_box(
         let line = if y == 0 || y == h - 1 {
             format!(
                 "{}{}{}",
-                if y == 0 { "┌" } else { "└" },
-                "─".repeat(w - 2),
-                if y == 0 { "┐" } else { "┘" }
+                g.get(if y == 0 {
+                    Glyph::CornerTopLeft
+                } else {
+                    Glyph::CornerBottomLeft
+                }),
+                g.get(Glyph::Horizontal).repeat(w - 2),
+                g.get(if y == 0 {
+                    Glyph::CornerTopRight
+                } else {
+                    Glyph::CornerBottomRight
+                })
             )
         } else {
-            format!("│{}│", " ".repeat(w - 2))
+            format!("{v}{}{v}", " ".repeat(w - 2), v = g.get(Glyph::Vertical))
         };
         put(buf, x0 as u16, row, &line, border);
     }
@@ -1515,7 +1622,7 @@ fn draw_confirm_box(
     }
     let content_rows = visible_rows.saturating_sub(1);
     for (i, (line, token)) in lines.iter().take(content_rows).enumerate() {
-        let text = truncate_right(line, w.saturating_sub(4));
+        let text = truncate_right(line, w.saturating_sub(4), theme.glyphs.get(Glyph::Ellipsis));
         put(
             buf,
             x0 as u16 + 2,
@@ -1524,7 +1631,11 @@ fn draw_confirm_box(
             theme.style(*token),
         );
     }
-    let hint_text = truncate_right(&hint_line.0, w.saturating_sub(4));
+    let hint_text = truncate_right(
+        &hint_line.0,
+        w.saturating_sub(4),
+        theme.glyphs.get(Glyph::Ellipsis),
+    );
     put(
         buf,
         x0 as u16 + 2,
@@ -1553,12 +1664,17 @@ fn feed_confirm_overlay(state: &State, theme: &Theme, area: Rect, buf: &mut Buff
     let mut lines: Vec<(String, Token)> =
         vec![(format!("Open MONITOR on {env_label}?"), Token::Warn)];
     for line in wrap_words(
-        "MONITOR streams every command the server runs — it costs the server for as long as this stays open.",
+        &theme.glyphs.text(
+            "MONITOR streams every command the server runs — it costs the server for as long as this stays open.",
+        ),
         wrap_width,
     ) {
         lines.push((line, Token::Text));
     }
-    let hint = ("y open · Esc cancel".to_string(), Token::Text);
+    let hint = (
+        theme.glyphs.text("y open · Esc cancel").into_owned(),
+        Token::Text,
+    );
     draw_confirm_box(lines, hint, Token::Warn, " confirm ", theme, area, buf);
 }
 
@@ -1597,12 +1713,13 @@ fn title_bar(state: &State, theme: &Theme, clock: &dyn Clock, area: Rect, buf: &
         return;
     }
     let w = area.width as usize;
+    let g = theme.glyphs;
     let border = theme.style(Token::Border);
-    buf.set_string(0, 0, "─".repeat(w), border);
+    buf.set_string(0, 0, g.get(Glyph::Horizontal).repeat(w), border);
 
     let env = state.connection.environment;
     let source = state.connection.source.label();
-    let prefix = "─ redis-pane ─ ";
+    let prefix = &g.text("─ redis-pane ─ ");
 
     // DESIGN §2 fixes the priority: the Environment and the Source are never
     // sacrificed. That pair is the entire mitigation for resolving a Connection
@@ -1616,6 +1733,9 @@ fn title_bar(state: &State, theme: &Theme, clock: &dyn Clock, area: Rect, buf: &
     // safety badge, because the Viewer header carries liveness too (§6.4) while
     // READ-ONLY appears nowhere else.
     let mut readout = status_readout(state, clock);
+    for (text, _) in &mut readout {
+        *text = g.text(text).into_owned();
+    }
     let readout_width =
         |r: &[(String, Token)]| -> usize { r.iter().map(|(t, _)| t.chars().count()).sum() };
     while !readout.is_empty() && required + readout_width(&readout) + 3 > w {
@@ -1626,19 +1746,29 @@ fn title_bar(state: &State, theme: &Theme, clock: &dyn Clock, area: Rect, buf: &
 
     let mut x = 0u16;
     x = put(buf, x, 0, prefix, border);
-    x = put(buf, x, 0, "● ", theme.style(env_token(env)));
+    x = put(
+        buf,
+        x,
+        0,
+        &format!("{} ", g.get(Glyph::Live)),
+        theme.style(env_token(env)),
+    );
     x = put(buf, x, 0, env.label(), theme.style(env_token(env)));
 
     // Whatever is left over, the target may have — truncated from the left, so
     // the part that distinguishes one host from another survives.
     let target_budget = left_budget.saturating_sub(required + 3);
     if target_budget >= 4 {
-        let target = truncate_left(&state.connection.target, target_budget);
-        x = put(buf, x, 0, " · ", theme.style(Token::Muted));
+        let target = truncate_left(
+            &state.connection.target,
+            target_budget,
+            g.get(Glyph::Ellipsis),
+        );
+        x = put(buf, x, 0, &g.text(" · "), theme.style(Token::Muted));
         x = put(buf, x, 0, &target, theme.style(Token::Text));
     }
 
-    x = put(buf, x, 0, " · ", theme.style(Token::Muted));
+    x = put(buf, x, 0, &g.text(" · "), theme.style(Token::Muted));
     x = put(buf, x, 0, &source, theme.style(Token::Muted));
     put(buf, x, 0, " ", border);
 
@@ -1656,7 +1786,7 @@ fn title_bar(state: &State, theme: &Theme, clock: &dyn Clock, area: Rect, buf: &
 ///
 /// Hosts differ at the end (`cache-01` vs `cache-02`, and the port), so cutting
 /// the front keeps what distinguishes one server from another.
-fn truncate_left(s: &str, width: usize) -> String {
+fn truncate_left(s: &str, width: usize, ellipsis: &str) -> String {
     let len = s.chars().count();
     if len <= width {
         return s.to_string();
@@ -1665,7 +1795,7 @@ fn truncate_left(s: &str, width: usize) -> String {
         return String::new();
     }
     let keep = width - 1;
-    let mut out = String::from("…");
+    let mut out = String::from(ellipsis);
     out.extend(s.chars().skip(len - keep));
     out
 }

@@ -18,6 +18,7 @@
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 
+use crate::glyphs::Glyph;
 use crate::state::pubsub::PubSubMessage;
 use crate::state::value::{JsonValue, cell_text, looks_like_json};
 use crate::state::view::{FilterMode, matches};
@@ -200,7 +201,7 @@ fn strip_line(state: &State, theme: &Theme, area: Rect, y: u16, buf: &mut Buffer
             buf,
             x,
             y,
-            &format!("{}▏", state.pubsub.input),
+            &format!("{}{}", state.pubsub.input, theme.glyphs.get(Glyph::Cursor)),
             theme.style(Token::Text),
         );
         return;
@@ -216,7 +217,14 @@ fn strip_line(state: &State, theme: &Theme, area: Rect, y: u16, buf: &mut Buffer
         buf,
         area.x + 1,
         y,
-        if strip_focused { "▶ " } else { "⟡ " },
+        &format!(
+            "{} ",
+            theme.glyphs.get(if strip_focused {
+                Glyph::StripFocused
+            } else {
+                Glyph::StripIdle
+            })
+        ),
         marker_style,
     );
 
@@ -228,7 +236,13 @@ fn strip_line(state: &State, theme: &Theme, area: Rect, y: u16, buf: &mut Buffer
     } else {
         for (i, sub) in state.pubsub.subscriptions.iter().enumerate() {
             if x >= chip_limit {
-                put(buf, x, y, "…", theme.style(Token::Muted));
+                put(
+                    buf,
+                    x,
+                    y,
+                    theme.glyphs.get(Glyph::Ellipsis),
+                    theme.style(Token::Muted),
+                );
                 break;
             }
             let selected = strip_focused && i == state.pubsub.selected_chip;
@@ -238,7 +252,7 @@ fn strip_line(state: &State, theme: &Theme, area: Rect, y: u16, buf: &mut Buffer
                 Token::Text
             });
             let label = if sub.is_pattern() {
-                format!("[{} ⁎]", sub.name())
+                format!("[{} {}]", sub.name(), theme.glyphs.get(Glyph::PatternSub))
             } else {
                 format!("[{}]", sub.name())
             };
@@ -263,8 +277,11 @@ fn strip_line(state: &State, theme: &Theme, area: Rect, y: u16, buf: &mut Buffer
 fn status_line(state: &State, theme: &Theme, area: Rect, y: u16, buf: &mut Buffer) {
     let (status_text, status_token) = match &state.pubsub.status {
         FeedStatus::Idle => ("not subscribed".to_string(), Token::Muted),
-        FeedStatus::Connecting => ("connecting…".to_string(), Token::Muted),
-        FeedStatus::Open => ("● live".to_string(), Token::Ok),
+        FeedStatus::Connecting => (theme.glyphs.text("connecting…").into_owned(), Token::Muted),
+        FeedStatus::Open => (
+            theme.glyphs.get(Glyph::Live).to_string() + " live",
+            Token::Ok,
+        ),
         FeedStatus::Closed { reason } => (
             match reason {
                 Some(r) => format!("feed closed: {r}"),
@@ -277,12 +294,14 @@ fn status_line(state: &State, theme: &Theme, area: Rect, y: u16, buf: &mut Buffe
     if state.pubsub.focus == PubSubFocus::Tail {
         if state.pubsub.paused {
             text.push_str(&format!(
-                " · paused · {} skipped",
+                " {} paused {} {} skipped",
+                theme.glyphs.get(Glyph::Separator),
+                theme.glyphs.get(Glyph::Separator),
                 state.pubsub.dropped_while_paused
             ));
         } else if !state.pubsub.following && !state.pubsub.is_empty() {
             // An empty tail has nothing to follow or to have moved off.
-            text.push_str(" · following off · End to resume");
+            text.push_str(&theme.glyphs.text(" · following off · End to resume"));
         }
     }
 
@@ -296,7 +315,7 @@ fn status_line(state: &State, theme: &Theme, area: Rect, y: u16, buf: &mut Buffe
         buf,
         area.x + 1,
         y,
-        &truncate(&text, left_budget),
+        &truncate(&text, left_budget, theme.glyphs),
         theme.style(status_token),
     );
     put_right(
@@ -311,7 +330,11 @@ fn status_line(state: &State, theme: &Theme, area: Rect, y: u16, buf: &mut Buffe
 
 fn filter_line(state: &State, theme: &Theme, area: Rect, y: u16, buf: &mut Buffer) {
     let x = put(buf, area.x + 1, y, "/ ", theme.style(Token::Warn));
-    let cursor = if state.filtering { "▏" } else { "" };
+    let cursor = if state.filtering {
+        theme.glyphs.get(Glyph::Cursor)
+    } else {
+        ""
+    };
     put(
         buf,
         x,
@@ -343,11 +366,12 @@ fn empty_state(state: &State, theme: &Theme, area: Rect, y: u16, buf: &mut Buffe
             FeedStatus::Closed { .. } => "feed closed — nothing arrived before it did",
         }
     };
+    let text = &*theme.glyphs.text(text);
     put(
         buf,
         area.x + 1,
         y,
-        &truncate(text, area.width.saturating_sub(2) as usize),
+        &truncate(text, area.width.saturating_sub(2) as usize, theme.glyphs),
         theme.style(Token::Muted),
     );
 }
@@ -408,7 +432,7 @@ fn message_row(
             buf,
             area.x + x,
             y,
-            &truncate(&format_time_ms(msg.at_ms), w as usize),
+            &truncate(&format_time_ms(msg.at_ms), w as usize, theme.glyphs),
             muted_style,
         );
     }
@@ -419,13 +443,13 @@ fn message_row(
             buf,
             area.x + x,
             y,
-            &truncate(&channel, w as usize),
+            &truncate(&channel, w as usize, theme.glyphs),
             text_style,
         );
     }
     let payload = cell_text(&msg.payload);
     let payload = if msg.truncated {
-        format!("{payload} […truncated]")
+        format!("{payload} [{}truncated]", theme.glyphs.get(Glyph::Ellipsis))
     } else {
         payload
     };
@@ -440,7 +464,7 @@ fn message_row(
         buf,
         area.x + cols.payload.0,
         y,
-        &truncate(&payload_text, cols.payload.1 as usize),
+        &truncate(&payload_text, cols.payload.1 as usize, theme.glyphs),
         text_style,
     );
 }
@@ -460,7 +484,13 @@ fn detail_strip(
     buf: &mut Buffer,
 ) {
     let w = area.width as usize;
-    put(buf, area.x, y, &"─".repeat(w), theme.style(Token::Border));
+    put(
+        buf,
+        area.x,
+        y,
+        &theme.glyphs.get(Glyph::Horizontal).repeat(w),
+        theme.style(Token::Border),
+    );
 
     let channel = cell_text(&msg.channel);
     let mut head = format!("channel {channel}");
@@ -472,17 +502,21 @@ fn detail_strip(
             // produced this delivery when more than one subscribed pattern
             // matches — hedged rather than asserted.
             head.push_str(&format!(
-                "  ·  via {via_text} (or another matching pattern)"
+                "  {}  via {via_text} (or another matching pattern)",
+                theme.glyphs.get(Glyph::Separator)
             ));
         } else {
-            head.push_str(&format!("  ·  via {via_text}"));
+            head.push_str(&format!(
+                "  {}  via {via_text}",
+                theme.glyphs.get(Glyph::Separator)
+            ));
         }
     }
     put(
         buf,
         area.x + 1,
         y + 1,
-        &truncate(&head, w.saturating_sub(1)),
+        &truncate(&head, w.saturating_sub(1), theme.glyphs),
         theme.style(Token::Text),
     );
 
@@ -503,7 +537,7 @@ fn detail_strip(
                 buf,
                 area.x + 1,
                 y + 2 + i as u16,
-                &truncate(line, w.saturating_sub(1)),
+                &truncate(line, w.saturating_sub(1), theme.glyphs),
                 theme.style(Token::Text),
             );
         }
@@ -516,16 +550,20 @@ fn detail_strip(
                 buf,
                 area.x + 1,
                 y + 2 + i as u16,
-                &truncate(line, w.saturating_sub(1)),
+                &truncate(line, w.saturating_sub(1), theme.glyphs),
                 theme.style(Token::Text),
             );
         }
-        let more = format!("… (+{} more lines)", lines.len() - shown);
+        let more = format!(
+            "{} (+{} more lines)",
+            theme.glyphs.get(Glyph::Ellipsis),
+            lines.len() - shown
+        );
         put(
             buf,
             area.x + 1,
             y + 2 + shown as u16,
-            &truncate(&more, w.saturating_sub(1)),
+            &truncate(&more, w.saturating_sub(1), theme.glyphs),
             theme.style(Token::Muted),
         );
     }

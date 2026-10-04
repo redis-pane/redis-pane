@@ -11,6 +11,7 @@
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 
+use crate::glyphs::Glyph;
 use crate::state::monitor::MonitorLine;
 use crate::state::value::cell_text;
 use crate::state::view::{FilterMode, matches};
@@ -199,15 +200,26 @@ fn banner(state: &State, theme: &Theme, area: Rect, y: u16, buf: &mut Buffer) {
         &" ".repeat(area.width as usize),
         theme.style(token),
     );
-    put(buf, area.x + 1, y, text, theme.style(token));
+    put(
+        buf,
+        area.x + 1,
+        y,
+        &theme.glyphs.text(text),
+        theme.style(token),
+    );
 }
 
 /// The feed's own status (decision 9), plus pause/following (decisions 5, 7)
 /// and how many lines are held.
 fn status_line(state: &State, theme: &Theme, area: Rect, y: u16, buf: &mut Buffer) {
     let (status_text, status_token) = match &state.monitor.status {
-        FeedStatus::Idle | FeedStatus::Connecting => ("connecting…".to_string(), Token::Muted),
-        FeedStatus::Open => ("● live".to_string(), Token::Ok),
+        FeedStatus::Idle | FeedStatus::Connecting => {
+            (theme.glyphs.text("connecting…").into_owned(), Token::Muted)
+        }
+        FeedStatus::Open => (
+            theme.glyphs.get(Glyph::Live).to_string() + " live",
+            Token::Ok,
+        ),
         FeedStatus::Closed { reason } => (
             match reason {
                 Some(r) => format!("feed closed: {r}"),
@@ -219,11 +231,13 @@ fn status_line(state: &State, theme: &Theme, area: Rect, y: u16, buf: &mut Buffe
     let mut text = status_text;
     if state.monitor.paused {
         text.push_str(&format!(
-            " · paused · {} skipped",
+            " {} paused {} {} skipped",
+            theme.glyphs.get(Glyph::Separator),
+            theme.glyphs.get(Glyph::Separator),
             state.monitor.dropped_while_paused
         ));
     } else if !state.monitor.following {
-        text.push_str(" · following off · End to resume");
+        text.push_str(&theme.glyphs.text(" · following off · End to resume"));
     }
 
     let count = state.monitor.len();
@@ -239,7 +253,7 @@ fn status_line(state: &State, theme: &Theme, area: Rect, y: u16, buf: &mut Buffe
         buf,
         area.x + 1,
         y,
-        &truncate(&text, left_budget),
+        &truncate(&text, left_budget, theme.glyphs),
         theme.style(status_token),
     );
     put_right(
@@ -254,7 +268,11 @@ fn status_line(state: &State, theme: &Theme, area: Rect, y: u16, buf: &mut Buffe
 
 fn filter_line(state: &State, theme: &Theme, area: Rect, y: u16, buf: &mut Buffer) {
     let x = put(buf, area.x + 1, y, "/ ", theme.style(Token::Warn));
-    let cursor = if state.filtering { "▏" } else { "" };
+    let cursor = if state.filtering {
+        theme.glyphs.get(Glyph::Cursor)
+    } else {
+        ""
+    };
     put(
         buf,
         x,
@@ -282,11 +300,12 @@ fn empty_state(state: &State, theme: &Theme, area: Rect, y: u16, buf: &mut Buffe
         FeedStatus::Open => "nothing has arrived yet",
         FeedStatus::Closed { .. } => "feed closed — nothing arrived before it did",
     };
+    let text = &*theme.glyphs.text(text);
     put(
         buf,
         area.x + 1,
         y,
-        &truncate(text, area.width.saturating_sub(2) as usize),
+        &truncate(text, area.width.saturating_sub(2) as usize, theme.glyphs),
         theme.style(Token::Muted),
     );
 }
@@ -335,15 +354,24 @@ fn line_row(
     });
     let parsed = line.columns();
     if let Some((x, w)) = cols.time {
-        let t = parsed.time.as_deref().unwrap_or("—");
-        put(buf, area.x + x, y, &truncate(t, w as usize), muted_style);
+        let t = parsed
+            .time
+            .as_deref()
+            .unwrap_or(theme.glyphs.get(Glyph::Dash));
+        put(
+            buf,
+            area.x + x,
+            y,
+            &truncate(t, w as usize, theme.glyphs),
+            muted_style,
+        );
     }
     if let Some((x, w)) = cols.db {
         put(
             buf,
             area.x + x,
             y,
-            &truncate(parsed.db, w as usize),
+            &truncate(parsed.db, w as usize, theme.glyphs),
             muted_style,
         );
     }
@@ -352,14 +380,14 @@ fn line_row(
             buf,
             area.x + x,
             y,
-            &truncate(parsed.client, w as usize),
+            &truncate(parsed.client, w as usize, theme.glyphs),
             muted_style,
         );
     }
     // Decision 8: shown with the Viewer's own byte escaping, never raw.
     let command = cell_text(parsed.command.as_bytes());
     let command = if line.truncated {
-        format!("{command} […truncated]")
+        format!("{command} [{}truncated]", theme.glyphs.get(Glyph::Ellipsis))
     } else {
         command
     };
@@ -367,7 +395,7 @@ fn line_row(
         buf,
         area.x + cols.command.0,
         y,
-        &truncate(&command, cols.command.1 as usize),
+        &truncate(&command, cols.command.1 as usize, theme.glyphs),
         text_style,
     );
 }
