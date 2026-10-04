@@ -27,10 +27,10 @@
 //! filter keystroke narrows from the previous result and is `AT TARGET`.
 //! What remains above 16ms is a full rebuild (a debounced filter rebuild, a
 //! tree toggle, a scheduled mid-scan rebuild in tree mode). Those ceilings
-//! were set by task 4 at **2x the local measurement, rounded up** — not 1.5x
-//! — because CI's ubuntu runner has measured about 1.4x slower than the
-//! development machine (task 2: filter keystroke 22ms local vs 31ms CI).
-//! To be calibrated against the first CI run.
+//! are **1.5x the CI measurement, rounded up** — the same rule task 2 used
+//! for the filter keystroke — because CI's ubuntu runner is the slower
+//! machine (about 1.3-1.5x the development machine) and so the one a
+//! ceiling has to hold on. Calibrated on PR #60's CI run.
 //!
 //! Keys are realistic: `user:{i:08}:session`, the same generator
 //! `crates/core/examples/memreport.rs` already uses, with two `:` separators
@@ -229,11 +229,11 @@ fn filter_rebuild_after_debounce_at_1m_keys() {
     let elapsed = time_update_and_render(&base, 11, || Msg::FilterRebuildDue);
     println!("filter rebuild after debounce @ 1M keys: {elapsed:?}");
     // CEILING: PRD target 16ms, not met — a full rebuild matches all 1M keys
-    // (~21.8ms local), but it runs once per keystroke burst, off the
-    // keystroke's own frame. Ceiling = local × 2, rounded up: 44ms.
+    // (~21.8ms local, 32.4ms CI), but it runs once per keystroke burst, off
+    // the keystroke's own frame. Ceiling = CI × 1.5, rounded up: 49ms.
     assert!(
-        elapsed < Duration::from_millis(44),
-        "post-debounce rebuild took {elapsed:?}, ceiling is 44ms (target 16ms)"
+        elapsed < Duration::from_millis(49),
+        "post-debounce rebuild took {elapsed:?}, ceiling is 49ms (target 16ms)"
     );
 }
 
@@ -268,8 +268,8 @@ fn toggle_tree_at_1m_keys() {
     // (rebuild_list's invariant) *and* a one-pass `Tree::rebuild` over all 1M
     // rows — by far the most expensive case measured here. Local baseline
     // measured ~129ms before M4 task 4's allocation-free `Tree::rebuild` and
-    // O(1) collapsed lookup; now ~44ms locally. Ceiling = local × 2, rounded
-    // up: 89ms (was 194ms).
+    // O(1) collapsed lookup; now ~44ms locally, 57.4ms on CI. Ceiling =
+    // CI × 1.5, rounded up: 89ms (was 194ms).
     assert!(
         elapsed < Duration::from_millis(89),
         "tree toggle took {elapsed:?}, ceiling is 89ms (target 16ms)"
@@ -478,11 +478,11 @@ fn whole_scan_fold_in_tree_mode_from_empty() {
     // frame) — still not met, because the pages that land on a scheduled
     // rebuild still pay for a full Name sort plus a full `Tree::rebuild`.
     // Measured ~103–143ms before M4 task 4, ~31–32ms after (allocation-free
-    // fold, O(1) collapsed lookup). Ceiling = local × 2, rounded up: 65ms
-    // (was 220ms).
+    // fold, O(1) collapsed lookup); 45.2ms on CI. Ceiling = CI × 1.5,
+    // rounded up: 68ms (was 220ms).
     assert!(
-        worst_page_time < Duration::from_millis(65),
-        "worst page took {worst_page_time:?}, ceiling is 65ms (target 16ms)"
+        worst_page_time < Duration::from_millis(68),
+        "worst page took {worst_page_time:?}, ceiling is 68ms (target 16ms)"
     );
     // AT TARGET: the median page, by contrast, already meets PRD §7's 16ms
     // bar — proof that the geometric schedule, not merely a faster rebuild,

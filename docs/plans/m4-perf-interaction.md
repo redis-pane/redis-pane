@@ -125,17 +125,18 @@ Status: **done.**
 | Filter keystroke (extends the query) | 22.3 ms | **0.27 ms** | AT TARGET 16 ms |
 | Filter first character (from empty) | n/a | 3.9 ms | AT TARGET 16 ms |
 | Filter backspace (rebuild deferred) | n/a | 0.04 ms | AT TARGET 16 ms |
-| Filter full rebuild (after debounce) | n/a (every keystroke) | 21.6 ms | CEILING 44 ms |
-| Tree toggle | 126 ms | 44.6 ms | CEILING 89 ms |
+| Filter full rebuild (after debounce) | n/a (every keystroke) | 21.6 ms (CI 32.4 ms) | CEILING 49 ms |
+| Tree toggle | 126 ms | 44.6 ms (CI 57.4 ms) | CEILING 89 ms |
 | Sort change | 3.76 ms | 4.2 ms | AT TARGET 16 ms |
 | Whole-scan fold, tree mode | 0.60 s | 0.24 s | gate 10 s |
-| Whole-scan worst page | 105 ms | 32 ms | CEILING 65 ms |
+| Whole-scan worst page | 105 ms | 32 ms (CI 45.2 ms) | CEILING 68 ms |
 | ScanBatch page, tree mode | 0.93 ms | ~1.0-1.2 ms | AT TARGET 16 ms |
 | LoadedSet + View + Tree | 75.8 MB | 83.4 MB | AT TARGET 125 MB |
 
-Ceilings still above the PRD target use 2x the local measurement, rounded up
-(not 1.5x): CI's runner has measured ~1.4x slower than the development
-machine. To be calibrated against the first CI run.
+Ceilings still above the PRD target are 1.5x the CI measurement, rounded up —
+task 2's rule — since CI's runner is the slower machine (~1.3-1.5x local).
+Calibrated on PR #60's CI run; first set at 2x local, which left the
+debounced rebuild only 1.36x headroom on CI.
 
 ## Context (as planned)
 

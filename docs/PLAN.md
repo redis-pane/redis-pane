@@ -320,7 +320,7 @@ re-requested, while a row reported gone is deliberately re-asked whenever it re-
 shell: `State::metadata_epoch` (a core-minted `MetadataEpoch`) is bumped where a rescan renumbers
 the Loaded set, rides on every `FetchMetadata`, and `metadata_batch` drops a reply from any other
 epoch — a shell-side counter left a window between the shell starting a scan and the core
-processing `ScanStarted`. Still above 16 ms, on 2x-local ceilings: tree toggle, the
+processing `ScanStarted`. Still above 16 ms, on ceilings of 1.5× the CI measurement: tree toggle, the
 debounced full rebuild (~22 ms) and the worst scan page. See
 [`m4-perf-interaction.md`](plans/m4-perf-interaction.md) for the resolved decisions. Tasks 5–8 are
 not started.
