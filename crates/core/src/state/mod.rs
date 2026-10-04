@@ -937,6 +937,16 @@ pub struct State {
     pub tree_mode: bool,
     /// Set while `/` is capturing a filter.
     pub filtering: bool,
+    /// The typed filter text is ahead of `list`: a keystroke that could not
+    /// be narrowed from the previous result deferred its full rebuild to the
+    /// shell's debounce timer (M4 task 4, decision 2). The text in the filter
+    /// box is always current; only the rows lag, for one debounce window.
+    /// Cleared by every rebuild, whoever runs it.
+    pub filter_pending: bool,
+    /// Which numbering of `keys` is current. Bumped where indices are
+    /// renumbered (`scan_started`'s clear), carried by every
+    /// `Command::FetchMetadata`, and checked on the reply.
+    pub metadata_epoch: crate::command::MetadataEpoch,
     /// Which pane the reader is in (DESIGN §4). Below 70 columns it also
     /// decides which pane is drawn at all; see [`crate::render::layout::Pane`].
     pub focus: crate::render::layout::Pane,
@@ -1151,11 +1161,15 @@ impl State {
 
     /// The display row a Loaded set index is currently shown at, if any.
     ///
-    /// Linear in the row count, which is why it is called when the row list is
-    /// rebuilt and never per frame. `key_at` is the only mapping that exists,
-    /// and it runs the other way.
+    /// O(1): the flat list and the tree each keep the inverse of their own
+    /// row mapping (`KeyView::row_of`, `Tree::row_of`), maintained wherever
+    /// that mapping is built or extended (M4 task 4, decision 5).
     pub(crate) fn row_of(&self, index: usize) -> Option<usize> {
-        (0..self.row_count()).find(|&row| self.key_at(row) == Some(index))
+        if self.tree_mode {
+            self.tree.row_of(index)
+        } else {
+            self.list.row_of(index)
+        }
     }
 
     /// Whether the Viewer is showing the Selected key, and if not, where the
@@ -1192,6 +1206,19 @@ impl State {
     /// new row count, same as before this existed. Folding a group open or
     /// shut must not fling the cursor to the top of the list.
     pub fn rebuild_list(&mut self) {
+        self.rebuild_list_with(false);
+    }
+
+    /// [`State::rebuild_list`] for a filter keystroke that
+    /// [`KeyView::can_narrow`] approved: re-filters only the rows already
+    /// shown instead of the whole Loaded set. Everything downstream of the
+    /// view (tree fold, selection and Open key relocation) is the same code.
+    pub(crate) fn rebuild_list_narrowing(&mut self) {
+        self.rebuild_list_with(true);
+    }
+
+    fn rebuild_list_with(&mut self, narrow: bool) {
+        self.filter_pending = false;
         // Bookkeeping for `scan_batch`'s geometric rebuild schedule (M4 task
         // 3, `docs/plans/m4-perf-scan.md` decision 2): *every* full rebuild,
         // whatever called it — a scan page, a sort change, a filter
@@ -1213,7 +1240,11 @@ impl State {
         if self.tree_mode && self.list.sort != SortBy::Name {
             self.list.sort = SortBy::Name;
         }
-        self.list.rebuild(&self.keys);
+        if narrow && self.list.can_narrow(self.keys.len()) {
+            self.list.narrow(&self.keys);
+        } else {
+            self.list.rebuild(&self.keys);
+        }
         if self.tree_mode {
             self.tree.rebuild(&self.keys, &self.list);
         }

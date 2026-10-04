@@ -306,14 +306,32 @@ filter keystroke, toggling tree mode, and the worst single page of a scan (now ~
 from ~130–251ms) — is `rebuild_list`'s own Name-sort/`Tree::rebuild` cost, M4 task 4's scope, not
 task 3's. See [`m4-perf-scan.md`](plans/m4-perf-scan.md) for the resolved decisions.
 
+Task 4 is done — acting on a million-key keyspace now fits the frame budget where it can. A filter
+keystroke that extends the query narrows from the rows already shown (`KeyView::narrow`): 22.3 ms
+to ~0.3 ms. Narrowing is sound for fuzzy but only conditionally for glob (`*a` -> `*ab` is not a
+subset), needs a `Scan`/`Name` sort and a view that covers every loaded key, and is checked against
+the filter the order was *built for*, not the typed text. A keystroke that cannot narrow shows its
+text at once and defers the full rebuild to a 100 ms shell debounce (`Command::ScheduleFilterRebuild`
+/ `Msg::FilterRebuildDue`; `State::filter_pending`). `Tree::rebuild` allocates nothing per key and
+collapsed-group lookup is a hash set (tree toggle 126 ms to ~44 ms, whole-scan worst page 105 ms to
+~32 ms). `row_of` is O(1) through an inverse index on `KeyView` and on `Tree`. Metadata fetches go
+through a shell-side `MetadataLedger` (`crates/app/src/metadata.rs`): in-flight indices are not
+re-requested, while a row reported gone is deliberately re-asked whenever it re-enters the window. Staleness is decided by the core, not the
+shell: `State::metadata_epoch` (a core-minted `MetadataEpoch`) is bumped where a rescan renumbers
+the Loaded set, rides on every `FetchMetadata`, and `metadata_batch` drops a reply from any other
+epoch — a shell-side counter left a window between the shell starting a scan and the core
+processing `ScanStarted`. Still above 16 ms, on ceilings of 1.5× the CI measurement: tree toggle, the
+debounced full rebuild (~22 ms) and the worst scan page. See
+[`m4-perf-interaction.md`](plans/m4-perf-interaction.md) for the resolved decisions.
+
 Task 7 is done — session restore. `$XDG_STATE_HOME/redis-pane/state.json` (falling back to
 `~/.local/state`) holds one entry per target (the credential-free `host:port/db`): pane split,
 tree/flat, sort, filter and the selected key (hex, byte-safe). The format and `State::session_snapshot`/
 `apply_session` are pure core (`crates/core/src/state/session.rs`); `crates/app/src/state_file.rs`
 does the I/O on a dedicated writer thread (atomic temp-and-rename, `0600`, 1s debounce, flushed on
 quit). A corrupt, unreadable or unknown-version file is ignored with an error notification, never a
-crash. See [`m4-session-restore.md`](plans/m4-session-restore.md) for the resolved decisions. Tasks
-4 and 8 (and 5–6, where not yet merged) are not started.
+crash. See [`m4-session-restore.md`](plans/m4-session-restore.md) for the resolved decisions. Task 8
+(and 5–6, where not yet merged) is not started.
 
 | # | Task | Proves |
 |---|---|---|

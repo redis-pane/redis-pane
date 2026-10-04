@@ -786,7 +786,7 @@ ground ADR-0006 never considered, and it is rejected here on tracking-table chur
 revisiting it needs its own ADR. What the pane gets instead is the half that was already on the
 wire and being discarded: `fetch_metadata` issues `TYPE` for every visible row and sees `"none"`
 for a key that has been deleted, expired or evicted, so those rows are now badged `✕ … gone` at
-no extra round trip. A gone row **keeps its position** — removing it would renumber everything
+no extra round trip. A gone row is re-checked whenever it is back in the visible window — it rides the same pipelined `TYPE` batch, so there is no extra round trip, and a key deleted and then recreated loses its badge as soon as it is scrolled to — and it **keeps its position** — removing it would renumber everything
 below the reader's cursor between one frame and the next — and keeps its last-known size, which
 is usually the only answer left about a key during an incident; its TTL becomes `—`, because a
 countdown is a claim about a key that is no longer there to expire. Anything beyond deletion
