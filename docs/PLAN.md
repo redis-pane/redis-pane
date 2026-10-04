@@ -332,6 +332,9 @@ config's `theme`, which beats `dark`; `themes` in config holds user themes over 
 an unknown token name being a parse error. `env.local` is now a neutral grey (green is for `ok`
 alone), and `dark`'s `muted` was nudged one step lighter because the contrast test found it just
 under AA on the detached wash. `NO_COLOR` empty is unset. Light and high-contrast goldens exist.
+A follow-up made `light` and `high-contrast` paint their own `background` token, so they are
+readable on any terminal and the contrast test measures what is on screen; `dark` stays
+transparent.
 See [`m4-themes.md`](plans/m4-themes.md).
 
 Task 6 (ASCII glyph fallback) is done — see [`m4-glyphs.md`](plans/m4-glyphs.md). Tasks 7 and 8
