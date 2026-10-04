@@ -117,6 +117,7 @@ type Term = Terminal<CrosstermBackend<Stdout>>;
 /// The render loop never does I/O. Redis work happens on tokio tasks that send
 /// [`Msg`]s into this loop; the loop reads state and draws. A keystroke is
 /// therefore answerable in one frame regardless of what the network is doing.
+#[allow(clippy::too_many_arguments)] // the shell's whole startup hand-off; a struct would only move the list
 pub async fn run(
     mut state: State,
     theme: Theme,
@@ -125,6 +126,7 @@ pub async fn run(
     established: Established,
     dial: String,
     credentials: Credentials,
+    session_store: Option<crate::state_file::Store>,
 ) -> std::io::Result<()> {
     terminal::enable_raw_mode()?;
     execute!(
@@ -206,6 +208,26 @@ pub async fn run(
         },
     );
 
+    // Session restore (M4 task 7): changes to the restorable part of `State`
+    // are written off the render path, debounced; see `state_file`. A failed
+    // write is an error notification carrying what failed (R7.4).
+    let mut persister = session_store.map(|store| {
+        let errors = tx.clone();
+        let error_clock = clock.clone();
+        crate::state_file::Persister::new(
+            store,
+            state.session_snapshot(),
+            clock.clone(),
+            move |detail| {
+                let _ = errors.try_send(Msg::Failed {
+                    command: "saving session state".into(),
+                    detail,
+                    at_ms: error_clock.now_epoch_ms(),
+                });
+            },
+        )
+    });
+
     let (landed_tx, mut landed_rx) = mpsc::channel::<(Client, Established)>(1);
     let (feed_landed_tx, mut feed_landed_rx) = mpsc::channel(1);
     let mut shell = Shell {
@@ -283,7 +305,7 @@ pub async fn run(
     let mut dirty = true;
     let mut last_draw: Option<tokio::time::Instant> = None;
 
-    loop {
+    'session: loop {
         let now = tokio::time::Instant::now();
         if dirty && last_draw.is_none_or(|at| now.duration_since(at) >= FRAME) {
             term.draw(|f| {
@@ -294,6 +316,10 @@ pub async fn run(
             last_draw = Some(now);
         }
         let frame_due = last_draw.map_or(now, |at| at + FRAME);
+        let persist_due = persister
+            .as_ref()
+            .and_then(crate::state_file::Persister::deadline)
+            .map(tokio::time::Instant::from_std);
         let filter_due = shell.filter_debounce.deadline();
 
         let msg = tokio::select! {
@@ -303,6 +329,12 @@ pub async fn run(
             biased;
             msg = rx.recv() => msg,
             () = tokio::time::sleep_until(frame_due), if dirty => continue,
+            () = tokio::time::sleep_until(persist_due.unwrap_or(now)), if persist_due.is_some() => {
+                if let Some(p) = persister.as_mut() {
+                    p.flush_if_due(std::time::Instant::now());
+                }
+                continue;
+            }
             // Ratatui diffs the buffer before writing to the terminal, so a
             // frame where only a few digits changed writes only those
             // cells — this just has to ask for that frame to happen.
@@ -335,18 +367,32 @@ pub async fn run(
             }
         };
         let Some(msg) = msg else {
-            return Ok(());
+            break 'session;
         };
         let commands;
         (state, commands) = update(state, msg);
         dirty = true;
+        if let Some(p) = persister.as_mut() {
+            p.observe(std::time::Instant::now(), state.session_snapshot());
+        }
 
         for command in commands {
             if shell.execute(command, &state, &mut term).await.is_break() {
-                return Ok(());
+                break 'session;
             }
         }
     }
+
+    // Quit flushes a pending debounced write rather than losing it. The
+    // terminal is restored first so a failure can be printed to stderr.
+    let final_session = state.session_snapshot();
+    drop(_guard);
+    if let Some(p) = persister.take()
+        && let Some(detail) = p.finish(final_session)
+    {
+        eprintln!("redis-pane: could not save session state: {detail}");
+    }
+    Ok(())
 }
 
 /// How long the filter must be quiet before a full rebuild runs (M4 task 4,

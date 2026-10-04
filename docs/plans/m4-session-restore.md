@@ -1,6 +1,6 @@
 # M4 task 7: Session restore
 
-Status: **planning — not started.**
+Status: **done.** See Outcome at the end for the build-time choices.
 
 ## Context
 
@@ -160,3 +160,40 @@ so this needs its own direct call, **confirm at build time** exactly where the q
 - **A visible "restored from your last session" UI affordance** — decision 3 above defaults to
   silent restoration; adding chrome for it is a DESIGN-level decision not asked for by PLAN's row
   and would cost a line of permanent screen space per G7's "nothing on screen you will not act on."
+
+## Outcome
+
+Built as planned. The "confirm at build time" items resolved to the plan's recommended defaults:
+
+- **`$XDG_STATE_HOME` fallback**: `~/.local/state/redis-pane/state.json` (the XDG default); an empty
+  `$XDG_STATE_HOME` counts as unset, as `$XDG_CONFIG_HOME` does.
+- **Target key**: `Connection::target` (`host:port/db`, the redacted display string — no credentials).
+  Two Sources resolving to the same literal target deliberately share a session. The hostname does
+  appear in the file; it is not a secret. The file holds at most 32 targets (`MAX_TARGETS`), evicting
+  the least recently saved.
+- **`saved_at_ms`**: stored for eviction only; not surfaced. Restoration is silent, no new chrome.
+- **Selected key**: hex-encoded bytes in JSON. Restored by `scan_batch` when the key arrives (one
+  extra `rebuild_list`, once); abandoned silently if the cursor has moved off row 0 first, if the
+  key is filtered out, or when the scan ends without it. Until resolved, `session_snapshot` carries
+  the pending key so an early write cannot overwrite it with row 0.
+- **Version**: `version: 1`. Anything else, unparseable JSON, or an unknown sort/filter-mode string
+  is ignored; no migration path is anticipated. The notice is an error notification (it persists
+  until `Esc`, per R7.4) rather than a fading notice, which would be gone before the reader saw it.
+  A later write replaces the ignored file.
+- **Write trigger**: no `Command::PersistSession`. The shell observes `State::session_snapshot()`
+  after every `update`; a change starts a 1s debounce (reset by further changes) and the pending
+  snapshot is handed to a dedicated writer thread. Quit flushes and joins the writer after the
+  terminal is restored; a failed final write is printed to stderr. Mid-session write failures are
+  `Msg::Failed` notifications, once per outage. This kept the core free of a dirty flag and a
+  command and did not touch the `Command` match in the shell. Independent of task 4's debounce.
+- **Atomicity**: temp file (`state.json.tmp.<pid>`, mode `0600`, fsynced) renamed over the target;
+  the file is re-read and merged on every write so another terminal's targets survive.
+- **Core vs shell**: format, snapshot and apply are in `crates/core/src/state/session.rs`
+  (`serde` was already a core dependency); I/O is in `crates/app/src/state_file.rs`. `main.rs`
+  loads and applies before `terminal::run`, which gained a `session_store` parameter.
+
+Tests: core round-trip, binary key, versioning/garbage, eviction, selection restore in flat, tree and
+never-found cases; shell tests for path, per-target isolation, corrupt/old file notices, interrupted
+write, `0600`, debounce coalescing, quit flush, and write-failure reporting. Not covered by an
+automated test: the by-hand relaunch check (adjust split, filter, sort and tree mode; relaunch; then
+relaunch against a different target).

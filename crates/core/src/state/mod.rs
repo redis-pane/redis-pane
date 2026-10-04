@@ -13,6 +13,7 @@ pub mod monitor;
 pub mod open;
 pub mod pubsub;
 pub mod scan;
+pub mod session;
 pub mod slowlog;
 pub mod tail;
 pub mod tree;
@@ -36,6 +37,7 @@ pub use pubsub::{
     parse_subscription, redis_glob_match,
 };
 pub use scan::ScanState;
+pub use session::{SessionFile, SessionFileError, SessionState};
 pub use slowlog::{SlowlogEntry, SlowlogSort, SlowlogState};
 pub use tail::LiveTail;
 pub use tree::Tree;
@@ -920,6 +922,11 @@ pub struct State {
     /// crate, which needs every field nameable, the same reason every other
     /// field here is `pub`.
     pub scan_last_rebuild_len: usize,
+    /// A restored session's selected key, waiting for the scan to deliver it
+    /// (M4 task 7, `docs/plans/m4-session-restore.md` decision 4). Set by
+    /// [`State::apply_session`]; resolved or abandoned silently in
+    /// `scan_batch` (found, or the cursor has moved) and when any scan ends.
+    pub restore_key: Option<Vec<u8>>,
     /// Which rows are on screen and which is selected. Scrolling changes this,
     /// never the Loaded set (R2.6).
     pub view: crate::render::keys::Viewport,

@@ -235,6 +235,10 @@ config file; a **Connection** is a live session, which may be **ad-hoc** (no Pro
 - **R7.7** The default layout is two panes — keyspace and current value. Anything else reaches
   the screen through a dismissible overlay, and nothing else holds columns permanently. New
   surfaces must displace something or justify their width against G7.
+- **R7.8** Session restore: pane split, tree/flat, sort, filter and the selected key restore on
+  relaunch, keyed per target, from a state file under `$XDG_STATE_HOME/redis-pane/` (never the
+  config file, never a secret). A corrupt or old file is ignored with a notification, never a
+  crash. (ADR-0003.)
 
 ## 7. Success metrics
 

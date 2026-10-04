@@ -787,10 +787,12 @@ scope from Cluster being out of v1 entirely, not a new limitation this screen in
   is a hint for the first frame only — it is never the value (§6.4).
 - **Cancellation everywhere.** `Esc` aborts an in-flight scan, fetch, or command and says so.
 - **Toasts, not dialogs, for outcomes.** Errors include the failing command and a copy action.
-- **Persistent session state.** Pane split, filter, and scroll position restore on relaunch,
-  keyed by target — reopening `redis-pane staging` feels like never having left, and it does not
+- **Persistent session state.** Pane split, tree/flat, sort, filter, and the selected key (which
+  carries the scroll position with it) restore on relaunch, keyed by target — reopening `redis-pane staging` feels like never having left, and it does not
   drag staging's filter into a prod session. This lives in a state file under
-  `$XDG_STATE_HOME/redis-pane/`, never in the user's config file.
+  `$XDG_STATE_HOME/redis-pane/`, never in the user's config file. Restoration is silent — no
+  "restored" chrome (G7) — and a selected key that has since gone simply leaves the cursor at the
+  top. An unusable state file raises an error notification and the session starts clean.
 - **Copy that fits the terminal.** `y` offers key / value / `redis-cli` command / permalink-style
   reference — because the next step is usually pasting into a ticket or a shell.
 - **Mouse support (R7.3), never required.** Click focuses a pane; the wheel scrolls whichever
@@ -828,9 +830,8 @@ reader. `⌃←`/`⌃→` nudge the divider from that default in either directio
 pane can be squeezed below a usable width; the offset is one number, held for the session and
 applied identically whichever density the terminal is currently at, so widening the terminal past
 a breakpoint reshuffles columns the documented way without discarding a reader's adjustment.
-Mouse drag-to-resize (R7.3) is unbuilt and will drive the same offset. Not yet persisted across a
-relaunch — §7's "pane split, filter, and scroll position restore on relaunch" needs the
-session-state file ADR-0003 describes, which does not exist yet either.
+Mouse drag-to-resize (R7.3) is unbuilt and will drive the same offset. The offset is persisted per
+target in the session-state file (§7, M4 task 7) and restored on relaunch.
 
 **Resolved since v0.5** — the keys pane does not get liveness, and the open key remains the only
 tracked thing. Deliberate, not deferred: RedisInsight declines to auto-refresh its key list for

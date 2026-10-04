@@ -337,8 +337,16 @@ readable on any terminal and the contrast test measures what is on screen; `dark
 transparent.
 See [`m4-themes.md`](plans/m4-themes.md).
 
-Task 6 (ASCII glyph fallback) is done — see [`m4-glyphs.md`](plans/m4-glyphs.md). Tasks 7 and 8
-are not started on this branch.
+Task 6 (ASCII glyph fallback) is done — see [`m4-glyphs.md`](plans/m4-glyphs.md).
+
+Task 7 is done — session restore. `$XDG_STATE_HOME/redis-pane/state.json` (falling back to
+`~/.local/state`) holds one entry per target (the credential-free `host:port/db`): pane split,
+tree/flat, sort, filter and the selected key (hex, byte-safe). The format and `State::session_snapshot`/
+`apply_session` are pure core (`crates/core/src/state/session.rs`); `crates/app/src/state_file.rs`
+does the I/O on a dedicated writer thread (atomic temp-and-rename, `0600`, 1s debounce, flushed on
+quit). A corrupt, unreadable or unknown-version file is ignored with an error notification, never a
+crash. See [`m4-session-restore.md`](plans/m4-session-restore.md) for the resolved decisions. Task 8
+is not started.
 
 | # | Task | Proves |
 |---|---|---|
