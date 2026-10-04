@@ -92,7 +92,8 @@ pub(super) fn after_move(mut state: State) -> (State, Vec<Command>) {
     if indices.is_empty() {
         (state, Vec::new())
     } else {
-        (state, vec![Command::FetchMetadata { indices }])
+        let epoch = state.metadata_epoch;
+        (state, vec![Command::FetchMetadata { indices, epoch }])
     }
 }
 
@@ -113,6 +114,37 @@ pub(super) fn filter_key(state: State, key: KeyPress) -> (State, Vec<Command>) {
     filter_key_keys_pane(state, key)
 }
 
+/// The filter text just changed (typed, deleted or pasted).
+///
+/// Two paths (M4 task 4, decisions 1 and 2). If the new text can only remove
+/// rows from what is shown — [`KeyView::can_narrow`] — the list narrows from
+/// its current rows immediately: cost is the size of the previous result, not
+/// of the keyspace. Otherwise (backspace, a replacement, a lazily-sorted
+/// view, keys not yet folded into the order) the full rebuild is *deferred*:
+/// the text is already in the box, `filter_pending` records that the rows are
+/// behind it, and the shell is asked to time a debounce window. Nothing else
+/// changes on screen, so the input never lags; only the list catches up.
+pub(super) fn filter_edited(mut state: State) -> (State, Vec<Command>) {
+    if state.list.can_narrow(state.keys.len()) {
+        state.rebuild_list_narrowing();
+        after_move(state)
+    } else {
+        state.filter_pending = true;
+        (state, vec![Command::ScheduleFilterRebuild])
+    }
+}
+
+/// `Msg::FilterRebuildDue`: the debounce window closed. A no-op when nothing
+/// is owed — an `Esc`, `Enter`, narrowing keystroke or scan rebuild may have
+/// settled the list since the timer was armed.
+pub(super) fn filter_rebuild_due(mut state: State) -> (State, Vec<Command>) {
+    if !state.filter_pending {
+        return (state, Vec::new());
+    }
+    state.rebuild_list();
+    after_move(state)
+}
+
 fn filter_key_keys_pane(mut state: State, key: KeyPress) -> (State, Vec<Command>) {
     match key.code {
         KeyCode::Esc => {
@@ -125,17 +157,21 @@ fn filter_key_keys_pane(mut state: State, key: KeyPress) -> (State, Vec<Command>
         }
         KeyCode::Enter => {
             state.filtering = false;
+            // Leaving capture with rows still owed: settle now rather than
+            // leave a filter on screen that the list does not obey.
+            if state.filter_pending {
+                state.rebuild_list();
+                return after_move(state);
+            }
             (state, Vec::new())
         }
         KeyCode::Backspace => {
             state.list.filter.pop();
-            state.rebuild_list();
-            after_move(state)
+            filter_edited(state)
         }
         KeyCode::Char(c) if !key.ctrl && !key.alt => {
             state.list.filter.push(c);
-            state.rebuild_list();
-            after_move(state)
+            filter_edited(state)
         }
         _ => (state, Vec::new()),
     }
@@ -513,5 +549,268 @@ mod tree_fold_tests {
             matches!(cmds.as_slice(), [Command::ReadKey { .. }]),
             "expected an open, got {cmds:?}"
         );
+    }
+}
+
+#[cfg(test)]
+mod filter_narrowing_tests {
+    //! M4 task 4, decisions 1 and 2: a filter edit may narrow from the
+    //! previous result or defer to a debounced full rebuild, and either way
+    //! the list the reader ends up with must be exactly what a from-scratch
+    //! rebuild of the same text gives.
+
+    use super::*;
+    use crate::msg::{KeyCode, KeyPress, Msg};
+    use crate::state::{FilterMode, KeyView, SortBy};
+
+    #[derive(Clone)]
+    enum Op {
+        Type(char),
+        Back,
+        Paste(&'static str),
+        Esc,
+        Enter,
+        /// The shell's debounce timer fires.
+        Due,
+        /// A page of this many new keys arrives from the scan.
+        Keys(usize),
+    }
+
+    fn name(i: usize) -> Vec<u8> {
+        format!(
+            "{}:{:03}:{}",
+            ["user", "feed", "cache"][i % 3],
+            i,
+            ["a", "ab", "b"][i % 3]
+        )
+        .into_bytes()
+    }
+
+    fn started(tree_mode: bool, sort: SortBy, mode: FilterMode, n: usize) -> State {
+        let mut state = State {
+            rows: 30,
+            tree_mode,
+            list: KeyView::new("", mode, sort),
+            ..State::default()
+        };
+        (state, _) = update(
+            state,
+            Msg::ScanBatch {
+                keys: (0..n).map(name).collect(),
+            },
+        );
+        state.rebuild_list();
+        state.filtering = true;
+        state
+    }
+
+    fn fresh(state: &State) -> State {
+        let mut want = State {
+            rows: 30,
+            tree_mode: state.tree_mode,
+            list: KeyView::new(state.list.filter.clone(), state.list.mode, state.list.sort),
+            ..State::default()
+        };
+        for i in 0..state.keys.len() {
+            want.keys.push(state.keys.name(i).unwrap());
+            if let Some(size) = state.keys.size(i) {
+                want.keys.set_size(i, size);
+            }
+        }
+        want.rebuild_list();
+        want
+    }
+
+    fn rows(state: &State) -> Vec<Option<usize>> {
+        (0..state.row_count()).map(|r| state.key_at(r)).collect()
+    }
+
+    fn run(mut state: State, ops: &[Op], case: &str) -> State {
+        let mut total = state.keys.len();
+        for op in ops {
+            let msg = match op {
+                Op::Type(c) => Msg::Key(KeyPress::plain(KeyCode::Char(*c))),
+                Op::Back => Msg::Key(KeyPress::plain(KeyCode::Backspace)),
+                Op::Paste(t) => Msg::Paste(t.to_string()),
+                Op::Esc => Msg::Key(KeyPress::plain(KeyCode::Esc)),
+                Op::Enter => Msg::Key(KeyPress::plain(KeyCode::Enter)),
+                Op::Due => Msg::FilterRebuildDue,
+                Op::Keys(n) => {
+                    let keys = (total..total + n).map(name).collect();
+                    total += n;
+                    Msg::ScanBatch { keys }
+                }
+            };
+            let was_filtering = state.filtering;
+            (state, _) = update(state, msg);
+            if matches!(op, Op::Due) || (was_filtering && matches!(op, Op::Esc | Op::Enter)) {
+                assert!(!state.filter_pending, "{case}: settled, nothing owed");
+            }
+            // Whenever nothing is owed the rows must already be exactly what
+            // a rebuild gives — and when something is owed the *text* must
+            // already be current (checked by the final comparison below).
+            if !state.filter_pending
+                && !(matches!(op, Op::Keys(_))
+                    && (state.tree_mode || state.list.sort != SortBy::Scan))
+            {
+                let want = fresh(&state);
+                assert_eq!(rows(&state), rows(&want), "{case}: rows after an op");
+            }
+        }
+        // The shell's timer always fires eventually.
+        let (state, _) = update(state, Msg::FilterRebuildDue);
+        let want = fresh(&state);
+        assert_eq!(rows(&state), rows(&want), "{case}: settled rows");
+        assert_eq!(state.tree, want.tree, "{case}: tree");
+        assert_eq!(state.list.len(), want.list.len(), "{case}: match count");
+        state
+    }
+
+    fn sequences() -> Vec<(&'static str, Vec<Op>)> {
+        use Op::*;
+        vec![
+            ("first char", vec![Type('u')]),
+            (
+                "extending",
+                vec![Type('u'), Type('s'), Type('e'), Type('r')],
+            ),
+            ("backspace", vec![Type('u'), Type('s'), Back, Type('e')]),
+            ("backspace to empty", vec![Type('u'), Back, Back]),
+            ("paste replacement", vec![Type('u'), Paste("ache:0"), Back]),
+            ("paste on empty", vec![Paste("feed")]),
+            ("clear with esc", vec![Type('u'), Type('s'), Esc]),
+            ("enter flushes", vec![Type('u'), Type('s'), Back, Enter]),
+            (
+                "keys between keystrokes",
+                vec![
+                    Type('u'),
+                    Keys(40),
+                    Type('s'),
+                    Keys(25),
+                    Back,
+                    Keys(10),
+                    Type('e'),
+                ],
+            ),
+            (
+                "keys while a rebuild is pending",
+                vec![Type('u'), Type('s'), Back, Keys(30), Type('s')],
+            ),
+            (
+                "extension while pending is not narrowed from stale rows",
+                vec![Type('f'), Type('e'), Back, Type('x'), Type('a'), Due],
+            ),
+            (
+                "wildcard anchored at the end",
+                vec![Type('*'), Type('a'), Type('b'), Back],
+            ),
+            (
+                "wildcard glob extends",
+                vec![Type('u'), Type('*'), Type('a'), Type('b')],
+            ),
+            ("due with nothing owed", vec![Due, Type('u'), Due, Due]),
+            (
+                "esc with pending",
+                vec![Type('u'), Type('s'), Back, Esc, Due],
+            ),
+        ]
+    }
+
+    #[test]
+    fn every_sequence_ends_where_a_full_rebuild_does_flat() {
+        for mode in [FilterMode::Glob, FilterMode::Fuzzy] {
+            for sort in [SortBy::Scan, SortBy::Name] {
+                for (case, ops) in sequences() {
+                    let label = format!("{case} / {mode:?} / {sort:?} / flat");
+                    run(started(false, sort, mode, 60), &ops, &label);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn every_sequence_ends_where_a_full_rebuild_does_in_tree_mode() {
+        for mode in [FilterMode::Glob, FilterMode::Fuzzy] {
+            for (case, ops) in sequences() {
+                let label = format!("{case} / {mode:?} / tree");
+                run(started(true, SortBy::Name, mode, 60), &ops, &label);
+            }
+        }
+    }
+
+    #[test]
+    fn every_sequence_ends_where_a_full_rebuild_does_under_a_lazy_sort() {
+        for (case, ops) in sequences() {
+            let mut state = started(false, SortBy::Size, FilterMode::Glob, 60);
+            for i in (0..60).step_by(2) {
+                state.keys.set_size(i, (i * 7 % 11) as u32);
+            }
+            state.rebuild_list();
+            run(state, &ops, &format!("{case} / size sort"));
+        }
+    }
+
+    #[test]
+    fn an_extension_narrows_immediately_and_a_backspace_defers() {
+        let state = started(false, SortBy::Scan, FilterMode::Glob, 60);
+        let (state, cmds) = update(state, Msg::Key(KeyPress::plain(KeyCode::Char('u'))));
+        assert!(
+            cmds.iter()
+                .all(|c| !matches!(c, Command::ScheduleFilterRebuild))
+        );
+        assert!(!state.filter_pending);
+        assert_eq!(state.list.len(), 20, "narrowed at once");
+
+        let (state, cmds) = update(state, Msg::Key(KeyPress::plain(KeyCode::Backspace)));
+        assert!(cmds.contains(&Command::ScheduleFilterRebuild));
+        assert!(state.filter_pending);
+        assert_eq!(state.list.filter, "", "the box is current immediately");
+        assert_eq!(state.list.len(), 20, "only the rows lag");
+
+        let (state, _) = update(state, Msg::FilterRebuildDue);
+        assert!(!state.filter_pending);
+        assert_eq!(state.list.len(), 60);
+    }
+
+    #[test]
+    fn esc_while_pending_clears_at_once_and_the_late_timer_is_a_no_op() {
+        let state = started(false, SortBy::Scan, FilterMode::Glob, 60);
+        let (state, _) = update(state, Msg::Key(KeyPress::plain(KeyCode::Char('u'))));
+        let (state, _) = update(state, Msg::Key(KeyPress::plain(KeyCode::Char('s'))));
+        let (state, _) = update(state, Msg::Key(KeyPress::plain(KeyCode::Backspace)));
+        assert!(state.filter_pending);
+        let (state, _) = update(state, Msg::Key(KeyPress::plain(KeyCode::Esc)));
+        assert!(!state.filter_pending && !state.filtering);
+        assert_eq!(state.list.len(), 60);
+        let before = state.clone();
+        let (after, cmds) = update(state, Msg::FilterRebuildDue);
+        assert_eq!(after, before);
+        assert!(cmds.is_empty());
+    }
+
+    #[test]
+    fn a_scan_page_while_pending_does_not_mix_two_filters() {
+        // "us" applied, Backspace deferred ("u" typed, rows still "us"), a
+        // page arrives: new keys must be judged by the *applied* filter so
+        // the order stays internally consistent until the rebuild.
+        let state = started(false, SortBy::Scan, FilterMode::Glob, 60);
+        let (state, _) = update(state, Msg::Key(KeyPress::plain(KeyCode::Char('u'))));
+        let (state, _) = update(state, Msg::Key(KeyPress::plain(KeyCode::Char('s'))));
+        let (state, _) = update(state, Msg::Key(KeyPress::plain(KeyCode::Backspace)));
+        assert!(state.filter_pending);
+        let keys = (60..90).map(name).collect();
+        let (state, _) = update(state, Msg::ScanBatch { keys });
+        for r in 0..state.list.len() {
+            let n = state
+                .keys
+                .name_str(state.list.index_at(r).unwrap())
+                .unwrap();
+            assert!(
+                n.to_lowercase().contains("us"),
+                "{n} was judged by the wrong filter"
+            );
+        }
+        let (state, _) = update(state, Msg::FilterRebuildDue);
+        assert_eq!(rows(&state), rows(&fresh(&state)));
     }
 }

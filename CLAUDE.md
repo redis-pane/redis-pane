@@ -150,6 +150,17 @@ they are expensive to retrofit:
 - **Type-awareness is a first-class abstraction**, not a `match` scattered through the UI.
   Every Redis type gets a viewer behind one shared trait/interface so the frame (header, body,
   footer) and navigation are identical across types.
+- **Filter keystrokes narrow or defer; they never rescan per keystroke.** An extension of the
+  applied filter narrows from the rows shown (`KeyView::can_narrow`); anything else shows the text
+  at once and defers the rebuild to the shell's 100ms debounce (`State::filter_pending`). Narrowing
+  is judged against the filter the order was *built for*, never the typed text, and glob is only
+  narrowable when the previous pattern has no wildcard or ends in `*` (`docs/plans/m4-perf-interaction.md`).
+- **Metadata replies are checked against a core-minted epoch.** `State::metadata_epoch` is bumped
+  where indices are renumbered (`scan_started`), rides on `Command::FetchMetadata`, is echoed in
+  `Msg::MetadataBatch`, and `metadata_batch` drops any other — staleness is the core's call at
+  dequeue, never a shell-side timing argument. The shell's `MetadataLedger`
+  (`crates/app/src/metadata.rs`) only dedups in-flight fetches only (a gone row is re-asked on re-entry, so the list never shows a stale gone), and resets on a new epoch
+  and on reconnect.
 - **The Viewer never caches a value.** Reads always hit the server; liveness is push-driven via
   `CLIENT TRACKING ON OPTIN` armed for the open key alone. **Tracking is consumed by its own
   invalidation**, so every Refetch must re-arm — one read path, so the arming cannot be forgotten
