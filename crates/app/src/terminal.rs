@@ -21,6 +21,7 @@ use fred::interfaces::EventInterface;
 use fred::prelude::Client;
 use redis_pane_core::clock::Clock;
 use redis_pane_core::command::{Command, FeedKindMsg, FeedToken, ReadToken};
+use redis_pane_core::glyphs::GlyphSet;
 use redis_pane_core::key::KeyName;
 use redis_pane_core::msg::{KeyCode, KeyPress, MouseAction};
 use redis_pane_core::mutation::Mutation;
@@ -1040,6 +1041,67 @@ fn resolve_color_depth(env: ColorEnv) -> ColorDepth {
     }
 }
 
+/// Which glyph set to draw with: the `--ascii`/`--unicode` flag, else the
+/// config file's `ascii`, else the locale (DESIGN §5).
+pub fn detect_glyph_set(flag: Option<bool>, config: Option<bool>) -> GlyphSet {
+    resolve_glyph_set(
+        flag,
+        config,
+        LocaleEnv {
+            lc_all: std::env::var("LC_ALL").ok(),
+            lc_ctype: std::env::var("LC_CTYPE").ok(),
+            lang: std::env::var("LANG").ok(),
+            windows: cfg!(windows),
+        },
+    )
+}
+
+/// The environment [`resolve_glyph_set`] decides from.
+struct LocaleEnv {
+    lc_all: Option<String>,
+    lc_ctype: Option<String>,
+    lang: Option<String>,
+    /// Windows consoles have no POSIX locale variables and render Unicode.
+    windows: bool,
+}
+
+/// The pure decision, split out of [`detect_glyph_set`] for the same reason as
+/// [`resolve_color_depth`]: the environment cannot be mutated in a test.
+///
+/// Precedence is flag > config > locale. The locale is read the way POSIX
+/// resolves `LC_CTYPE`: the first non-empty of `LC_ALL`, `LC_CTYPE`, `LANG`.
+/// Only a value naming UTF-8 selects Unicode. `C`, `POSIX` and *nothing set at
+/// all* select ASCII: this product is used over SSH on bastion hosts, where a
+/// forwarded environment is often empty and a wrong guess towards Unicode
+/// draws question marks, while a wrong guess towards ASCII merely looks plain.
+fn resolve_glyph_set(flag: Option<bool>, config: Option<bool>, env: LocaleEnv) -> GlyphSet {
+    if let Some(ascii) = flag.or(config) {
+        return if ascii {
+            GlyphSet::Ascii
+        } else {
+            GlyphSet::Unicode
+        };
+    }
+    if env.windows {
+        return GlyphSet::Unicode;
+    }
+    let locale = [env.lc_all, env.lc_ctype, env.lang]
+        .into_iter()
+        .flatten()
+        .find(|v| !v.is_empty());
+    match locale {
+        Some(l) => {
+            let l = l.to_ascii_lowercase();
+            if l.contains("utf-8") || l.contains("utf8") {
+                GlyphSet::Unicode
+            } else {
+                GlyphSet::Ascii
+            }
+        }
+        None => GlyphSet::Ascii,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1205,5 +1267,105 @@ mod tests {
         }
         assert!(state.quitting);
         assert_eq!(commands, vec![Command::Quit]);
+    }
+
+    fn glyphs(
+        flag: Option<bool>,
+        config: Option<bool>,
+        lc_all: Option<&str>,
+        lc_ctype: Option<&str>,
+        lang: Option<&str>,
+    ) -> GlyphSet {
+        resolve_glyph_set(
+            flag,
+            config,
+            LocaleEnv {
+                lc_all: lc_all.map(String::from),
+                lc_ctype: lc_ctype.map(String::from),
+                lang: lang.map(String::from),
+                windows: false,
+            },
+        )
+    }
+
+    #[test]
+    fn a_utf8_locale_selects_unicode() {
+        for lang in ["en_US.UTF-8", "en_US.utf8", "C.UTF-8", "de_DE.UTF-8@euro"] {
+            assert_eq!(
+                glyphs(None, None, None, None, Some(lang)),
+                GlyphSet::Unicode,
+                "{lang}"
+            );
+        }
+    }
+
+    #[test]
+    fn c_posix_and_non_utf8_locales_select_ascii() {
+        for lang in ["C", "POSIX", "en_US.ISO-8859-1", "ja_JP.eucJP"] {
+            assert_eq!(
+                glyphs(None, None, None, None, Some(lang)),
+                GlyphSet::Ascii,
+                "{lang}"
+            );
+        }
+    }
+
+    #[test]
+    fn nothing_set_at_all_is_ascii() {
+        assert_eq!(glyphs(None, None, None, None, None), GlyphSet::Ascii);
+        assert_eq!(
+            glyphs(None, None, Some(""), Some(""), Some("")),
+            GlyphSet::Ascii
+        );
+    }
+
+    #[test]
+    fn locale_variables_resolve_in_posix_order() {
+        // LC_ALL beats LC_CTYPE beats LANG, and an empty one is skipped.
+        assert_eq!(
+            glyphs(None, None, Some("C"), None, Some("en_US.UTF-8")),
+            GlyphSet::Ascii
+        );
+        assert_eq!(
+            glyphs(None, None, None, Some("en_US.UTF-8"), Some("C")),
+            GlyphSet::Unicode
+        );
+        assert_eq!(
+            glyphs(None, None, Some(""), None, Some("en_US.UTF-8")),
+            GlyphSet::Unicode
+        );
+    }
+
+    #[test]
+    fn flag_beats_config_beats_locale() {
+        let utf8 = Some("en_US.UTF-8");
+        assert_eq!(
+            glyphs(Some(true), Some(false), None, None, utf8),
+            GlyphSet::Ascii
+        );
+        assert_eq!(
+            glyphs(Some(false), Some(true), None, None, Some("C")),
+            GlyphSet::Unicode
+        );
+        assert_eq!(glyphs(None, Some(true), None, None, utf8), GlyphSet::Ascii);
+        assert_eq!(
+            glyphs(None, Some(false), None, None, Some("C")),
+            GlyphSet::Unicode
+        );
+    }
+
+    #[test]
+    fn windows_has_no_locale_variables_and_gets_unicode() {
+        let set = resolve_glyph_set(
+            None,
+            None,
+            LocaleEnv {
+                lc_all: None,
+                lc_ctype: None,
+                lang: None,
+                windows: true,
+            },
+        );
+        assert_eq!(set, GlyphSet::Unicode);
     }
 }

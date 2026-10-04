@@ -49,6 +49,13 @@ struct Cli {
     /// a `rediss://` URL that already wants it.
     #[arg(long)]
     tls: bool,
+    /// Draw with ASCII glyphs only. The default follows the locale: ASCII
+    /// unless it declares UTF-8. Overrides the config file's `ascii`.
+    #[arg(long, conflicts_with = "unicode")]
+    ascii: bool,
+    /// Draw with Unicode glyphs even where the locale does not declare UTF-8.
+    #[arg(long)]
+    unicode: bool,
     /// Resolve and print the target, then exit without connecting.
     #[arg(long)]
     print_target: bool,
@@ -212,7 +219,15 @@ fn main() {
         server_read_only: established.read_only,
         condition: established.condition,
     });
-    let theme = Theme::new(terminal::detect_color_depth());
+    let glyph_flag = match (cli.ascii, cli.unicode) {
+        (true, _) => Some(true),
+        (_, true) => Some(false),
+        _ => None,
+    };
+    let theme = Theme::new(terminal::detect_color_depth()).with_glyphs(terminal::detect_glyph_set(
+        glyph_flag,
+        config.as_ref().and_then(|c| c.ascii),
+    ));
 
     if let Err(err) = runtime.block_on(terminal::run(
         state,
