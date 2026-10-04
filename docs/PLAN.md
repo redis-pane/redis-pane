@@ -304,8 +304,9 @@ flat-sorted-by-name `ScanBatch` cases are now `AT TARGET` (<16ms, down from 130m
 `perf` CI job no longer skips the whole-scan-fold test. What remains above the 16ms target — the
 filter keystroke, toggling tree mode, and the worst single page of a scan (now ~100–145ms, down
 from ~130–251ms) — is `rebuild_list`'s own Name-sort/`Tree::rebuild` cost, M4 task 4's scope, not
-task 3's. See [`m4-perf-scan.md`](plans/m4-perf-scan.md) for the resolved decisions. Tasks 4–8 are
-not started.
+task 3's. See [`m4-perf-scan.md`](plans/m4-perf-scan.md) for the resolved decisions. Task 6 (ASCII glyph
+fallback) is done — see [`m4-glyphs.md`](plans/m4-glyphs.md). Tasks 4, 5, 7 and 8 are not
+started on this branch.
 
 | # | Task | Proves |
 |---|---|---|

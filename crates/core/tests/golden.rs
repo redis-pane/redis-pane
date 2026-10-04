@@ -4501,7 +4501,8 @@ fn the_ascii_frame_has_the_unicode_frames_layout_and_no_non_ascii() {
     use ratatui::text::Line;
     let mut detached = opened("user:8812:session", hash_value(), 2_537);
     detached.view.selected = 0;
-    let fixtures: Vec<(&str, State, u16, u16, Box<dyn Clock>)> = vec![
+    type Fixture = (&'static str, State, u16, u16, Box<dyn Clock>);
+    let fixtures: Vec<Fixture> = vec![
         ("browser", browsing(), 130, 26, Box::new(CLOCK)),
         ("browser narrow", browsing(), 70, 20, Box::new(CLOCK)),
         ("gone key", with_a_gone_key(), 130, 26, Box::new(CLOCK)),

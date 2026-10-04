@@ -1,6 +1,6 @@
 # M4 task 6: ASCII glyph fallback
 
-Status: **planning — not started.**
+Status: **done.** Outcome at the end of this document.
 
 ## Context
 
@@ -141,3 +141,48 @@ globally (CLAUDE.md: "The clock is injected... Terminal capability degrades grac
 - **A user-facing glyph customization surface** beyond the Unicode/ASCII toggle — no "pick your own
   icon set," matching the themes task's equivalent out-of-scope call (no in-app picker UI); this is
   a capability-degradation mechanism, not a personalization feature.
+
+## Outcome
+
+Built as planned, with the "confirm at build time" choices below and the deviations after them.
+
+**Confirm-at-build-time choices**
+
+| Question | Choice |
+|---|---|
+| Where the table lives | `crates/core/src/glyphs.rs`, a sibling of `theme/`, not inside it |
+| Width calculation | `ratatui::text::Line::width` (already a dependency; it is `unicode-width` underneath), plus a `chars().count() == 1` check |
+| Box drawing | The renderer draws every border by hand (no `Block`/`Borders` anywhere), so there was no `symbols::border::Set` to swap; each corner, rule and tee is a `Glyph` role instead |
+| ASCII per role | `✕✗`→`x`, `✓✎`→`+`, `●⁎•`→`*`, `○⟡`→`o`, `⊘`→`/`, `⟳`→`@`, `⚠`→`!`, `▏▌│`→`\|`, `▶▸→`→`>`, `▾▼↓`→`v`, `▲↑⌃`→`^`, `←⏎⌫`→`<`, `⌥`→`M`, `…∞`→`~`, `·—─░`→`-` (pending cell `·`→`.`), `µ`→`u`, `┌┐└┘├`→`+`, `┊`→`:`, `┈`→`.`, `█`→`#` |
+| Sparkline ladder | `_.:-=+*#`, eight levels, ascending in visual weight, none blank |
+| Locale, unset entirely | ASCII (the plan's recommendation). Windows has no POSIX locale variables and is treated as Unicode, as `resolve_color_depth` treats an absent `TERM` there |
+| Config field | top-level `ascii: Option<bool>`; the flag is `--ascii`, with `--unicode` to force the other way against a config or locale that says ASCII |
+| Precedence | flag > config > locale |
+
+**Deviations from the plan**
+
+- **The glyph set rides on `Theme`** (`theme.glyphs`, `Theme::with_glyphs`), not beside it as a
+  separate argument to `render::frame`. Every draw function already receives a `&Theme`, so this
+  changed no signature and no call site; the plan's "alongside, not inside" intent (colour depth
+  and glyph set stay independent capabilities) is kept by `Glyphs` being its own type that
+  `Theme` merely carries.
+- **`Glyphs::text(&str)`** exists beside role lookups. Several glyphs are baked into strings the
+  core's *state* builds (`Liveness::readout`, `ServerCondition::readout`, the Viewer's currency
+  line, key labels, help rows, hint bar) and which tests assert byte for byte, so they stay
+  Unicode in state and are mapped at the draw site. Because every variant is one column wide,
+  truncation decisions made on the Unicode text are still right. It is never applied to a key
+  name, value, command, channel or payload.
+- **The enforcement is a frame-level test**, not role discipline alone:
+  `the_ascii_frame_has_the_unicode_frames_layout_and_no_non_ascii` renders eleven states in both
+  sets and asserts equal row widths and ASCII-only output, so a draw site that still holds a
+  literal glyph fails the build.
+- `truncate`, `clip`, `truncate_left` and `truncate_right` take the ellipsis (or a `Glyphs`) as
+  an argument, so a truncated key name gets `~` without the name itself being mapped.
+
+**Not done**
+
+- A stream entry whose ID does not parse shows `—` in the AGE cell (`state::value::stream_entry_age`);
+  the Viewer's row cells carry no glyph context, so that one cell stays Unicode in an ASCII frame.
+- The by-hand `LANG=C cargo run -p redis-pane` check against the fixtures was not run in this
+  environment (no interactive terminal); the golden frames in ASCII mode stand in for it.
+- The integration suite was not run (it needs Docker).
