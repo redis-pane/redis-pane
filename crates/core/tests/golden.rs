@@ -4445,6 +4445,62 @@ fn help_state() -> State {
     }
 }
 
+// ── M4 task 5: light and high-contrast, which ADR-0011 promised ─────────────
+
+use redis_pane_core::theme::Palette;
+
+/// The keys pane in a named built-in theme: the selection bar, every type
+/// colour, the Environment band and the Muted metadata in one frame.
+fn browser_in(palette: Palette, depth: ColorDepth) -> String {
+    let frame = render::frame(
+        &many_keys(),
+        &Theme::with_palette(depth, &palette),
+        &CLOCK,
+        Rect::new(0, 0, 90, 12),
+    );
+    render::to_golden(&frame)
+}
+
+#[test]
+fn golden_browser_style_light_truecolor() {
+    assert_golden(
+        "browser_style_light_truecolor",
+        &browser_in(Palette::light(), ColorDepth::TrueColor),
+    );
+}
+
+#[test]
+fn golden_browser_style_high_contrast_truecolor() {
+    assert_golden(
+        "browser_style_high_contrast_truecolor",
+        &browser_in(Palette::high_contrast(), ColorDepth::TrueColor),
+    );
+}
+
+#[test]
+fn golden_browser_style_light_ansi256() {
+    assert_golden(
+        "browser_style_light_ansi256",
+        &browser_in(Palette::light(), ColorDepth::Ansi256),
+    );
+}
+
+#[test]
+fn a_theme_changes_the_styles_but_never_the_text() {
+    let text_of = |g: &str| g.split("--- styles ---").next().unwrap().to_string();
+    let dark = browser_in(Palette::dark(), ColorDepth::TrueColor);
+    for palette in [Palette::light(), Palette::high_contrast()] {
+        let name = palette.name.clone();
+        let other = browser_in(palette, ColorDepth::TrueColor);
+        assert_ne!(dark, other, "{name} must restyle the frame");
+        assert_eq!(
+            text_of(&dark),
+            text_of(&other),
+            "{name} must not move a cell"
+        );
+    }
+}
+
 #[test]
 fn golden_browser_130_ascii() {
     assert_golden(
@@ -4562,4 +4618,153 @@ fn the_ascii_frame_has_the_unicode_frames_layout_and_no_non_ascii() {
             assert!(a.is_ascii(), "{name}: a glyph escaped the table: {a}");
         }
     }
+}
+
+#[test]
+fn monochrome_frames_are_identical_in_every_theme() {
+    let dark = browser_in(Palette::dark(), ColorDepth::Monochrome);
+    for palette in [Palette::light(), Palette::high_contrast()] {
+        assert_eq!(dark, browser_in(palette, ColorDepth::Monochrome));
+    }
+}
+
+// ── M4 follow-up: themes paint their own background ─────────────────────────
+
+/// Every kind of overlay the frame can draw, each over a screen: help over the
+/// browser, a mutation confirm over Slowlog, a feed confirm over the browser,
+/// and a plain browser and Slowlog with nothing open.
+fn overlay_states() -> Vec<(&'static str, State, u64)> {
+    let mut help = many_keys();
+    help.help = Some(HelpView { pane: help.focus });
+    let mut confirm = slowlog_with_entries();
+    confirm.confirm = Some(PendingMutation::ResetSlowlog);
+    let feed = State {
+        pending_feed: Some(FeedKindMsg::Monitor),
+        connection: Connection {
+            environment: Environment::Prod,
+            ..base().connection
+        },
+        ..base()
+    };
+    vec![
+        ("browser", many_keys(), 0),
+        ("help", help, 0),
+        ("slowlog", slowlog_with_entries(), SLOWLOG_NOW_MS),
+        ("confirm", confirm, SLOWLOG_NOW_MS),
+        ("feed confirm", feed, MONITOR_NOW_MS),
+    ]
+}
+
+#[test]
+fn in_light_no_cell_of_any_frame_has_an_unpainted_background() {
+    use ratatui::style::Color;
+    for depth in [ColorDepth::TrueColor, ColorDepth::Ansi256] {
+        let theme = Theme::with_palette(depth, &Palette::light());
+        let ground = theme.background().expect("light paints a background");
+        for (what, state, now) in overlay_states() {
+            for (w, h) in [(100, 24), (80, 24), (60, 20)] {
+                let buf = render::frame(&state, &theme, &FixedClock(now), Rect::new(0, 0, w, h));
+                for y in 0..h {
+                    for x in 0..w {
+                        let bg = buf.cell((x, y)).unwrap().bg;
+                        assert!(
+                            bg != Color::Reset,
+                            "{what} {depth:?} {w}x{h}: hole at ({x},{y})"
+                        );
+                    }
+                }
+                // And the ground really is what shows through behind the
+                // title bar's rule, not merely "something".
+                assert_eq!(buf.cell((0, 0)).unwrap().bg, ground, "{what} {depth:?}");
+            }
+        }
+    }
+}
+
+#[test]
+fn high_contrast_paints_every_cell_too() {
+    use ratatui::style::Color;
+    let theme = Theme::with_palette(ColorDepth::TrueColor, &Palette::high_contrast());
+    for (what, state, now) in overlay_states() {
+        let buf = render::frame(&state, &theme, &FixedClock(now), Rect::new(0, 0, 90, 24));
+        assert!(
+            buf.content().iter().all(|c| c.bg != Color::Reset),
+            "{what}: a cell is unpainted"
+        );
+    }
+}
+
+#[test]
+fn text_in_a_painting_theme_never_falls_back_to_the_terminal_foreground() {
+    use ratatui::style::Color;
+    let theme = Theme::with_palette(ColorDepth::TrueColor, &Palette::light());
+    for (what, state, now) in overlay_states() {
+        let buf = render::frame(&state, &theme, &FixedClock(now), Rect::new(0, 0, 100, 24));
+        for (i, c) in buf.content().iter().enumerate() {
+            assert!(
+                c.symbol().trim().is_empty() || c.fg != Color::Reset,
+                "{what}: `{}` at cell {i} would draw in the terminal's own foreground",
+                c.symbol()
+            );
+        }
+    }
+}
+
+#[test]
+fn an_overlay_keeps_the_selection_and_wash_backgrounds_it_was_given() {
+    use redis_pane_core::theme::Token;
+    let theme = Theme::with_palette(ColorDepth::TrueColor, &Palette::light());
+    let buf = render::frame(&many_keys(), &theme, &CLOCK, Rect::new(0, 0, 90, 12));
+    let selected = theme.style(Token::Selected).bg;
+    assert!(
+        buf.content().iter().any(|c| Some(c.bg) == selected),
+        "the selection bar is still its own colour"
+    );
+}
+
+#[test]
+fn dark_and_monochrome_paint_nothing_under_any_overlay() {
+    use ratatui::style::Color;
+    for theme in [
+        Theme::new(ColorDepth::TrueColor),
+        Theme::new(ColorDepth::Ansi256),
+        Theme::with_palette(ColorDepth::Monochrome, &Palette::light()),
+        Theme::with_palette(ColorDepth::Monochrome, &Palette::high_contrast()),
+    ] {
+        assert_eq!(theme.background(), None);
+        for (what, state, now) in overlay_states() {
+            let buf = render::frame(&state, &theme, &FixedClock(now), Rect::new(0, 0, 90, 24));
+            // Some cell must still be the terminal's own, or this would pass
+            // for a theme that painted everything.
+            assert!(
+                buf.content().iter().any(|c| c.bg == Color::Reset),
+                "{what}: nothing is left to the terminal"
+            );
+        }
+    }
+}
+
+#[test]
+fn background_terminal_on_a_light_base_paints_nothing() {
+    use ratatui::style::Color;
+    let cfg = redis_pane_core::config::parse(
+        r#"{"theme":"m","themes":{"m":{"base":"light","background":"terminal"}}}"#,
+    )
+    .unwrap();
+    let palette = redis_pane_core::theme::select(None, Some(&cfg)).unwrap();
+    let theme = Theme::with_palette(ColorDepth::TrueColor, &palette);
+    let buf = render::frame(&many_keys(), &theme, &CLOCK, Rect::new(0, 0, 90, 12));
+    assert!(buf.content().iter().any(|c| c.bg == Color::Reset));
+}
+
+/// An overlay open in `light`: the help overlay's box and everything around it
+/// carry the painted ground, with no dark rectangle where the overlay blanked
+/// its cells.
+#[test]
+fn golden_help_overlay_light_truecolor() {
+    let mut state = many_keys();
+    state.help = Some(HelpView { pane: state.focus });
+    let theme = Theme::with_palette(ColorDepth::TrueColor, &Palette::light());
+    let buf = render::frame(&state, &theme, &CLOCK, Rect::new(0, 0, 90, 24));
+    assert_golden("help_overlay_light_truecolor", &render::to_golden(&buf));
 }

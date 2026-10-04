@@ -1,0 +1,36 @@
+─ redis-pane ─ ● staging · cache-01:6379/0 · from profile staging ─────────────── ● live ─
+
+ KEY                           TYPE      TTL │ → to open
+ ● user:8812:cart              zset      12m │
+ ● user:8812:profile           json        ∞ │
+ ● user:8812:session           hash      42m │
+ ● user:8813:session           hash      56m │
+ ● cart:91af3c9d2e             zset      12m │
+ ● feed:global:hot             list        ∞ │
+                                             │
+                                             │
+
+--- styles ---
+a fg=#999999 bg=#000000
+b fg=#ffd700 bg=#000000
+c fg=#cccccc bg=#000000
+d fg=#ffffff bg=#000000
+e fg=#5fff5f bg=#000000
+f fg=Reset bg=#000000
+g fg=#000000 bg=#ffd700
+h fg=#5fffd7 bg=#000000
+i fg=#ffaf5f bg=#000000
+j fg=#87ff5f bg=#000000
+--- map ---
+aaaaaaaaaaaaaaabbbbbbbbbcccdddddddddddddddcccccccccccccccccccccccaaaaaaaaaaaaaaaaaeeeeeeaa
+ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+fdddfffffffffffffffffffffffffffddddffffffdddfafcccccccccffffffffffffffffffffffffffffffffff
+gggggggggggggggggggggggggggggggggggggggggggggaffffffffffffffffffffffffffffffffffffffffffff
+fhfdddddddddddddddddfffffffffffhhhhffffffffcfaffffffffffffffffffffffffffffffffffffffffffff
+fbfdddddddddddddddddfffffffffffbbbbffffffcccfaffffffffffffffffffffffffffffffffffffffffffff
+fbfdddddddddddddddddfffffffffffbbbbffffffcccfaffffffffffffffffffffffffffffffffffffffffffff
+fifdddddddddddddddfffffffffffffiiiiffffffcccfaffffffffffffffffffffffffffffffffffffffffffff
+fjfdddddddddddddddfffffffffffffjjjjffffffffcfaffffffffffffffffffffffffffffffffffffffffffff
+fffffffffffffffffffffffffffffffffffffffffffffaffffffffffffffffffffffffffffffffffffffffffff
+fffffffffffffffffffffffffffffffffffffffffffffaffffffffffffffffffffffffffffffffffffffffffff
+ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff

@@ -324,8 +324,18 @@ processing `ScanStarted`. Still above 16 ms, on ceilings of 1.5× the CI measure
 debounced full rebuild (~22 ms) and the worst scan page. See
 [`m4-perf-interaction.md`](plans/m4-perf-interaction.md) for the resolved decisions.
 
-Task 6 (ASCII glyph fallback) is done — see [`m4-glyphs.md`](plans/m4-glyphs.md). Tasks 5, 7
-and 8 are not started on this branch.
+Task 5 is done — `Theme` is data: a `Palette` (a fixed array indexed by token, truecolor and 256
+colour slots) resolved once into a `Copy` `Theme`. Built-ins are `dark`, `light` and
+`high-contrast`; a test measures WCAG AA (AAA for high-contrast) for every readable token over the
+palette's background and over the detached wash, at truecolor and 256 colours. `--theme` beats the
+config's `theme`, which beats `dark`; `themes` in config holds user themes over a built-in `base`,
+an unknown token name being a parse error. `env.local` is now a neutral grey (green is for `ok`
+alone), and `dark`'s `muted` was nudged one step lighter because the contrast test found it just
+under AA on the detached wash. `NO_COLOR` empty is unset. Light and high-contrast goldens exist.
+See [`m4-themes.md`](plans/m4-themes.md).
+
+Task 6 (ASCII glyph fallback) is done — see [`m4-glyphs.md`](plans/m4-glyphs.md). Tasks 7 and 8
+are not started on this branch.
 
 | # | Task | Proves |
 |---|---|---|

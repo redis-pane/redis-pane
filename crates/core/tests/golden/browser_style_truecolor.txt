@@ -13,7 +13,7 @@
 --- styles ---
 a fg=#444444 bg=Reset
 b fg=#e0af68 bg=Reset
-c fg=#8a8a8a bg=Reset
+c fg=#8c8c8c bg=Reset
 d fg=#e6e6e6 bg=Reset
 e fg=#7ac78e bg=Reset
 f fg=#11131a bg=#f5a742

@@ -8,7 +8,7 @@ use fred::interfaces::ClientLike;
 use fred::prelude::Client;
 use redis_pane_core::resolve::{Credentials, EnvVars, Flags, resolve};
 use redis_pane_core::state::{Connection, Startup, State};
-use redis_pane_core::theme::Theme;
+use redis_pane_core::theme::{self, Theme};
 
 use redis_pane::redis::{ConnectError, Established};
 use redis_pane::{SystemClock, config_io, exit, redis, terminal};
@@ -62,6 +62,10 @@ struct Cli {
     /// Connect, report what the server supports, then exit.
     #[arg(long)]
     probe: bool,
+    /// Colour theme: `dark`, `light`, `high-contrast`, or one defined under
+    /// `themes` in the config. Beats the config's `theme`.
+    #[arg(long, value_name = "NAME")]
+    theme: Option<String>,
 }
 
 fn env_vars() -> EnvVars {
@@ -182,6 +186,13 @@ fn main() {
         None => None,
     };
 
+    // Chosen before connecting, so a typo'd `--theme` fails fast rather than
+    // after a round-trip to the server.
+    let palette = theme::select(cli.theme.as_deref(), config.as_ref()).unwrap_or_else(|err| {
+        eprintln!("redis-pane: {err}");
+        std::process::exit(exit::CONFIG);
+    });
+
     let flags = Flags {
         url: cli.url,
         host: cli.host,
@@ -224,10 +235,9 @@ fn main() {
         (_, true) => Some(false),
         _ => None,
     };
-    let theme = Theme::new(terminal::detect_color_depth()).with_glyphs(terminal::detect_glyph_set(
-        glyph_flag,
-        config.as_ref().and_then(|c| c.ascii),
-    ));
+    let theme = Theme::with_palette(terminal::detect_color_depth(), &palette).with_glyphs(
+        terminal::detect_glyph_set(glyph_flag, config.as_ref().and_then(|c| c.ascii)),
+    );
 
     if let Err(err) = runtime.block_on(terminal::run(
         state,
