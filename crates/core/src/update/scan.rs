@@ -4,6 +4,42 @@
 
 use super::*;
 
+/// How far the Loaded set must grow, as a percentage of its size at the last
+/// full rebuild, before `scan_batch` pays for another one while a sorted or
+/// tree-mode view is active (M4 task 3, `docs/plans/m4-perf-scan.md`
+/// decision 2).
+///
+/// Rebuilding a sorted/tree view on every `ScanBatch` page is exactly the
+/// O(n²) cost this task removes — `rebuild_list` (sort, and in tree mode a
+/// full `Tree::rebuild` on top) costs O(current size), and a 1M-key scan is
+/// ~2,000 pages, so paying that cost on every page is ~2,000 rebuilds each
+/// proportional to the *keyspace already loaded*. Rebuilding only once the
+/// set has grown by this fraction instead means the rebuilds land at
+/// geometrically growing sizes (n₀, n₀×1.25, n₀×1.25², …): the sum of a
+/// convergent geometric series, so total rebuild work across the whole scan
+/// is O(n) rebuilds' worth of size — O(n log n) once each rebuild's own
+/// O(m log m) sort is folded in — not O(n²).
+///
+/// 25% is the plan doc's own starting point, kept as the shipped value: it
+/// is loose enough that a 1M-key scan does on the order of 60 rebuilds
+/// rather than 2,000 (log of 1,000,000 base 1.25 ≈ 62), and tight enough
+/// that the list shown mid-scan is never more than a quarter stale — the
+/// status line already says "scanning X of ~Y", so a reader is never told
+/// the list is complete when it is catching up, only that more has arrived
+/// than is shown yet.
+const SCAN_REBUILD_GROWTH_PCT: usize = 25;
+
+/// Whether `state.keys.len()` has grown enough past `last_rebuild_len` to
+/// justify paying for another full [`State::rebuild_list`] (decision 2).
+///
+/// `last_rebuild_len == 0` always answers true — the scan's first page, with
+/// nothing rebuilt yet, must land on screen rather than leaving the list
+/// empty until growth crosses the threshold.
+fn grown_enough(current_len: usize, last_rebuild_len: usize) -> bool {
+    last_rebuild_len == 0
+        || current_len >= last_rebuild_len + last_rebuild_len * SCAN_REBUILD_GROWTH_PCT / 100
+}
+
 pub(super) fn scan_started(mut state: State, estimated_total: u64) -> (State, Vec<Command>) {
     state.keys.clear();
     // The Open key survives a rescan; its *index* must not. `SCAN` has
@@ -27,6 +63,17 @@ pub(super) fn scan_started(mut state: State, estimated_total: u64) -> (State, Ve
 ///
 /// This is the single place the cap is enforced, so there is no path that grows
 /// the Loaded set past it (ADR-0010).
+///
+/// What happens to the view after the keys land is the quadratic-cost fix
+/// (M4 task 3, `docs/plans/m4-perf-scan.md`): in the common case — flat,
+/// scan-order, the default a fresh scan starts in — the newly-pushed indices
+/// are appended straight to [`KeyView::extend`], `O(page)`, and the Open
+/// key's row is patched directly if it was among them, without the linear
+/// `relocate_open_key`/`row_of` scan `rebuild_list` would otherwise run on
+/// every page (decision 1, decision 3). A sorted or tree-mode view cannot be
+/// extended this way — a new key can belong anywhere in that order — so it
+/// instead rebuilds on the geometric schedule above (decision 2); the first
+/// page always rebuilds, so the screen is never left empty.
 pub(super) fn scan_batch(mut state: State, keys: Vec<Vec<u8>>) -> (State, Vec<Command>) {
     // A rescan took the Open key's index away (`ScanStarted`). Watch for the
     // name coming back so it can be restored — here rather than by searching
@@ -36,12 +83,19 @@ pub(super) fn scan_batch(mut state: State, keys: Vec<Vec<u8>>) -> (State, Vec<Co
         Some(open) if open.index.is_none() => Some(open.name.clone()),
         _ => None,
     };
+    let prior_len = state.keys.len();
     for key in keys {
         let index = state.keys.len();
         if !state.keys.push(&key) {
             state.scan = ScanState::Capped {
                 at: state.keys.len(),
             };
+            // The cap ends the scan here, and the four ways a scan can end
+            // (`Capped`, `ScanComplete`, `ScanCancelled`, `ScanFailed`) all
+            // leave the view fully rebuilt (decision 2) — a partial
+            // incremental append would otherwise be the last thing the
+            // reader sees for the rest of the session.
+            state.rebuild_list();
             return (state, vec![Command::CancelScan]);
         }
         // Only after the push succeeded: a key the cap refused has no index,
@@ -61,7 +115,35 @@ pub(super) fn scan_batch(mut state: State, keys: Vec<Vec<u8>>) -> (State, Vec<Co
             estimated_total,
         };
     }
-    state.rebuild_list();
+
+    if !state.tree_mode && state.list.sort == SortBy::Scan {
+        // The common case (decision 1): tree mode is the default view, but
+        // a scan starts in flat/scan order and the default sort stays Scan
+        // until a reader changes it, so this is what the vast majority of a
+        // scan's pages actually hit.
+        let order_len_before = state.list.len();
+        state.list.extend(&state.keys, prior_len);
+        // The Open key's row, if its index landed in this page: bounded by
+        // the page that just arrived, not `row_of`'s scan over every row —
+        // the whole point of taking this path instead of `rebuild_list`'s.
+        if let Some(index) = state.open.as_ref().and_then(|open| open.index)
+            && index >= prior_len
+        {
+            let row = (order_len_before..state.list.len())
+                .find(|&r| state.list.index_at(r) == Some(index));
+            if let Some(open) = &mut state.open {
+                open.row = row;
+            }
+        }
+    } else if grown_enough(state.keys.len(), state.scan_last_rebuild_len) {
+        // A non-scan sort, or tree mode: a new key can belong anywhere in
+        // the order, so it cannot simply be appended. Rebuilding on every
+        // page here is the O(n²) this task removes (decision 2); rebuilding
+        // on the geometric schedule instead keeps the total rebuild cost
+        // across the whole scan at O(n log n).
+        state.rebuild_list();
+    }
+
     // Keys render as they arrive; their metadata should follow, but only for
     // the rows a reader can actually see.
     let indices = state.rows_needing_metadata();
@@ -122,6 +204,13 @@ pub(super) fn metadata_batch(
     (state, Vec::new())
 }
 
+/// Every way a scan can end leaves the view fully rebuilt (decision 2), not
+/// only caught up to the last incremental append or the last batched
+/// rebuild — the incremental-append path (`SortBy::Scan`, flat) is already
+/// exact by construction, but the batched path can legitimately still be
+/// behind by up to `SCAN_REBUILD_GROWTH_PCT`% when the scan ends, and that
+/// gap must not be the state a reader is left looking at for the rest of
+/// the session.
 pub(super) fn scan_complete(mut state: State) -> (State, Vec<Command>) {
     // A cap reached mid-scan already told its own story; completing
     // afterwards must not overwrite it with a smaller truth.
@@ -130,6 +219,7 @@ pub(super) fn scan_complete(mut state: State) -> (State, Vec<Command>) {
             total: state.keys.len() as u64,
         };
     }
+    state.rebuild_list();
     (state, Vec::new())
 }
 
@@ -139,11 +229,13 @@ pub(super) fn scan_cancelled(mut state: State) -> (State, Vec<Command>) {
             scanned: state.keys.len() as u64,
         };
     }
+    state.rebuild_list();
     (state, Vec::new())
 }
 
 pub(super) fn scan_failed(mut state: State, error: String) -> (State, Vec<Command>) {
     state.scan = ScanState::Failed { error };
+    state.rebuild_list();
     (state, Vec::new())
 }
 
@@ -354,6 +446,262 @@ mod scan_tests {
         );
         assert_eq!(s.keys.len(), 30, "partial results are still worth showing");
         assert!(s.scan.readout().contains("LOADING"));
+    }
+}
+
+#[cfg(test)]
+mod incremental_equivalence_tests {
+    //! M4 task 3's correctness proof (`docs/plans/m4-perf-scan.md` decision
+    //! 2, "testing"): whatever shortcut `scan_batch` takes mid-scan — the
+    //! incremental append for the flat/scan-order common case, or the
+    //! batched geometric-schedule rebuild for a sorted or tree-mode view —
+    //! the state once the scan *ends* must be pixel-for-pixel what the old,
+    //! always-rebuild-every-page code produced: the same final order, the
+    //! same tree rows, the same selection and Open key. A timing
+    //! improvement that quietly changed what a finished scan shows would be
+    //! a worse regression than the quadratic cost it replaced.
+    //!
+    //! The proof technique: build the same keyspace two ways — once by
+    //! folding it through `update(state, Msg::ScanBatch { .. })` page by
+    //! page, finishing with `Msg::ScanComplete` (what the shell actually
+    //! does), and once by pushing every key into a fresh `LoadedSet`
+    //! directly and calling `State::rebuild_list` exactly once (what the
+    //! pre-task-3 code effectively computed, since it rebuilt on every
+    //! page and the final page's rebuild saw every key). If `scan_batch`'s
+    //! shortcuts are correct, both paths must land on the same `KeyView`,
+    //! the same `Tree`, and the same selection.
+
+    use super::*;
+    use crate::state::{FilterMode, KeyView, LoadedSet};
+
+    /// Namespaced and `:`-separated, so tree mode actually has something to
+    /// fold — a plain `k:{i}` name (as `scan_tests` above uses) collapses to
+    /// one group with no structure worth comparing.
+    fn key_name(i: usize) -> String {
+        format!("user:{:04}:session", i)
+    }
+
+    /// A mid-scan mutation `folded_through_scan` applies once a given
+    /// number of keys have arrived: how many, and the field flip to apply —
+    /// factored out of `folded_through_scan`'s signature per clippy's
+    /// `type_complexity` (a bare tuple type there reads no clearer and
+    /// trips the lint for no benefit).
+    type MidScanMutation = (usize, fn(&mut State));
+
+    /// Fold `total` keys through the real `update` dispatch, `page` keys at
+    /// a time, finishing with `ScanComplete` — exactly the sequence the
+    /// shell drives a real scan with. `mutate_at` fires once, after that
+    /// many keys have arrived, so a test can flip the sort, tree mode or
+    /// filter *mid-scan* the same way a reader pressing `s`/`t`/`/` would
+    /// (both act by mutating the field directly and calling
+    /// `rebuild_list`, exactly as `update::keys`'s own handlers do).
+    fn folded_through_scan(
+        total: usize,
+        page: usize,
+        tree_mode: bool,
+        sort: SortBy,
+        filter: &str,
+        mutate_at: Option<MidScanMutation>,
+    ) -> State {
+        let mut state = State {
+            rows: 30,
+            tree_mode,
+            list: KeyView::new(filter, FilterMode::Glob, sort),
+            ..State::default()
+        };
+        (state, _) = update(
+            state,
+            Msg::ScanStarted {
+                estimated_total: total as u64,
+            },
+        );
+        let mut sent = 0;
+        let mut mutated = false;
+        while sent < total {
+            let n = page.min(total - sent);
+            let keys = (sent..sent + n).map(|i| key_name(i).into_bytes()).collect();
+            (state, _) = update(state, Msg::ScanBatch { keys });
+            sent += n;
+            if let Some((at, f)) = mutate_at
+                && !mutated
+                && sent >= at
+            {
+                f(&mut state);
+                state.rebuild_list();
+                mutated = true;
+            }
+        }
+        (state, _) = update(state, Msg::ScanComplete);
+        state
+    }
+
+    /// Build the same keyspace directly and rebuild once — the baseline
+    /// every `folded_through_scan` variant above must match once the scan
+    /// has ended. Takes the *final* sort/tree/filter, since that is what a
+    /// mid-scan change settles on by the time `ScanComplete` lands.
+    fn built_directly(total: usize, tree_mode: bool, sort: SortBy, filter: &str) -> State {
+        let mut state = State {
+            rows: 30,
+            tree_mode,
+            list: KeyView::new(filter, FilterMode::Glob, sort),
+            ..State::default()
+        };
+        for i in 0..total {
+            assert!(state.keys.push(key_name(i).as_bytes()));
+        }
+        state.rebuild_list();
+        state
+    }
+
+    /// The two views that matter for "looks the same on screen": the
+    /// filtered/sorted order, the folded tree rows, and where the cursor
+    /// landed. `KeyView`/`Tree` both derive `PartialEq`, so this is a
+    /// structural comparison, not a spot check.
+    fn assert_same_final_view(got: &State, want: &State, case: &str) {
+        assert_eq!(got.list, want.list, "{case}: KeyView differs");
+        assert_eq!(got.tree, want.tree, "{case}: Tree differs");
+        assert_eq!(
+            got.view.selected, want.view.selected,
+            "{case}: selected row differs"
+        );
+    }
+
+    #[test]
+    fn flat_scan_order_matches_a_full_rebuild() {
+        let got = folded_through_scan(2_000, 137, false, SortBy::Scan, "", None);
+        let want = built_directly(2_000, false, SortBy::Scan, "");
+        assert_same_final_view(&got, &want, "flat scan order");
+    }
+
+    #[test]
+    fn flat_sorted_by_name_matches_a_full_rebuild() {
+        let got = folded_through_scan(2_000, 137, false, SortBy::Name, "", None);
+        let want = built_directly(2_000, false, SortBy::Name, "");
+        assert_same_final_view(&got, &want, "flat, sorted by name");
+    }
+
+    #[test]
+    fn flat_sorted_by_ttl_matches_a_full_rebuild() {
+        // TTL is lazily fetched and nothing in this test fetches it, so
+        // every key is "unknown" and the sort falls back to scan order
+        // among them — exercising `sort_by_lazy`'s all-unknown branch
+        // rather than the usual mostly-known one, but still a real
+        // comparison against the direct build, which goes through the same
+        // `apply_sort` path.
+        let got = folded_through_scan(1_200, 97, false, SortBy::Ttl, "", None);
+        let want = built_directly(1_200, false, SortBy::Ttl, "");
+        assert_same_final_view(&got, &want, "flat, sorted by ttl");
+    }
+
+    #[test]
+    fn tree_mode_matches_a_full_rebuild() {
+        let got = folded_through_scan(2_000, 137, true, SortBy::Scan, "", None);
+        let want = built_directly(2_000, true, SortBy::Name, "");
+        assert_same_final_view(&got, &want, "tree mode");
+    }
+
+    #[test]
+    fn flat_scan_order_with_a_filter_matches_a_full_rebuild() {
+        let got = folded_through_scan(2_000, 137, false, SortBy::Scan, "user:00", None);
+        let want = built_directly(2_000, false, SortBy::Scan, "user:00");
+        assert!(
+            !got.list.is_empty(),
+            "the filter must still match something"
+        );
+        assert_same_final_view(&got, &want, "flat scan order, filtered");
+    }
+
+    #[test]
+    fn tree_mode_with_a_filter_matches_a_full_rebuild() {
+        let got = folded_through_scan(2_000, 137, true, SortBy::Scan, "session", None);
+        let want = built_directly(2_000, true, SortBy::Name, "session");
+        assert_same_final_view(&got, &want, "tree mode, filtered");
+    }
+
+    #[test]
+    fn switching_to_tree_mode_mid_scan_still_matches_a_full_rebuild_at_the_end() {
+        let got = folded_through_scan(
+            2_000,
+            137,
+            false,
+            SortBy::Scan,
+            "",
+            Some((900, |s: &mut State| s.tree_mode = true)),
+        );
+        let want = built_directly(2_000, true, SortBy::Name, "");
+        assert_same_final_view(&got, &want, "tree mode turned on mid-scan");
+    }
+
+    #[test]
+    fn changing_sort_mid_scan_still_matches_a_full_rebuild_at_the_end() {
+        let got = folded_through_scan(
+            2_000,
+            137,
+            false,
+            SortBy::Scan,
+            "",
+            Some((900, |s: &mut State| s.list.sort = SortBy::Name)),
+        );
+        let want = built_directly(2_000, false, SortBy::Name, "");
+        assert_same_final_view(&got, &want, "sort changed mid-scan");
+    }
+
+    #[test]
+    fn changing_the_filter_mid_scan_still_matches_a_full_rebuild_at_the_end() {
+        let got = folded_through_scan(
+            2_000,
+            137,
+            false,
+            SortBy::Scan,
+            "",
+            Some((900, |s: &mut State| s.list.filter = "user:00".into())),
+        );
+        let want = built_directly(2_000, false, SortBy::Scan, "user:00");
+        assert!(
+            !got.list.is_empty(),
+            "the filter must still match something"
+        );
+        assert_same_final_view(&got, &want, "filter changed mid-scan");
+    }
+
+    /// The incremental-append path's own narrower claim, checked after
+    /// every single page rather than only at the end: in flat scan order
+    /// the view is never behind — it is exact after each `ScanBatch`, not
+    /// only once the scan finishes. This is what makes the batched path's
+    /// "may lag until the next scheduled rebuild" honesty note in
+    /// `rebuild_list`'s doc comment correctly scoped to sorted/tree views
+    /// only.
+    #[test]
+    fn flat_scan_order_is_exact_after_every_single_page_not_only_at_the_end() {
+        let mut state = State {
+            rows: 30,
+            list: KeyView::new("", FilterMode::Glob, SortBy::Scan),
+            ..State::default()
+        };
+        (state, _) = update(
+            state,
+            Msg::ScanStarted {
+                estimated_total: 1_000,
+            },
+        );
+        let mut expected = LoadedSet::default();
+        for page in 0..10 {
+            let from = page * 100;
+            let keys: Vec<Vec<u8>> = (from..from + 100)
+                .map(|i| key_name(i).into_bytes())
+                .collect();
+            for k in &keys {
+                expected.push(k);
+            }
+            (state, _) = update(state, Msg::ScanBatch { keys });
+
+            let mut want = KeyView::new("", FilterMode::Glob, SortBy::Scan);
+            want.rebuild(&expected);
+            assert_eq!(
+                state.list, want,
+                "page {page}: the incremental view must already be exact"
+            );
+        }
     }
 }
 

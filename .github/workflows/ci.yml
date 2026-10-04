@@ -90,9 +90,16 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      # The whole-scan fold (2,000 pages into a tree-mode list) takes ~2 min
-      # locally today and longer here, so it is skipped until M4 task 3
-      # makes a scan's list work O(n); run it by hand with `--exact` meanwhile.
+      # The whole-scan fold (2,000 pages into a tree-mode list) used to take
+      # ~2 min locally — O(n²) from rebuilding tree mode's full index on
+      # every page — so it was skipped here until M4 task 3 fixed that.
+      # After task 3's geometric rebuild schedule
+      # (`docs/plans/m4-perf-scan.md` decision 2) it measures well under a
+      # second locally, so it now runs with everything else.
+      # One test at a time: these are wall-clock timings, and run in
+      # parallel they contend for CPU — measured locally, the whole-scan
+      # fold alongside them inflated the filter keystroke 22 → 32 ms and
+      # the tree toggle 126 → 146 ms, close enough to the ceilings to flake.
       - run: >-
           cargo test -p redis-pane-core --release --test perf -- --ignored
-          --nocapture --skip whole_scan_fold_in_tree_mode_from_empty
+          --nocapture --test-threads=1

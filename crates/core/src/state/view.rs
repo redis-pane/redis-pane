@@ -155,6 +155,41 @@ impl KeyView {
         self.apply_sort(keys);
     }
 
+    /// Append newly-scanned keys — indices `new_from..keys.len()` — without
+    /// touching the rows already there (M4 task 3, `docs/plans/m4-perf-scan.md`
+    /// decision 1).
+    ///
+    /// Correct **only** in scan order: appending preserves `SortBy::Scan`'s
+    /// order exactly (a key arrives, it goes on the end, which is where scan
+    /// order puts it), but would silently corrupt any other sort — a key
+    /// sorted by name can belong anywhere in `order`, not at the tail. The
+    /// caller (`scan_batch`) only takes this path when `sort == SortBy::Scan`;
+    /// every other sort, and tree mode, goes through the batched
+    /// [`KeyView::rebuild`] schedule instead.
+    ///
+    /// Cost is `O(new_from..keys.len())` — the page that just arrived — not
+    /// `O(keys.len())`, which is what makes this the fix for the quadratic
+    /// cost of calling [`KeyView::rebuild`] once per `ScanBatch`.
+    pub fn extend(&mut self, keys: &LoadedSet, new_from: usize) {
+        debug_assert_eq!(
+            self.sort,
+            SortBy::Scan,
+            "extend is only correct in scan order; other sorts need a rebuild"
+        );
+        for i in new_from..keys.len() {
+            if self.filter.is_empty() {
+                self.order.push(i as u32);
+            } else if let Some(name) = keys.name(i)
+                && matches(name, &self.filter, self.mode)
+            {
+                self.order.push(i as u32);
+            }
+        }
+        // Scan order has no lazily-fetched column to be partial about —
+        // `known` tracks the whole order, same as `apply_sort`'s `Scan` arm.
+        self.known = self.order.len();
+    }
+
     fn apply_sort(&mut self, keys: &LoadedSet) {
         self.known = match self.sort {
             SortBy::Scan | SortBy::Name => self.order.len(),
@@ -517,6 +552,65 @@ mod tests {
         // SCAN guarantees no ordering, so calling this "natural" would be a lie.
         assert_eq!(SortBy::Scan.label(), "scan order");
         assert_eq!(KeyView::default().sort_readout(), None);
+    }
+
+    // ── incremental append during a scan (M4 task 3) ───────────────────────
+
+    #[test]
+    fn extend_matches_a_full_rebuild_in_scan_order() {
+        let mut keys = store(&["a", "b", "c"]);
+        let mut extended = KeyView::default();
+        extended.rebuild(&keys);
+
+        keys.push(b"d");
+        keys.push(b"e");
+        extended.extend(&keys, 3);
+
+        let mut rebuilt = KeyView::default();
+        rebuilt.rebuild(&keys);
+
+        assert_eq!(viewed(&keys, &extended), viewed(&keys, &rebuilt));
+        assert_eq!(viewed(&keys, &extended), ["a", "b", "c", "d", "e"]);
+    }
+
+    #[test]
+    fn extend_applies_the_filter_to_only_the_new_keys() {
+        let mut keys = store(&["user:1", "feed:1"]);
+        let mut v = KeyView {
+            filter: "user:*".into(),
+            ..KeyView::default()
+        };
+        v.rebuild(&keys);
+        assert_eq!(viewed(&keys, &v), ["user:1"]);
+
+        keys.push(b"user:2");
+        keys.push(b"feed:2");
+        v.extend(&keys, 2);
+
+        let mut rebuilt = KeyView {
+            filter: "user:*".into(),
+            ..KeyView::default()
+        };
+        rebuilt.rebuild(&keys);
+        assert_eq!(viewed(&keys, &v), viewed(&keys, &rebuilt));
+        assert_eq!(viewed(&keys, &v), ["user:1", "user:2"]);
+    }
+
+    #[test]
+    fn extend_over_several_pages_matches_one_rebuild_at_the_end() {
+        let mut keys = LoadedSet::default();
+        let mut v = KeyView::default();
+        for page in 0..10 {
+            for i in page * 10..page * 10 + 10 {
+                keys.push(format!("k:{i}").as_bytes());
+            }
+            let prior = page * 10;
+            v.extend(&keys, prior);
+        }
+        let mut rebuilt = KeyView::default();
+        rebuilt.rebuild(&keys);
+        assert_eq!(viewed(&keys, &v), viewed(&keys, &rebuilt));
+        assert_eq!(v.len(), 100);
     }
 
     #[test]
