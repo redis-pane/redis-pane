@@ -71,6 +71,26 @@ impl InfoToken {
     }
 }
 
+/// Which numbering of the Loaded set a metadata fetch was issued against
+/// (M4 task 4, decision 6, `docs/plans/m4-perf-interaction.md`).
+///
+/// A [`crate::Msg::MetadataBatch`] names rows by Loaded set index, and a
+/// rescan renumbers them (`LoadedSet::clear`, then a refill in a different
+/// `SCAN` order). The core bumps this exactly there and drops any reply whose
+/// epoch is not the current one, so a late reply can never write a type, TTL,
+/// size or tombstone onto an unrelated key. Minted only by
+/// [`crate::update::update`], never by a shell — the same shape and
+/// discipline as [`InfoToken`] and [`ReadToken`]: the shell echoes it back
+/// unchanged, and the core alone decides what is stale.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct MetadataEpoch(u64);
+
+impl MetadataEpoch {
+    pub(crate) fn next(self) -> Self {
+        Self(self.0.wrapping_add(1))
+    }
+}
+
 /// Which feed to open (`docs/plans/m3-feed-connection.md`). A core-only
 /// description with no `fred` type in it, mirroring how [`Command::ReadKey`]
 /// names a key by bytes rather than by a shell-side handle.
@@ -132,12 +152,25 @@ pub enum Command {
     StartScan { pattern: Option<String> },
     /// Stop an in-flight traversal. Every long operation is cancellable.
     CancelScan,
+    /// (Re)start the filter debounce timer (M4 task 4, decision 2): the typed
+    /// filter is ahead of the list and the shell should answer with
+    /// [`crate::Msg::FilterRebuildDue`] once it has been quiet for the
+    /// window. Issued on every keystroke that cannot be narrowed, so a burst
+    /// coalesces into one rebuild. The core owns no clock; this is the only
+    /// thing it asks of one.
+    ScheduleFilterRebuild,
     /// Fetch type, TTL and memory usage for these rows of the Loaded set.
     ///
     /// Only ever the visible window (R2.4). Fetching metadata for a whole
     /// keyspace would be `KEYS *` with extra steps, and it would compete with
     /// `SCAN` for the connection while the list is still filling.
-    FetchMetadata { indices: Vec<usize> },
+    ///
+    /// `epoch` is the Loaded set numbering `indices` belong to; the shell
+    /// echoes it in the reply and the core drops a reply from any other.
+    FetchMetadata {
+        indices: Vec<usize>,
+        epoch: MetadataEpoch,
+    },
     /// Execute a confirmed write (R4.4).
     ///
     /// Only ever issued by confirming a [`crate::state::PendingMutation`]: the

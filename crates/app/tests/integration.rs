@@ -771,12 +771,14 @@ async fn a_key_that_vanished_between_scan_and_fetch_is_reported_gone() {
         ..State::default()
     };
     state.rebuild_list();
+    let state_epoch = state.metadata_epoch;
     let (state, _) = update(
         state,
         Msg::MetadataBatch {
             entries,
             gone,
             at_ms: 0,
+            epoch: state_epoch,
         },
     );
     assert!(!state.keys.is_gone(0), "the surviving key is untouched");

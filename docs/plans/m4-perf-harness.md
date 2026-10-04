@@ -77,23 +77,23 @@ regression in task 3 or 4 would not be caught until someone noticed the app feel
    land once the new jobs run there — this table is the local baseline the override rule in the
    build task compared every ceiling against):
 
-   | Metric | Baseline (measured) | After task 3 | PRD §7 target | Gate used | Release CI gate? |
-   |---|---|---|---|---|---|
-   | Binary size (dist profile, stripped) | 8,607,904 bytes (~8.21 MiB) | unchanged (task 3 touches no binary-size-relevant dependency) | <20MB | AT TARGET: <20MB | yes, new `size` job |
-   | `update`+render, scroll keystroke, 1M keys | 42.7µs | 75.5–76.1µs (noise; scrolling touches no arena, sort or rebuild either before or after task 3) | <16ms | AT TARGET: <16ms | yes, `--release`, `#[ignore]`d |
-   | `update`+render, filter keystroke, 1M keys | 22.27ms (CI: 31.2ms) | 23.8–26.2ms — unchanged in shape: `KeyView::rebuild` on every keystroke is M4 task 4's scope, not task 3's (task 3's scope is `scan_batch`'s per-*page* cost, explicitly not interactive filter/tree edits) | <16ms | CEILING: <47ms (CI baseline × 1.5 — CI is the slower machine here), tightened by task 4 | yes, `--release`, `#[ignore]`d |
-   | `update`+render, sort change, 1M keys | 3.76–3.82ms | 3.99–4.07ms (noise; untouched by task 3) | <16ms | AT TARGET: <16ms | yes, `--release`, `#[ignore]`d |
-   | `update`+render, toggle tree mode, 1M keys | 124–129ms | 129–132ms (noise; `Tree::rebuild`'s own cost is task 4's scope, not task 3's) | <16ms | CEILING: <194ms (baseline × 1.5), tightened by task 4 | yes, `--release`, `#[ignore]`d |
-   | `update`+render, `ScanBatch` of 500 into 1M keys — flat, scan order | 2.29–2.52ms | **1.1–1.5ms** — now `KeyView::extend`'s `O(page)` path (decision 1) rather than a full `rebuild_list` | <16ms | AT TARGET: <16ms | yes, `--release`, `#[ignore]`d |
-   | `update`+render, `ScanBatch` of 500 into 1M keys — **tree mode (the default view)** | 129.6–130.7ms | **~1.0–1.1ms** — the geometric schedule (decision 2) skips the rebuild entirely for a page this far from the next 25%-growth threshold | n/a (16ms bar) | AT TARGET: <16ms (down from CEILING 195ms) | yes, `--release`, `#[ignore]`d |
-   | `update`+render, `ScanBatch` of 500 into 1M keys — flat, sorted by Name | 6.79–7.01ms | **~1.0–2.0ms** — same reason as the tree-mode row above | n/a (16ms bar) | AT TARGET: <16ms | yes, `--release`, `#[ignore]`d |
-   | Whole scan, 2,000 pages of 500, folded into the core one page at a time, **tree mode from empty** — total | 120.4–121.8s | **~0.58–0.79s** — ~150–200× faster; no longer trips the 240s wall cap | not named by PRD §7 directly; recorded for task 3/4's before/after | AT TARGET: <10s (task 3's own "well under 10s" target; was observed, not asserted) | yes, `--release`, `#[ignore]`d, **no longer `--skip`ped** by the `perf` CI job |
-   | Same run — median single page | not measured (the pre-task-3 code had no cheap pages to make a median meaningful) | **~0.01ms** — new row: proof the geometric schedule, not merely a faster rebuild, fixed the common case | <16ms (one frame) | AT TARGET: <16ms | yes, `--release`, `#[ignore]`d |
-   | Same run — worst single page | 137–251ms | **~100–145ms** — still above budget: the page that lands on a scheduled rebuild still pays `rebuild_list`'s own Name-sort-plus-`Tree::rebuild` cost (M4 task 4's scope) | <16ms (one frame) | CEILING: <220ms (baseline × 1.5, from the 145ms run; was <378ms), tightened by task 4 | yes, `--release`, `#[ignore]`d |
-   | Render alone, 1M keys | 40.4–42.6µs | 62–73µs (noise; untouched by task 3) | <16ms | AT TARGET: <16ms | yes, `--release`, `#[ignore]`d |
-   | `LoadedSet` + `KeyView.order` + `Tree` heap bytes, 1M keys | 75.8MB (40.0 + 3.8 + 32.0) | unchanged — task 3 changes when a rebuild runs, not what it allocates | <250MB RSS (half-budget margin, matching the existing arena-only test) | AT TARGET: <125MB | yes, `--release`, `#[ignore]`d (pure arithmetic, debug-safe too) |
-   | First `ScanBatch`, 100k keys | 1.93–2.08ms (loopback Docker, debug build) | not re-measured (unaffected: this is a real `SCAN` round trip, not `scan_batch`'s view-update cost) | <150ms | AT TARGET: <150ms | yes, integration job (Docker) |
-   | Interactive (first batch folded + a frame rendered), 100k keys | 2.70–2.92ms (loopback Docker, debug build) | not re-measured (same reason) | <1s | AT TARGET: <1s | yes, integration job (Docker) |
+   | Metric | Baseline (measured) | After task 3 | After task 4 | PRD §7 target | Gate used | Release CI gate?|
+   |---|---|---|---|---|---|---|
+   | Binary size (dist profile, stripped) | 8,607,904 bytes (~8.21 MiB) | unchanged (task 3 touches no binary-size-relevant dependency) | unchanged (not re-measured; no dependency added) | <20MB | AT TARGET: <20MB | yes, new `size` job |
+   | `update`+render, scroll keystroke, 1M keys | 42.7µs | 75.5–76.1µs (noise; scrolling touches no arena, sort or rebuild either before or after task 3) | ~42µs (noise) | <16ms | AT TARGET: <16ms | yes, `--release`, `#[ignore]`d |
+   | `update`+render, filter keystroke, 1M keys | 22.27ms (CI: 31.2ms) | 23.8–26.2ms — unchanged in shape: `KeyView::rebuild` on every keystroke is M4 task 4's scope, not task 3's (task 3's scope is `scan_batch`'s per-*page* cost, explicitly not interactive filter/tree edits) | **~0.27ms** — narrows from the previous result (decision 1). Also measured: first character from empty 3.9ms; backspace with rebuild deferred 38µs; the debounced full rebuild ~21.7ms | <16ms | AT TARGET: <16ms (task 4; was CEILING <47ms)| yes, `--release`, `#[ignore]`d |
+   | `update`+render, sort change, 1M keys | 3.76–3.82ms | 3.99–4.07ms (noise; untouched by task 3) | 4.2–4.4ms (noise; the inverse-index fill adds a little) | <16ms | AT TARGET: <16ms | yes, `--release`, `#[ignore]`d |
+   | `update`+render, toggle tree mode, 1M keys | 124–129ms | 129–132ms (noise; `Tree::rebuild`'s own cost is task 4's scope, not task 3's) | **~44–45ms** — allocation-free `Tree::rebuild`, O(1) collapsed lookup (decisions 3–4) | <16ms | CEILING: <89ms (CI 57.4ms × 1.5, rounded up; task 4, was <194ms)| yes, `--release`, `#[ignore]`d |
+   | `update`+render, `ScanBatch` of 500 into 1M keys — flat, scan order | 2.29–2.52ms | **1.1–1.5ms** — now `KeyView::extend`'s `O(page)` path (decision 1) rather than a full `rebuild_list` | 1.3–1.4ms (noise) | <16ms | AT TARGET: <16ms | yes, `--release`, `#[ignore]`d |
+   | `update`+render, `ScanBatch` of 500 into 1M keys — **tree mode (the default view)** | 129.6–130.7ms | **~1.0–1.1ms** — the geometric schedule (decision 2) skips the rebuild entirely for a page this far from the next 25%-growth threshold | ~1.0–1.2ms (noise) | n/a (16ms bar) | AT TARGET: <16ms (down from CEILING 195ms) | yes, `--release`, `#[ignore]`d |
+   | `update`+render, `ScanBatch` of 500 into 1M keys — flat, sorted by Name | 6.79–7.01ms | **~1.0–2.0ms** — same reason as the tree-mode row above | 1.1–1.4ms (noise) | n/a (16ms bar) | AT TARGET: <16ms | yes, `--release`, `#[ignore]`d |
+   | Whole scan, 2,000 pages of 500, folded into the core one page at a time, **tree mode from empty** — total | 120.4–121.8s | **~0.58–0.79s** — ~150–200× faster; no longer trips the 240s wall cap | **~0.24s** | not named by PRD §7 directly; recorded for task 3/4's before/after | AT TARGET: <10s (task 3's own "well under 10s" target; was observed, not asserted) | yes, `--release`, `#[ignore]`d, **no longer `--skip`ped** by the `perf` CI job |
+   | Same run — median single page | not measured (the pre-task-3 code had no cheap pages to make a median meaningful) | **~0.01ms** — new row: proof the geometric schedule, not merely a faster rebuild, fixed the common case | ~0.011ms | <16ms (one frame) | AT TARGET: <16ms | yes, `--release`, `#[ignore]`d |
+   | Same run — worst single page | 137–251ms | **~100–145ms** — still above budget: the page that lands on a scheduled rebuild still pays `rebuild_list`'s own Name-sort-plus-`Tree::rebuild` cost (M4 task 4's scope) | **~32ms** — still above 16ms: the page on a scheduled rebuild pays one full fold | <16ms (one frame) | CEILING: <68ms (CI 45.2ms × 1.5, rounded up; task 4, was <220ms)| yes, `--release`, `#[ignore]`d |
+   | Render alone, 1M keys | 40.4–42.6µs | 62–73µs (noise; untouched by task 3) | ~41µs (noise) | <16ms | AT TARGET: <16ms | yes, `--release`, `#[ignore]`d |
+   | `LoadedSet` + `KeyView.order` + `Tree` heap bytes, 1M keys | 75.8MB (40.0 + 3.8 + 32.0) | unchanged — task 3 changes when a rebuild runs, not what it allocates | 83.4MB (40.0 + 7.6 + 35.8) — up from 75.8MB: the two inverse indexes (decision 5) | <250MB RSS (half-budget margin, matching the existing arena-only test) | AT TARGET: <125MB | yes, `--release`, `#[ignore]`d (pure arithmetic, debug-safe too) |
+   | First `ScanBatch`, 100k keys | 1.93–2.08ms (loopback Docker, debug build) | not re-measured (unaffected: this is a real `SCAN` round trip, not `scan_batch`'s view-update cost) | not re-measured | <150ms | AT TARGET: <150ms | yes, integration job (Docker) |
+   | Interactive (first batch folded + a frame rendered), 100k keys | 2.70–2.92ms (loopback Docker, debug build) | not re-measured (same reason) | not re-measured | <1s | AT TARGET: <1s | yes, integration job (Docker) |
 
    **Revised picture after measuring tree mode specifically** (tree mode is the app's *default*
    view — the first cut of this table measured only the flat/scan-order case, which understated
@@ -129,6 +129,14 @@ regression in task 3 or 4 would not be caught until someone noticed the app feel
    the worst single page of a scan (the one that does land on a scheduled rebuild) — is entirely
    `rebuild_list`'s own Name-sort-plus-`Tree::rebuild` cost, which is M4 task 4's scope. Tree mode
    remains where task 4 will be judged.
+
+   **After task 4** (see [`m4-perf-interaction.md`](m4-perf-interaction.md)): the filter keystroke
+   is `AT TARGET` (22.3ms to ~0.27ms; it narrows from the previous result). Tree toggle fell from
+   ~129ms to ~44ms and the whole-scan worst page from ~100–145ms to ~32ms; both stay on a
+   `CEILING` because a full fold is still above one frame. Task 4's ceilings are **1.5× the CI
+   measurement, rounded up** (CI is the slower machine, ~1.3–1.5× local), calibrated on PR #60's
+   CI run: debounced rebuild 32.4 ms → 49 ms, tree toggle 57.4 ms → 89 ms, worst scan page
+   45.2 ms → 68 ms.
 
 ## Architecture
 

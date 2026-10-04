@@ -7,6 +7,7 @@
 //! indices, not 40MB of names.
 
 use super::loaded::LoadedSet;
+use super::tree::NO_ROW;
 
 /// How a filter pattern is interpreted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -59,10 +60,53 @@ impl SortBy {
     }
 }
 
+/// What `order` was last built for. Narrowing is only sound against this, not
+/// against the typed filter text, which can run ahead of it while a debounced
+/// rebuild is pending (M4 task 4).
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Applied {
+    filter: String,
+    mode: FilterMode,
+    sort: SortBy,
+    /// `keys.len()` when `order` was built or last extended: every key below
+    /// this was offered to the filter, none at or above it was.
+    covered: usize,
+}
+
+/// Whether every name matching `new` is guaranteed to match `prev`, so that
+/// filtering the rows `prev` produced gives exactly what filtering the whole
+/// Loaded set would.
+///
+/// Fuzzy is a subsequence test, so appending a character can only remove
+/// matches. Glob is subtler: a pattern with no wildcard is a *substring*
+/// search, and appending keeps the old text as a substring; a pattern ending
+/// in `*` absorbs whatever follows. But a wildcard pattern that ends in a
+/// literal is anchored at the end — `*a` matches `xa`, while its extension
+/// `*ab` matches `xab`, which `*a` does not — so that case is not narrowable.
+/// Proven exhaustively in `narrowing_is_sound_*` below.
+fn narrows(mode: FilterMode, prev: &str, new: &str) -> bool {
+    if !new.starts_with(prev) {
+        return false;
+    }
+    match mode {
+        FilterMode::Fuzzy => true,
+        FilterMode::Glob => !prev.contains(['*', '?']) || prev.ends_with('*'),
+    }
+}
+
 /// The ordered, filtered list of rows on offer.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct KeyView {
     order: Vec<u32>,
+    /// Inverse of `order`: Loaded set index -> row, or `NO_ROW` when the
+    /// index is filtered out. Dense, sized to the Loaded set as of the last
+    /// `rebuild`/`extend`, and rewritten by exactly those two — the only
+    /// places `order` is built or grown (M4 task 4, decision 5). Lives here
+    /// rather than on `State` because it is `order`'s inverse: keeping it
+    /// beside the field it mirrors means no caller can change one and forget
+    /// the other.
+    inverse: Vec<u32>,
+    applied: Option<Applied>,
     pub filter: String,
     pub mode: FilterMode,
     pub sort: SortBy,
@@ -76,6 +120,8 @@ impl KeyView {
     pub fn new(filter: impl Into<String>, mode: FilterMode, sort: SortBy) -> Self {
         Self {
             order: Vec::new(),
+            inverse: Vec::new(),
+            applied: None,
             filter: filter.into(),
             mode,
             sort,
@@ -97,7 +143,27 @@ impl KeyView {
     /// `View` alongside [`LoadedSet::heap_bytes`](super::loaded::LoadedSet::heap_bytes),
     /// which only covers the arena itself.
     pub fn heap_bytes(&self) -> usize {
-        self.order.capacity() * std::mem::size_of::<u32>()
+        (self.order.capacity() + self.inverse.capacity()) * std::mem::size_of::<u32>()
+    }
+
+    /// The row a Loaded set index is shown at, if the filter lets it through.
+    /// O(1) via the inverse index.
+    pub fn row_of(&self, index: usize) -> Option<usize> {
+        match self.inverse.get(index) {
+            Some(&r) if r != NO_ROW => Some(r as usize),
+            _ => None,
+        }
+    }
+
+    /// Recompute `inverse` from `order` (after a sort permuted it).
+    fn rebuild_inverse(&mut self, keys_len: usize) {
+        self.inverse.clear();
+        self.inverse.resize(keys_len, NO_ROW);
+        for (row, &i) in self.order.iter().enumerate() {
+            if let Some(slot) = self.inverse.get_mut(i as usize) {
+                *slot = row as u32;
+            }
+        }
     }
 
     /// The Loaded set index shown at this row.
@@ -153,6 +219,66 @@ impl KeyView {
             }
         }
         self.apply_sort(keys);
+        self.rebuild_inverse(keys.len());
+        self.applied = Some(Applied {
+            filter: self.filter.clone(),
+            mode: self.mode,
+            sort: self.sort,
+            covered: keys.len(),
+        });
+    }
+
+    /// Whether the typed filter can be applied by re-filtering the rows
+    /// already shown instead of rebuilding from the Loaded set.
+    ///
+    /// Requires all of: the new text only removes matches ([`narrows`]); the
+    /// same mode and sort the order was built under; the order covers every
+    /// key currently loaded (a key that arrived since is in no row to keep);
+    /// and a sort that does not depend on lazily-fetched metadata — a rebuild
+    /// re-sorts by whatever has arrived since, so only `Scan` and `Name`
+    /// orders are guaranteed identical either way.
+    pub fn can_narrow(&self, keys_len: usize) -> bool {
+        self.applied.as_ref().is_some_and(|a| {
+            matches!(self.sort, SortBy::Scan | SortBy::Name)
+                && a.sort == self.sort
+                && a.mode == self.mode
+                && a.covered == keys_len
+                && narrows(a.mode, &a.filter, &self.filter)
+        })
+    }
+
+    /// Re-filter the rows already shown against the typed filter. Only valid
+    /// when [`KeyView::can_narrow`] said so. Rows keep their relative order,
+    /// so the sort is preserved by construction; cost is the previous
+    /// result's size, and the inverse index is patched, not rebuilt.
+    pub fn narrow(&mut self, keys: &LoadedSet) {
+        debug_assert!(self.can_narrow(keys.len()));
+        let unchanged = self
+            .applied
+            .as_ref()
+            .is_some_and(|a| a.filter == self.filter);
+        if !unchanged {
+            let mut kept = 0usize;
+            for row in 0..self.order.len() {
+                let i = self.order[row];
+                let keep = self.filter.is_empty()
+                    || keys
+                        .name(i as usize)
+                        .is_some_and(|name| matches(name, &self.filter, self.mode));
+                if keep {
+                    self.order[kept] = i;
+                    self.inverse[i as usize] = kept as u32;
+                    kept += 1;
+                } else {
+                    self.inverse[i as usize] = NO_ROW;
+                }
+            }
+            self.order.truncate(kept);
+        }
+        self.known = self.order.len();
+        if let Some(a) = &mut self.applied {
+            a.filter = self.filter.clone();
+        }
     }
 
     /// Append newly-scanned keys — indices `new_from..keys.len()` — without
@@ -176,12 +302,24 @@ impl KeyView {
             SortBy::Scan,
             "extend is only correct in scan order; other sorts need a rebuild"
         );
+        // Rows are only ever appended, so existing inverse entries stay
+        // valid; the new tail starts as "filtered out" and is set below.
+        self.inverse.resize(keys.len(), NO_ROW);
+        // Filter by what `order` was built for, not by the typed text: while
+        // a debounced rebuild is pending the two differ, and appending rows
+        // under one filter to an order built under another would make the
+        // eventual rebuild's answer depend on arrival timing.
+        let applied = self.applied.get_or_insert_with(|| Applied {
+            filter: self.filter.clone(),
+            mode: self.mode,
+            sort: self.sort,
+            covered: new_from,
+        });
+        applied.covered = keys.len();
+        let (filter, mode) = (applied.filter.as_str(), applied.mode);
         for i in new_from..keys.len() {
-            if self.filter.is_empty() {
-                self.order.push(i as u32);
-            } else if let Some(name) = keys.name(i)
-                && matches(name, &self.filter, self.mode)
-            {
+            if filter.is_empty() || keys.name(i).is_some_and(|name| matches(name, filter, mode)) {
+                self.inverse[i] = self.order.len() as u32;
                 self.order.push(i as u32);
             }
         }
@@ -625,5 +763,117 @@ mod tests {
         };
         v.rebuild(&keys);
         assert_eq!(viewed(&keys, &v), ["user:a", "user:b"]);
+    }
+
+    // ── inverse index (M4 task 4) ──────────────────────────────────────────
+
+    fn assert_inverse_matches_linear(keys: &LoadedSet, v: &KeyView) {
+        for index in 0..keys.len() + 3 {
+            let linear = (0..v.len()).find(|&r| v.index_at(r) == Some(index));
+            assert_eq!(v.row_of(index), linear, "row_of({index})");
+        }
+    }
+
+    #[test]
+    fn row_of_matches_a_linear_scan_under_every_sort_and_filter() {
+        let mut keys = LoadedSet::default();
+        for i in 0..200 {
+            keys.push(format!("k{}:{}", (i * 7) % 13, i).as_bytes());
+        }
+        for i in (0..200).step_by(3) {
+            keys.set_size(i, ((i * 31) % 17) as u32);
+        }
+        for sort in [SortBy::Scan, SortBy::Name, SortBy::Size, SortBy::Kind] {
+            for filter in ["", "k1*", "zzz", "5"] {
+                let mut v = KeyView::new(filter, FilterMode::Glob, sort);
+                v.rebuild(&keys);
+                assert_inverse_matches_linear(&keys, &v);
+            }
+        }
+    }
+
+    #[test]
+    fn row_of_stays_correct_through_extend_and_equals_a_rebuilt_view() {
+        for filter in ["", "k1*"] {
+            let mut keys = LoadedSet::default();
+            let mut v = KeyView::new(filter, FilterMode::Glob, SortBy::Scan);
+            v.rebuild(&keys);
+            for page in 0..8 {
+                let prior = keys.len();
+                for i in 0..25 {
+                    keys.push(format!("k{}:{}", (i + page) % 4, page * 25 + i).as_bytes());
+                }
+                v.extend(&keys, prior);
+                assert_inverse_matches_linear(&keys, &v);
+                let mut rebuilt = KeyView::new(filter, FilterMode::Glob, SortBy::Scan);
+                rebuilt.rebuild(&keys);
+                assert_eq!(v, rebuilt, "extended view must equal a rebuilt one");
+            }
+        }
+    }
+
+    // ── narrowing soundness (M4 task 4, decision 1) ────────────────────────
+
+    /// Every pattern over a small alphabet, `0..=max_len` long.
+    fn all_strings(alphabet: &[char], max_len: usize) -> Vec<String> {
+        let mut out = vec![String::new()];
+        let mut frontier = vec![String::new()];
+        for _ in 0..max_len {
+            let mut next = Vec::new();
+            for s in &frontier {
+                for c in alphabet {
+                    let mut t = s.clone();
+                    t.push(*c);
+                    next.push(t);
+                }
+            }
+            out.extend(next.iter().cloned());
+            frontier = next;
+        }
+        out
+    }
+
+    fn assert_narrowing_sound(mode: FilterMode, pattern_alphabet: &[char]) {
+        let patterns = all_strings(pattern_alphabet, 4);
+        let names = all_strings(&['a', 'b', 'A', ':'], 5);
+        for prev in &patterns {
+            for new in &patterns {
+                if !narrows(mode, prev, new) {
+                    continue;
+                }
+                for n in &names {
+                    assert!(
+                        !matches(n.as_bytes(), new, mode) || matches(n.as_bytes(), prev, mode),
+                        "{mode:?}: {n:?} matches {new:?} but not {prev:?}, which narrows() allowed"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn narrowing_is_sound_for_fuzzy() {
+        assert_narrowing_sound(FilterMode::Fuzzy, &['a', 'b', 'A', ':']);
+    }
+
+    #[test]
+    fn narrowing_is_sound_for_glob_with_wildcards() {
+        assert_narrowing_sound(FilterMode::Glob, &['a', 'b', '*', '?']);
+    }
+
+    #[test]
+    fn glob_anchored_at_the_end_is_the_case_that_must_not_narrow() {
+        // The reason glob is not "extends => narrows": `*a` matches `xa`,
+        // its extension `*ab` matches `xab`, and `xab` is not a `*a` match.
+        assert!(matches(b"xab", "*ab", FilterMode::Glob));
+        assert!(!matches(b"xab", "*a", FilterMode::Glob));
+        assert!(!narrows(FilterMode::Glob, "*a", "*ab"));
+        assert!(!narrows(FilterMode::Glob, "a?", "a?b"));
+        assert!(narrows(FilterMode::Glob, "ab", "abc"), "substring: safe");
+        assert!(narrows(FilterMode::Glob, "a*", "a*b"), "trailing *: safe");
+        assert!(
+            narrows(FilterMode::Fuzzy, "a?", "a?b"),
+            "fuzzy: always safe"
+        );
     }
 }

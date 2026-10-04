@@ -152,8 +152,7 @@ fn paste(mut state: State, text: String) -> (State, Vec<Command>) {
     } else if state.filtering {
         let stripped: String = text.chars().filter(|c| *c != '\n' && *c != '\r').collect();
         state.list.filter.push_str(&stripped);
-        state.rebuild_list();
-        after_move(state)
+        keys::filter_edited(state)
     } else {
         (state, Vec::new())
     }
@@ -223,7 +222,8 @@ fn step(mut state: State, msg: Msg) -> (State, Vec<Command>) {
             entries,
             gone,
             at_ms,
-        } => metadata_batch(state, entries, gone, at_ms),
+            epoch,
+        } => metadata_batch(state, entries, gone, at_ms, epoch),
         Msg::ScanComplete => scan_complete(state),
         Msg::ScanCancelled => scan_cancelled(state),
         Msg::ScanFailed { error } => scan_failed(state, error),
@@ -289,6 +289,7 @@ fn step(mut state: State, msg: Msg) -> (State, Vec<Command>) {
             token,
         } => server_info_failed(state, detail, at_ms, token),
         Msg::DashboardPollTick => dashboard_poll_tick(state),
+        Msg::FilterRebuildDue => keys::filter_rebuild_due(state),
         Msg::FeedOpened { token } => feed_opened(state, token),
         Msg::FeedClosed { token, reason } => feed_closed(state, token, reason),
         Msg::MonitorLine { token, at_ms, raw } => monitor_line(state, token, at_ms, raw),
