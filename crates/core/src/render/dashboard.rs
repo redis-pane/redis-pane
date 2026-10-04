@@ -12,6 +12,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 
 use crate::clock::Clock;
+use crate::glyphs::{Glyph, Glyphs};
 use crate::state::State;
 use crate::state::dashboard::{AlarmLevel, MemoryTile, TILE_ORDER, TileId, tiles_per_row};
 use crate::state::scan::thousands;
@@ -44,15 +45,18 @@ pub fn render(state: &State, theme: &Theme, clock: &dyn Clock, area: Rect, buf: 
         // that reply lands still has to say something rather than leave the
         // body empty, the same reasoning `slowlog::empty_state` follows.
         let (text, token) = if let Some(detail) = &state.dashboard.error {
-            (format!("✕ INFO failed: {detail}"), Token::Danger)
+            (
+                format!("{} INFO failed: {detail}", theme.glyphs.get(Glyph::Deleted)),
+                Token::Danger,
+            )
         } else {
-            ("⟳ fetching…".to_string(), Token::Muted)
+            (theme.glyphs.text("⟳ fetching…").into_owned(), Token::Muted)
         };
         put(
             buf,
             area.x + 1,
             y,
-            &truncate(&text, area.width.saturating_sub(2) as usize),
+            &truncate(&text, area.width.saturating_sub(2) as usize, theme.glyphs),
             theme.style(token),
         );
         return;
@@ -70,8 +74,13 @@ pub fn render(state: &State, theme: &Theme, clock: &dyn Clock, area: Rect, buf: 
             area.x + 1,
             y,
             &truncate(
-                &format!("✕ INFO failed: {detail} — showing the last good reading"),
+                &format!(
+                    "{} INFO failed: {detail} {} showing the last good reading",
+                    theme.glyphs.get(Glyph::Deleted),
+                    theme.glyphs.get(Glyph::Dash)
+                ),
                 area.width.saturating_sub(2) as usize,
+                theme.glyphs,
             ),
             theme.style(Token::Danger),
         );
@@ -99,7 +108,7 @@ fn summary_line(
         format!("updated {}s ago", secs)
     });
     let text = match &age {
-        Some(age) => format!("DASHBOARD · {age}"),
+        Some(age) => format!("DASHBOARD {} {age}", theme.glyphs.get(Glyph::Separator)),
         None => "DASHBOARD".to_string(),
     };
     put(buf, area.x + 1, y, &text, theme.style(Token::Text));
@@ -109,7 +118,7 @@ fn summary_line(
             area.x,
             y,
             area.width.saturating_sub(1),
-            "⟳ fetching…",
+            &theme.glyphs.text("⟳ fetching…"),
             theme.style(Token::Muted),
         );
     }
@@ -175,28 +184,27 @@ fn format_bytes(bytes: u64) -> String {
 }
 
 /// A bar, `width` characters wide, filled to `ratio` (0.0–1.0) — the memory
-/// tile's own reading of "as a bar" (decision 3, DESIGN's own mock). Full
-/// (`█`) and empty (`░`) block elements, the same family the sparkline below
-/// already reads its levels from — one glyph vocabulary for both, not a
-/// second one built from `#`/`-`. Both are ordinary Unicode block elements,
-/// not a Nerd Font glyph, so — unlike an icon that needs an ASCII
-/// fallback — there is nothing here for a capability-degradation path to
-/// switch on; this crate has no Nerd-Font/ASCII toggle today (`theme::Token`
-/// only ever degrades colour, never a glyph), so both draw unconditionally.
-fn bar(ratio: f64, width: usize) -> String {
+/// tile's own reading of "as a bar" (decision 3, DESIGN's own mock). The full
+/// and empty cells are the [`Glyph::BarFull`]/[`Glyph::BarEmpty`] roles
+/// (`█`/`░`, or `#`/`-` in the ASCII set), the same one glyph vocabulary the
+/// sparkline below reads its levels from.
+fn bar(ratio: f64, width: usize, g: Glyphs) -> String {
     if width == 0 {
         return String::new();
     }
     let filled = ((ratio.clamp(0.0, 1.0) * width as f64).round() as usize).min(width);
-    format!("{}{}", "█".repeat(filled), "░".repeat(width - filled))
+    format!(
+        "{}{}",
+        g.get(Glyph::BarFull).repeat(filled),
+        g.get(Glyph::BarEmpty).repeat(width - filled)
+    )
 }
 
-/// A sparkline over the ops/sec history (decision 3) — eight levels via the
-/// Unicode block-element ladder `▁▂▃▄▅▆▇█`, the same "degrades gracefully"
-/// caveat as `bar` does not apply here: block elements are ordinary Unicode,
-/// not a Nerd Font glyph, so they render identically wherever UTF-8 does.
-fn sparkline(values: &[u64], width: usize) -> String {
-    const LEVELS: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+/// A sparkline over the ops/sec history (decision 3) — eight levels, read from
+/// [`Glyphs::sparkline_ladder`]: the Unicode block-element ladder `▁▂▃▄▅▆▇█`,
+/// or `_.:-=+*#` in the ASCII set. One column per level in both.
+fn sparkline(values: &[u64], width: usize, g: Glyphs) -> String {
+    let levels = g.sparkline_ladder();
     if width == 0 || values.is_empty() {
         return String::new();
     }
@@ -204,10 +212,10 @@ fn sparkline(values: &[u64], width: usize) -> String {
     let max = tail.iter().copied().max().unwrap_or(0).max(1);
     tail.iter()
         .map(|&v| {
-            let level = ((v as f64 / max as f64) * (LEVELS.len() - 1) as f64).round() as usize;
-            LEVELS[level.min(LEVELS.len() - 1)]
+            let level = ((v as f64 / max as f64) * (levels.len() - 1) as f64).round() as usize;
+            levels[level.min(levels.len() - 1)]
         })
-        .collect()
+        .collect::<String>()
 }
 
 /// The token an [`AlarmLevel`] paints with — semantic tokens only, never a
@@ -244,7 +252,15 @@ fn draw_tile(state: &State, theme: &Theme, tile: TileId, x: u16, y: u16, w: u16,
         buf,
         x,
         y,
-        &format!("┌{}┐", "─".repeat(w.saturating_sub(2) as usize)),
+        &format!(
+            "{}{}{}",
+            theme.glyphs.get(Glyph::CornerTopLeft),
+            theme
+                .glyphs
+                .get(Glyph::Horizontal)
+                .repeat(w.saturating_sub(2) as usize),
+            theme.glyphs.get(Glyph::CornerTopRight)
+        ),
         border,
     );
     let marker = if focused { ">" } else { " " };
@@ -256,14 +272,20 @@ fn draw_tile(state: &State, theme: &Theme, tile: TileId, x: u16, y: u16, w: u16,
         theme.style(Token::Text),
     );
 
-    let (line1, line2) = tile_lines(state, tile, iw);
+    let (line1, line2) = tile_lines(state, tile, iw, theme.glyphs);
     let value_token = theme.style(alarm_token(level));
-    put(buf, x + 1, y + 1, &truncate(&line1, iw), value_token);
+    put(
+        buf,
+        x + 1,
+        y + 1,
+        &truncate(&line1, iw, theme.glyphs),
+        value_token,
+    );
     put(
         buf,
         x + 1,
         y + 2,
-        &truncate(&line2, iw),
+        &truncate(&line2, iw, theme.glyphs),
         theme.style(Token::Muted),
     );
 
@@ -271,15 +293,35 @@ fn draw_tile(state: &State, theme: &Theme, tile: TileId, x: u16, y: u16, w: u16,
         buf,
         x,
         y + 3,
-        &format!("└{}┘", "─".repeat(w.saturating_sub(2) as usize)),
+        &format!(
+            "{}{}{}",
+            theme.glyphs.get(Glyph::CornerBottomLeft),
+            theme
+                .glyphs
+                .get(Glyph::Horizontal)
+                .repeat(w.saturating_sub(2) as usize),
+            theme.glyphs.get(Glyph::CornerBottomRight)
+        ),
         border,
     );
     // Side borders for the two content rows — the top/bottom `put` calls
     // above only drew the horizontal rules.
-    put(buf, x, y + 1, "│", border);
-    put(buf, x + w - 1, y + 1, "│", border);
-    put(buf, x, y + 2, "│", border);
-    put(buf, x + w - 1, y + 2, "│", border);
+    put(buf, x, y + 1, theme.glyphs.get(Glyph::Vertical), border);
+    put(
+        buf,
+        x + w - 1,
+        y + 1,
+        theme.glyphs.get(Glyph::Vertical),
+        border,
+    );
+    put(buf, x, y + 2, theme.glyphs.get(Glyph::Vertical), border);
+    put(
+        buf,
+        x + w - 1,
+        y + 2,
+        theme.glyphs.get(Glyph::Vertical),
+        border,
+    );
 }
 
 fn tile_level(state: &State, tile: TileId) -> AlarmLevel {
@@ -312,7 +354,8 @@ fn tile_level(state: &State, tile: TileId) -> AlarmLevel {
 }
 
 /// The two content lines inside one tile's box, `iw` characters wide.
-fn tile_lines(state: &State, tile: TileId, iw: usize) -> (String, String) {
+fn tile_lines(state: &State, tile: TileId, iw: usize, g: Glyphs) -> (String, String) {
+    let dash = || (g.get(Glyph::Dash).to_string(), String::new());
     match tile {
         TileId::Memory => match state.dashboard.memory_tile() {
             Some(MemoryTile {
@@ -331,7 +374,7 @@ fn tile_lines(state: &State, tile: TileId, iw: usize) -> (String, String) {
                     ),
                     format!(
                         "[{}] peak {}",
-                        bar(ratio, iw.saturating_sub(2).clamp(4, 20)),
+                        bar(ratio, iw.saturating_sub(2).clamp(4, 20), g),
                         format_bytes(peak_bytes)
                     ),
                 )
@@ -345,7 +388,7 @@ fn tile_lines(state: &State, tile: TileId, iw: usize) -> (String, String) {
                 format!("{} (no limit)", format_bytes(used_bytes)),
                 format!("peak {}", format_bytes(peak_bytes)),
             ),
-            None => ("—".to_string(), String::new()),
+            None => dash(),
         },
         TileId::HitRatio => match state.dashboard.hit_ratio_tile() {
             Some(t) => (
@@ -359,7 +402,7 @@ fn tile_lines(state: &State, tile: TileId, iw: usize) -> (String, String) {
                     thousands(t.misses)
                 ),
             ),
-            None => ("—".to_string(), String::new()),
+            None => dash(),
         },
         TileId::Ops => {
             let history = state.dashboard.ops_history();
@@ -372,6 +415,7 @@ fn tile_lines(state: &State, tile: TileId, iw: usize) -> (String, String) {
                 sparkline(
                     &history.iter().copied().collect::<Vec<_>>(),
                     iw.saturating_sub(1).min(60),
+                    g,
                 ),
             )
         }
@@ -380,13 +424,14 @@ fn tile_lines(state: &State, tile: TileId, iw: usize) -> (String, String) {
                 format!("{} connected", thousands(t.connected)),
                 format!("{} blocked", t.blocked),
             ),
-            None => ("—".to_string(), String::new()),
+            None => dash(),
         },
         TileId::Replication => match state.dashboard.replication_tile() {
             Some(t) if t.role == "master" => (
                 format!(
-                    "{} · {}",
+                    "{} {} {}",
                     t.role,
+                    g.get(Glyph::Separator),
                     plural(t.connected_replicas as usize, "replica")
                 ),
                 match t.lag_secs {
@@ -397,20 +442,22 @@ fn tile_lines(state: &State, tile: TileId, iw: usize) -> (String, String) {
             Some(t) => (
                 t.role.clone(),
                 match (t.link_status.as_deref(), t.lag_secs) {
-                    (Some(status), Some(lag)) => format!("{status} · lag {lag}s"),
+                    (Some(status), Some(lag)) => {
+                        format!("{status} {} lag {lag}s", g.get(Glyph::Separator))
+                    }
                     (Some(status), None) => status.to_string(),
                     (None, Some(lag)) => format!("lag {lag}s"),
                     (None, None) => String::new(),
                 },
             ),
-            None => ("—".to_string(), String::new()),
+            None => dash(),
         },
         TileId::Eviction => match state.dashboard.eviction_tile() {
             Some(t) => (
                 format!("evicted {}", thousands(t.evicted_keys)),
                 format!("expired {}", thousands(t.expired_keys)),
             ),
-            None => ("—".to_string(), String::new()),
+            None => dash(),
         },
     }
 }
@@ -434,14 +481,26 @@ fn overlay_box(state: &State, theme: &Theme, tile: TileId, area: Rect, top: u16,
         buf,
         area.x,
         top,
-        &format!("┌{}┐", "─".repeat(w.saturating_sub(2) as usize)),
+        &format!(
+            "{}{}{}",
+            theme.glyphs.get(Glyph::CornerTopLeft),
+            theme
+                .glyphs
+                .get(Glyph::Horizontal)
+                .repeat(w.saturating_sub(2) as usize),
+            theme.glyphs.get(Glyph::CornerTopRight)
+        ),
         border,
     );
     put(
         buf,
         area.x + 2,
         top,
-        &format!(" {} — raw INFO ", tile.section_name()),
+        &format!(
+            " {} {} raw INFO ",
+            tile.section_name(),
+            theme.glyphs.get(Glyph::Dash)
+        ),
         theme.style(Token::Text),
     );
     let content_rows = (h.saturating_sub(2)) as usize;
@@ -449,27 +508,47 @@ fn overlay_box(state: &State, theme: &Theme, tile: TileId, area: Rect, top: u16,
     let scroll = state.dashboard.overlay_scroll.min(max_scroll);
     for (row, (key, value)) in fields.iter().skip(scroll).take(content_rows).enumerate() {
         let y = top + 1 + row as u16;
-        put(buf, area.x, y, "│", border);
+        put(buf, area.x, y, theme.glyphs.get(Glyph::Vertical), border);
         let line = format!("{key}:{value}");
         put(
             buf,
             area.x + 2,
             y,
-            &truncate(&line, (w.saturating_sub(4)) as usize),
+            &truncate(&line, (w.saturating_sub(4)) as usize, theme.glyphs),
             theme.style(Token::Text),
         );
-        put(buf, area.x + w - 1, y, "│", border);
+        put(
+            buf,
+            area.x + w - 1,
+            y,
+            theme.glyphs.get(Glyph::Vertical),
+            border,
+        );
     }
     for row in fields.len().saturating_sub(scroll)..content_rows {
         let y = top + 1 + row as u16;
-        put(buf, area.x, y, "│", border);
-        put(buf, area.x + w - 1, y, "│", border);
+        put(buf, area.x, y, theme.glyphs.get(Glyph::Vertical), border);
+        put(
+            buf,
+            area.x + w - 1,
+            y,
+            theme.glyphs.get(Glyph::Vertical),
+            border,
+        );
     }
     put(
         buf,
         area.x,
         top + h - 1,
-        &format!("└{}┘", "─".repeat(w.saturating_sub(2) as usize)),
+        &format!(
+            "{}{}{}",
+            theme.glyphs.get(Glyph::CornerBottomLeft),
+            theme
+                .glyphs
+                .get(Glyph::Horizontal)
+                .repeat(w.saturating_sub(2) as usize),
+            theme.glyphs.get(Glyph::CornerBottomRight)
+        ),
         border,
     );
 }

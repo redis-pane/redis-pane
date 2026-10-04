@@ -24,6 +24,9 @@ pub struct Config {
     pub default_profile: Option<String>,
     #[serde(default)]
     pub profiles: BTreeMap<String, Profile>,
+    /// `true` draws with the ASCII glyph set, `false` with Unicode; absent
+    /// leaves it to the locale (DESIGN §5). `--ascii`/`--unicode` override it.
+    pub ascii: Option<bool>,
     /// The theme used when no `--theme` is given: a built-in name or a key of
     /// `themes`. Absent means `dark`.
     ///
@@ -310,6 +313,21 @@ fn strip_location(message: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ascii_is_an_optional_top_level_boolean() {
+        assert_eq!(parse("{}").unwrap().ascii, None);
+        assert_eq!(parse(r#"{"ascii":true}"#).unwrap().ascii, Some(true));
+        assert_eq!(parse(r#"{"ascii":false}"#).unwrap().ascii, Some(false));
+        assert!(
+            parse(r#"{"ascii":"yes"}"#).is_err(),
+            "a string is not a bool"
+        );
+        assert!(
+            parse(r#"{"asci":true}"#).is_err(),
+            "a misspelling is an error"
+        );
+    }
 
     #[test]
     fn a_minimal_file_parses() {

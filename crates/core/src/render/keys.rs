@@ -13,6 +13,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 
 use crate::clock::Clock;
+use crate::glyphs::{Glyph, Glyphs};
 use crate::state::loaded::TTL_NONE;
 use crate::state::{LoadedSet, State};
 use crate::theme::{Theme, Token};
@@ -24,7 +25,7 @@ use super::layout::Density;
 /// A middle dot rather than a blank, so the reader can tell "waiting" from
 /// "there is nothing here" — the same distinction the sentinels make in the
 /// Loaded set.
-pub const PENDING: &str = "·";
+pub const PENDING: &str = Glyph::Pending.unicode();
 
 /// Column geometry for a given pane width and density.
 ///
@@ -235,14 +236,18 @@ fn cap_banner(state: &State, theme: &Theme, area: Rect, y: u16, buf: &mut Buffer
         buf,
         area.x + 1,
         y,
-        &format!("⚠ {}", state.scan.readout()),
+        &theme.glyphs.text(&format!("⚠ {}", state.scan.readout())),
         theme.style(Token::Warn),
     );
 }
 
 fn filter_line(state: &State, theme: &Theme, area: Rect, y: u16, buf: &mut Buffer) {
     let x = super::put(buf, area.x + 1, y, "/ ", theme.style(Token::Warn));
-    let cursor = if state.filtering { "▏" } else { "" };
+    let cursor = if state.filtering {
+        theme.glyphs.get(Glyph::Cursor)
+    } else {
+        ""
+    };
     super::put(
         buf,
         x,
@@ -307,7 +312,11 @@ fn tree_row(state: &State, ctx: RowCtx<'_>, at: RowAt, display_row: usize, buf: 
                 .arena_slice(offset, len)
                 .map(String::from_utf8_lossy)
                 .unwrap_or_default();
-            let marker = if expanded { "▾" } else { "▸" };
+            let marker = theme.glyphs.get(if expanded {
+                Glyph::Expanded
+            } else {
+                Glyph::Collapsed
+            });
             let indent = area.x + cols.name + depth * 2;
             let style = theme.style(if selected {
                 Token::Selected
@@ -316,7 +325,13 @@ fn tree_row(state: &State, ctx: RowCtx<'_>, at: RowAt, display_row: usize, buf: 
             });
             let label = format!("{marker} {name}{}", state.tree.separator);
             let width = cols.name_width.saturating_sub(depth * 2) as usize;
-            super::put(buf, indent, y, &truncate(&label, width), style);
+            super::put(
+                buf,
+                indent,
+                y,
+                &truncate(&label, width, theme.glyphs),
+                style,
+            );
             // A collapsed node states what it is hiding, so folding never loses
             // information about how much is down there.
             if let Some((x, w)) = cols.ttl.or(cols.size) {
@@ -394,9 +409,9 @@ fn key_row(keys: &LoadedSet, ctx: RowCtx<'_>, at: RowAt, i: usize, indent: u16, 
         (false, false) => crate::theme::type_token(kind),
     });
     let dot = match (gone, kind.is_some()) {
-        (true, _) => "✕",
-        (false, true) => "●",
-        (false, false) => PENDING,
+        (true, _) => theme.glyphs.get(Glyph::Deleted),
+        (false, true) => theme.glyphs.get(Glyph::Live),
+        (false, false) => theme.glyphs.get(Glyph::Pending),
     };
     super::put(buf, area.x + cols.name + indent, y, dot, dot_style);
 
@@ -438,6 +453,7 @@ fn key_row(keys: &LoadedSet, ctx: RowCtx<'_>, at: RowAt, i: usize, indent: u16, 
         &truncate(
             &name,
             cols.name_width.saturating_sub(indent + DOT_W) as usize,
+            theme.glyphs,
         ),
         name_style,
     );
@@ -451,7 +467,7 @@ fn key_row(keys: &LoadedSet, ctx: RowCtx<'_>, at: RowAt, i: usize, indent: u16, 
         let text = match (gone, kind) {
             (true, _) => "gone".to_string(),
             (false, Some(k)) => k.label().to_string(),
-            (false, None) => PENDING.to_string(),
+            (false, None) => theme.glyphs.get(Glyph::Pending).to_string(),
         };
         let style = theme.style(match (selected, gone) {
             (true, _) => Token::Selected,
@@ -461,7 +477,9 @@ fn key_row(keys: &LoadedSet, ctx: RowCtx<'_>, at: RowAt, i: usize, indent: u16, 
         super::put(buf, area.x + x, y, &text, style);
     }
     if let Some((x, w)) = cols.size {
-        let text = keys.size(i).map_or(PENDING.to_string(), format_size);
+        let text = keys
+            .size(i)
+            .map_or(theme.glyphs.get(Glyph::Pending).to_string(), format_size);
         super::put_right(buf, area.x + x, y, w, &text, meta_style);
     }
     if let Some((x, w)) = cols.ttl {
@@ -474,9 +492,9 @@ fn key_row(keys: &LoadedSet, ctx: RowCtx<'_>, at: RowAt, i: usize, indent: u16, 
         // already does (R3.9) — the column is a countdown now, not a snapshot
         // that only moves on the next rescan.
         let text = match (gone, keys.ttl_now(i, now_s)) {
-            (true, _) => "—".to_string(),
-            (false, Some(t)) => format_ttl(t),
-            (false, None) => PENDING.to_string(),
+            (true, _) => theme.glyphs.get(Glyph::Dash).to_string(),
+            (false, Some(t)) => theme.glyphs.text(&format_ttl(t)).into_owned(),
+            (false, None) => theme.glyphs.get(Glyph::Pending).to_string(),
         };
         super::put_right(buf, area.x + x, y, w, &text, meta_style);
     }
@@ -499,7 +517,7 @@ fn fill_row(buf: &mut Buffer, area: Rect, y: u16, style: ratatui::style::Style) 
 ///
 /// `pub(crate)`: the Slowlog screen (`render::slowlog`) reuses this for its
 /// COMMAND column rather than keeping a second copy of the same rule.
-pub(crate) fn truncate(s: &str, width: usize) -> String {
+pub(crate) fn truncate(s: &str, width: usize, g: Glyphs) -> String {
     let width = width.saturating_sub(1);
     if s.chars().count() <= width {
         return s.to_string();
@@ -508,7 +526,7 @@ pub(crate) fn truncate(s: &str, width: usize) -> String {
         return String::new();
     }
     let mut out: String = s.chars().take(width - 1).collect();
-    out.push('…');
+    out.push_str(g.get(Glyph::Ellipsis));
     out
 }
 
@@ -582,9 +600,12 @@ mod tests {
 
     #[test]
     fn a_truncated_name_says_so() {
-        assert_eq!(truncate("short", 20), "short");
-        assert_eq!(truncate("user:8812:session", 10), "user:881…");
-        assert!(truncate("user:8812:session", 10).ends_with('…'));
+        assert_eq!(truncate("short", 20, Glyphs::default()), "short");
+        assert_eq!(
+            truncate("user:8812:session", 10, Glyphs::default()),
+            "user:881…"
+        );
+        assert!(truncate("user:8812:session", 10, Glyphs::default()).ends_with('…'));
     }
 
     #[test]

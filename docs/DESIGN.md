@@ -240,10 +240,21 @@ confirmation dialogs. A prod Connection is recognizable from across a desk. `pro
 underlining except links. One blank line between logical groups; padding of one column inside
 every pane border. Tables get a header row that stays pinned while the body scrolls.
 
-**Iconography.** Nerd Font glyphs when detected, ASCII fallbacks otherwise, chosen so the
-layout width does not change between the two. Codepoints with emoji presentation are banned
-outright — they render double-width in most terminals and shear the column grid rather than
-degrading quietly. An Ad-hoc Connection is therefore marked `~`, not `⚡`.
+**Iconography.** Every glyph is a named role in one table (`crates/core/src/glyphs.rs`) with a
+Unicode and an ASCII variant, chosen so the layout width does not change between the two — a test
+holds every pair to one column, and a golden-frame test holds every row of an ASCII frame to the
+width of its Unicode twin and to ASCII only. No Nerd Font glyph is used, so there is no third set
+to detect. The ASCII set covers the status marks (`✕`→`x`, `●`→`*`, `○`→`o`, `✎`→`+`, `⊘`→`/`,
+`⟳`→`@`, `⚠`→`!`), tree and pointer marks (`▾▸▲▼▶`→`v>^v>`), arrows and modifier keys (`↑↓→←`→
+`^v><`, `⌃`→`^`), `…`→`~`, `·`→`-`, box drawing (`┌┐└┘├`→`+`, `─`→`-`, `│`→`|`, dashed rules →
+`:` and `.`), the bar (`█░`→`#-`) and the eight-level sparkline (`▁▂▃▄▅▆▇█`→`_.:-=+*#`).
+The set is chosen by `--ascii` / `--unicode`, else the config file's top-level `ascii` boolean,
+else the locale: Unicode only when the first non-empty of `LC_ALL`, `LC_CTYPE`, `LANG` names
+UTF-8. `C`, `POSIX` and nothing set at all give ASCII — over SSH a forwarded environment is often
+empty, and plain beats question marks. Text built in the core's state (a liveness readout, a key
+label) is mapped at the draw site; data read from Redis never is. Codepoints with emoji
+presentation are banned outright — they render double-width in most terminals and shear the
+column grid rather than degrading quietly. An Ad-hoc Connection is therefore marked `~`, not `⚡`.
 
 **Key names in hint bars are words, not glyphs.** `Esc`, `Enter` and `Tab` are spelled out; the
 single-glyph forms are the least reliably present characters in a monospace font, and a missing
