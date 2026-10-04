@@ -23,9 +23,14 @@
 //! M4 task 3 (`scan_batch`'s incremental-append path and geometric rebuild
 //! schedule, `docs/plans/m4-perf-scan.md`) has landed: every case that was a
 //! CEILING because of the per-page quadratic rebuild is now `AT TARGET`.
-//! What remains above 16ms is M4 task 4's scope — `rebuild_list`'s own
-//! Name-sort/`Tree::rebuild` cost on the pages (and keystrokes) that still
-//! pay for a full rebuild — labelled "tightened by M4 task 4" below.
+//! M4 task 4 (`docs/plans/m4-perf-interaction.md`) has landed too: the
+//! filter keystroke narrows from the previous result and is `AT TARGET`.
+//! What remains above 16ms is a full rebuild (a debounced filter rebuild, a
+//! tree toggle, a scheduled mid-scan rebuild in tree mode). Those ceilings
+//! were set by task 4 at **2x the local measurement, rounded up** — not 1.5x
+//! — because CI's ubuntu runner has measured about 1.4x slower than the
+//! development machine (task 2: filter keystroke 22ms local vs 31ms CI).
+//! To be calibrated against the first CI run.
 //!
 //! Keys are realistic: `user:{i:08}:session`, the same generator
 //! `crates/core/examples/memreport.rs` already uses, with two `:` separators
@@ -150,26 +155,85 @@ fn scroll_keystroke_at_1m_keys() {
 fn filter_keystroke_at_1m_keys() {
     let mut base = big_state(1_000_000);
     // Mid-typing: a filter is already active and capturing, and one more
-    // character arrives. `KeyView::rebuild` scans the *whole* Loaded set on
-    // every keystroke (ADR-0010's `rebuild` doc comment: "cheap enough to
-    // run on every change") — this is M4 task 4's hot path
-    // (`m4-perf-interaction.md`), not M4 task 3's: task 3's scope is
-    // `scan_batch`'s per-*page* rebuild during a scan, explicitly not
-    // interactive edits to the filter or tree state
-    // (`m4-perf-scan.md`, "Out of scope"). Measured here, not fixed here.
+    // character arrives. That extends the previous query, so the list
+    // narrows from the rows already shown (M4 task 4, decision 1) instead of
+    // re-matching the whole Loaded set. The other keystrokes are measured
+    // beside this one: first character, deferred backspace, and the
+    // post-debounce full rebuild.
     base.list.filter = "user:0000".into();
     base.filtering = true;
     base.rebuild_list();
     let elapsed =
         time_update_and_render(&base, 11, || Msg::Key(KeyPress::plain(KeyCode::Char('1'))));
     println!("filter keystroke @ 1M keys: {elapsed:?}");
-    // CEILING: PRD §7 target is 16ms; a full-keyspace rescan on every
-    // character is M4 task 4's scope. Local baseline measured ~22.3ms, but
-    // CI's ubuntu runner measured 31.2ms, so the ceiling is the slower
-    // machine's baseline × 1.5, rounded up: 47ms. Tightened by M4 task 4.
+    // AT TARGET: PRD §7's 16ms. Was a 47ms CEILING (22.3ms measured: every
+    // keystroke re-matched all 1M keys); narrowing from the previous result
+    // now measures ~0.3ms locally.
     assert!(
-        elapsed < Duration::from_millis(47),
-        "filter keystroke took {elapsed:?}, ceiling is 47ms (target 16ms, M4 task 4)"
+        elapsed < Duration::from_millis(16),
+        "filter keystroke took {elapsed:?}, budget is 16ms"
+    );
+}
+
+/// A filter is active over the whole set and rows are in step with it.
+fn filtered_state(filter: &str) -> State {
+    let mut base = big_state(1_000_000);
+    base.list.filter = filter.into();
+    base.filtering = true;
+    base.rebuild_list();
+    base
+}
+
+#[test]
+#[ignore]
+fn filter_first_character_at_1m_keys() {
+    // The one narrowing keystroke that still touches the whole keyspace: the
+    // previous result *is* the Loaded set, so there is nothing smaller to
+    // narrow from; it matches every key once, no sort. AT TARGET (~3.9ms).
+    let base = filtered_state("");
+    let elapsed =
+        time_update_and_render(&base, 11, || Msg::Key(KeyPress::plain(KeyCode::Char('u'))));
+    println!("filter first character @ 1M keys: {elapsed:?}");
+    assert!(
+        elapsed < Duration::from_millis(16),
+        "first filter character took {elapsed:?}, budget is 16ms"
+    );
+}
+
+#[test]
+#[ignore]
+fn filter_backspace_keystroke_at_1m_keys() {
+    // M4 task 4 decision 2: a keystroke that cannot be narrowed defers its
+    // rebuild to the shell's debounce timer, so what the reader waits on is
+    // only the update that records the text plus the frame.
+    let base = filtered_state("user:0000");
+    let elapsed =
+        time_update_and_render(&base, 11, || Msg::Key(KeyPress::plain(KeyCode::Backspace)));
+    println!("filter backspace keystroke (rebuild deferred) @ 1M keys: {elapsed:?}");
+    assert!(
+        elapsed < Duration::from_millis(16),
+        "deferred keystroke took {elapsed:?}, budget is 16ms"
+    );
+}
+
+#[test]
+#[ignore]
+fn filter_rebuild_after_debounce_at_1m_keys() {
+    // The deferred work itself: `Msg::FilterRebuildDue` after a backspace.
+    // This is a full rebuild of the Loaded set, run once per burst.
+    let (base, _) = update(
+        filtered_state("user:0000"),
+        Msg::Key(KeyPress::plain(KeyCode::Backspace)),
+    );
+    assert!(base.filter_pending);
+    let elapsed = time_update_and_render(&base, 11, || Msg::FilterRebuildDue);
+    println!("filter rebuild after debounce @ 1M keys: {elapsed:?}");
+    // CEILING: PRD target 16ms, not met — a full rebuild matches all 1M keys
+    // (~21.8ms local), but it runs once per keystroke burst, off the
+    // keystroke's own frame. Ceiling = local × 2, rounded up: 44ms.
+    assert!(
+        elapsed < Duration::from_millis(44),
+        "post-debounce rebuild took {elapsed:?}, ceiling is 44ms (target 16ms)"
     );
 }
 
@@ -203,11 +267,12 @@ fn toggle_tree_at_1m_keys() {
     // CEILING: PRD §7 target is 16ms; entering tree mode forces a Name sort
     // (rebuild_list's invariant) *and* a one-pass `Tree::rebuild` over all 1M
     // rows — by far the most expensive case measured here. Local baseline
-    // measured ~129ms; ceiling = baseline × 1.5, rounded up to 194ms.
-    // Tightened by M4 task 4 (Tree's own representation).
+    // measured ~129ms before M4 task 4's allocation-free `Tree::rebuild` and
+    // O(1) collapsed lookup; now ~44ms locally. Ceiling = local × 2, rounded
+    // up: 89ms (was 194ms).
     assert!(
-        elapsed < Duration::from_millis(194),
-        "tree toggle took {elapsed:?}, ceiling is 194ms (target 16ms, M4 task 4)"
+        elapsed < Duration::from_millis(89),
+        "tree toggle took {elapsed:?}, ceiling is 89ms (target 16ms)"
     );
 }
 
@@ -411,14 +476,13 @@ fn whole_scan_fold_in_tree_mode_from_empty() {
     );
     // CEILING on the worst single page: PRD §7's target is 16ms (one
     // frame) — still not met, because the pages that land on a scheduled
-    // rebuild still pay for a full Name sort plus a full `Tree::rebuild`
-    // (M4 task 4's scope, not this one's). Local baseline across repeated
-    // runs measured a worst page of ~103–143ms; ceiling = the higher of
-    // those × 1.5, rounded up to 220ms (down from 378ms pre-task-3).
-    // Tightened further by M4 task 4 (`Tree`'s own representation).
+    // rebuild still pay for a full Name sort plus a full `Tree::rebuild`.
+    // Measured ~103–143ms before M4 task 4, ~31–32ms after (allocation-free
+    // fold, O(1) collapsed lookup). Ceiling = local × 2, rounded up: 65ms
+    // (was 220ms).
     assert!(
-        worst_page_time < Duration::from_millis(220),
-        "worst page took {worst_page_time:?}, ceiling is 220ms (target 16ms, M4 task 4)"
+        worst_page_time < Duration::from_millis(65),
+        "worst page took {worst_page_time:?}, ceiling is 65ms (target 16ms)"
     );
     // AT TARGET: the median page, by contrast, already meets PRD §7's 16ms
     // bar — proof that the geometric schedule, not merely a faster rebuild,

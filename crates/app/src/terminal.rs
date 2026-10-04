@@ -30,9 +30,11 @@ use redis_pane_core::{Msg, State, render, update};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
+use crate::metadata::MetadataLedger;
 use crate::redis::Established;
 use crate::redis::feed::{FeedHandle, FeedKind};
 use crate::redis::read::{Arming, ReadGate};
+use redis_pane_core::command::MetadataEpoch;
 
 /// Restores the terminal on drop, including when the process is unwinding.
 /// Leaving a terminal in raw mode after a panic is the rudest thing a TUI can
@@ -211,6 +213,8 @@ pub async fn run(
         clock: clock.clone(),
         read_gate: ReadGate::default(),
         scan_cancel: None,
+        filter_debounce: Debounce::default(),
+        metadata: MetadataLedger::default(),
         reconnect: Reconnect {
             dial,
             credentials,
@@ -289,6 +293,7 @@ pub async fn run(
             last_draw = Some(now);
         }
         let frame_due = last_draw.map_or(now, |at| at + FRAME);
+        let filter_due = shell.filter_debounce.deadline();
 
         let msg = tokio::select! {
             // Messages first, as before coalescing: input and replies are
@@ -318,6 +323,15 @@ pub async fn run(
                 }
             },
             _ = dashboard_poll.tick() => Some(Msg::DashboardPollTick),
+            // Trailing-edge debounce: this arm sits *behind* `rx.recv()`
+            // under `biased`, so a keystroke already queued is always seen
+            // (and restarts the window) before an expired timer is.
+            () = async { tokio::time::sleep_until(filter_due.expect("guarded")).await },
+                if filter_due.is_some() =>
+            {
+                shell.filter_debounce.clear();
+                Some(Msg::FilterRebuildDue)
+            }
         };
         let Some(msg) = msg else {
             return Ok(());
@@ -331,6 +345,36 @@ pub async fn run(
                 return Ok(());
             }
         }
+    }
+}
+
+/// How long the filter must be quiet before a full rebuild runs (M4 task 4,
+/// decision 2). 100ms: above the ~30ms auto-repeat interval of a held
+/// Backspace and the 50-80ms gap of a fast typist, so a burst coalesces into
+/// one rebuild, and below the ~150ms at which a list that has not caught up
+/// with the box starts to read as lag. The typed text itself never waits.
+const FILTER_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(100);
+
+/// A restartable trailing-edge timer: `schedule` pushes the deadline out to
+/// `now + window` every time, so only the last of a burst fires. Pure data —
+/// the loop owns the actual sleeping — which is what lets it be tested
+/// without a runtime or a terminal.
+#[derive(Debug, Default)]
+struct Debounce {
+    deadline: Option<tokio::time::Instant>,
+}
+
+impl Debounce {
+    fn schedule(&mut self, now: tokio::time::Instant, window: std::time::Duration) {
+        self.deadline = Some(now + window);
+    }
+
+    fn deadline(&self) -> Option<tokio::time::Instant> {
+        self.deadline
+    }
+
+    fn clear(&mut self) {
+        self.deadline = None;
     }
 }
 
@@ -351,6 +395,13 @@ struct Shell {
     /// preference.
     read_gate: ReadGate,
     scan_cancel: Option<CancellationToken>,
+    /// The filter-rebuild debounce timer (M4 task 4, decision 2). The core
+    /// asks for it with `Command::ScheduleFilterRebuild` and hears back with
+    /// `Msg::FilterRebuildDue`; the clock is here, never there.
+    filter_debounce: Debounce,
+    /// Which row-metadata fetches are in flight or answered, and which
+    /// generation of the Loaded set they belong to (decision 6).
+    metadata: MetadataLedger,
     reconnect: Reconnect,
     /// The single open feed connection, if any (`docs/plans/m3-feed-connection.md`).
     /// Never in `State` — the core holds no `fred` types (ADR-0011). Only one
@@ -407,12 +458,17 @@ impl Shell {
         match command {
             Command::Quit => return ControlFlow::Break(()),
             Command::StartScan { pattern } => self.start_scan(pattern),
+            Command::ScheduleFilterRebuild => self
+                .filter_debounce
+                .schedule(tokio::time::Instant::now(), FILTER_DEBOUNCE),
             Command::CancelScan => {
                 if let Some(token) = self.scan_cancel.take() {
                     token.cancel();
                 }
             }
-            Command::FetchMetadata { indices } => self.fetch_metadata(state, &indices),
+            Command::FetchMetadata { indices, epoch } => {
+                self.fetch_metadata(state, &indices, epoch)
+            }
             Command::FetchSlowlog { count } => self.fetch_slowlog(count),
             Command::FetchServerInfo { token } => self.fetch_server_info(token),
             Command::ReadKey {
@@ -454,31 +510,59 @@ impl Shell {
         });
     }
 
-    fn fetch_metadata(&self, state: &State, indices: &[usize]) {
+    /// Fetch metadata for the rows the core asked about, minus what is
+    /// already in flight (M4 task 4, decision 6; see
+    /// [`MetadataLedger`]).
+    fn fetch_metadata(&self, state: &State, indices: &[usize], epoch: MetadataEpoch) {
+        let Some(claim) = self.metadata.claim(epoch, indices) else {
+            return;
+        };
         // Resolve names here, on the UI side, so the task owns no reference
         // into state.
-        let window: Vec<(usize, Vec<u8>)> = indices
+        let window: Vec<(usize, Vec<u8>)> = claim
+            .indices()
             .iter()
             .filter_map(|i| state.keys.name(*i).map(|n| (*i, n.to_vec())))
             .collect();
         if window.is_empty() {
+            // Dropping the claim releases the indices.
             return;
         }
         let (client, tx, clock) = (self.client.clone(), self.tx.clone(), self.clock.clone());
         tokio::spawn(async move {
             let at_ms = clock.now_epoch_ms();
-            let msg = match crate::redis::fetch_metadata(&client, &window).await {
-                Ok((entries, gone)) if entries.is_empty() && gone.is_empty() => return,
-                Ok((entries, gone)) => Msg::MetadataBatch {
-                    entries,
-                    gone,
-                    at_ms,
-                },
-                Err(e) => Msg::Failed {
+            let result = tokio::select! {
+                // A rescan or reconnect superseded this fetch: dropping it
+                // is the point, not a swallowed error.
+                () = claim.cancelled() => return,
+                r = crate::redis::fetch_metadata(&client, &window) => r,
+            };
+            let msg = match result {
+                Ok((entries, gone)) => {
+                    // `finish` is false when a reset landed since this was
+                    // issued: its indices name different keys now.
+                    let epoch = claim.epoch();
+                    if !claim.finish() || (entries.is_empty() && gone.is_empty()) {
+                        return;
+                    }
+                    Msg::MetadataBatch {
+                        entries,
+                        gone,
+                        at_ms,
+                        // Echoed unchanged: the core, not this task, decides
+                        // whether the batch is still about the current keys.
+                        epoch,
+                    }
+                }
+                // A failure surfaces exactly as before — unless it belongs to
+                // a connection or scan already replaced, which is expected
+                // noise. Either way the claim drops and releases its indices.
+                Err(e) if claim.is_current() => Msg::Failed {
                     command: "fetching metadata".into(),
                     detail: e.details().to_string(),
                     at_ms: clock.now_epoch_ms(),
                 },
+                Err(_) => return,
             };
             let _ = tx.send(msg).await;
         });
@@ -779,6 +863,8 @@ impl Shell {
     fn reconnected(&mut self, client: Client, established: &Established) -> Msg {
         self.client = client;
         self.reconnect.attempt = 0;
+        // Fetches issued on the replaced client will never be answered by it.
+        self.metadata.reset();
         // Subscriptions are tied to the `Client` they were opened on; one that
         // has been replaced no longer delivers anything.
         self.watch_link();
@@ -1205,5 +1291,24 @@ mod tests {
         }
         assert!(state.quitting);
         assert_eq!(commands, vec![Command::Quit]);
+    }
+
+    #[test]
+    fn debounce_restarts_on_every_schedule_and_fires_only_after_the_last() {
+        use super::Debounce;
+        use std::time::Duration;
+        let t0 = tokio::time::Instant::now();
+        let w = Duration::from_millis(100);
+        let mut d = Debounce::default();
+        assert_eq!(d.deadline(), None, "idle: nothing armed");
+        d.schedule(t0, w);
+        assert_eq!(d.deadline(), Some(t0 + w));
+        // A second keystroke 60ms later pushes the deadline out; the first
+        // deadline (t0+100ms) must not fire.
+        let t1 = t0 + Duration::from_millis(60);
+        d.schedule(t1, w);
+        assert_eq!(d.deadline(), Some(t1 + w));
+        d.clear();
+        assert_eq!(d.deadline(), None, "fired: disarmed until the next edit");
     }
 }

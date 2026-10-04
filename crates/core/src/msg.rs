@@ -176,6 +176,10 @@ pub enum Msg {
         /// here) instead of freezing at whatever it read until the next
         /// rescan.
         at_ms: u64,
+        /// The epoch of the `Command::FetchMetadata` this answers. A batch
+        /// from before the last rescan is dropped unread: its indices name
+        /// different keys now.
+        epoch: crate::command::MetadataEpoch,
     },
     /// A read of the open key completed, carrying what the server said.
     ///
@@ -326,6 +330,11 @@ pub enum Msg {
     /// keeps the timer itself a shell concern while the *decision* stays in
     /// the core, testable without a real clock or a real interval.
     DashboardPollTick,
+    /// The shell's filter debounce window closed (M4 task 4, decision 2): if
+    /// the typed filter is still ahead of the list, rebuild it now. The core
+    /// decides whether anything is owed ([`crate::State::filter_pending`]);
+    /// a stale or duplicate one is a no-op.
+    FilterRebuildDue,
     /// A feed connection (`Command::OpenFeed`) finished dialing and is
     /// streaming (`docs/plans/m3-feed-connection.md`). `token` is the one the
     /// `OpenFeed` that started it carried; a token that does not name the feed

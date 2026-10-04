@@ -1,8 +1,143 @@
 # M4 task 4: Million-key interaction
 
-Status: **planning — not started.**
+Status: **done.**
 
-## Context
+## Resolved decisions (build-time)
+
+1. **Filter narrowing (decision 1) landed, with a correction: glob is only
+   conditionally safe, fuzzy is always safe.** `KeyView` records what its
+   `order` was last built for (`Applied`: filter, mode, sort, and how many
+   keys it covered), and `KeyView::can_narrow`/`narrow`
+   (`crates/core/src/state/view.rs`) re-filter only the rows already shown.
+   - *Fuzzy* is a subsequence test, so appending a character can only remove
+     matches.
+   - *Glob* is **not** safe for every extension, contrary to the plan's
+     framing. `*a` matches `xa`; its extension `*ab` matches `xab`, which `*a`
+     does not. A pattern with no wildcard is a substring search (extension
+     keeps the old text as a substring: safe) and a pattern ending in `*`
+     absorbs what follows (safe), but a wildcard pattern ending in a literal
+     is anchored and must fall back to a full rebuild. Both claims are proven
+     exhaustively in tests (every pattern pair to length 4 against every name
+     to length 5), plus a test pinning the counter-example.
+   - *Extra preconditions the plan did not list:* the sort must be `Scan` or
+     `Name` (a rebuild re-sorts by metadata that arrived since, so lazy-sort
+     orders can differ); the mode and sort must match what the order was built
+     under; and the order must cover every loaded key (a key that arrived
+     since the last rebuild, as in tree or non-Scan modes mid-scan, is in no
+     row to keep). Anything else takes the full-rebuild path.
+   - Narrowing is checked against the *applied* filter, never the typed text,
+     so an extension typed while a rebuild is pending is never narrowed from a
+     stale order. `KeyView::extend` also filters new keys by the applied
+     filter, for the same reason. Tree mode still runs `Tree::rebuild` after
+     narrowing; selection and Open key relocation are unchanged.
+2. **Debounce (decision 2): a shell timer, 100 ms, trailing-edge.** The typed
+   text lands in the filter box on every keystroke. A keystroke that cannot
+   narrow sets `State::filter_pending` and returns `Command::ScheduleFilterRebuild`;
+   the shell (`Debounce` in `crates/app/src/terminal.rs`) restarts a 100 ms
+   deadline each time and answers with `Msg::FilterRebuildDue`, which the core
+   honours only if `filter_pending` is still set. Every rebuild, whoever runs
+   it, clears the flag, so a late timer is a no-op. `Esc` clears immediately
+   (it does not wait), `Enter` flushes a pending rebuild, and nothing needs
+   handling on quit. 100 ms is above the ~30 ms auto-repeat of a held
+   Backspace and the 50-80 ms gap of a fast typist, and below the ~150 ms where
+   a list that lags the box starts to read as lag — a judgement, not a
+   measurement. Known gap: a mouse click on a row inside that window acts on a
+   not-yet-filtered row (still a real key).
+3. **`Tree::rebuild` allocates nothing per key (decision 3), by restructuring
+   the loop, not by a dependency.** Two reusable segment buffers are swapped
+   per key; the prefix through a segment is a slice of the key's own name;
+   no `smallvec`. A prefix with valid UTF-8 probes the collapsed set with a
+   borrowed `&str`; only invalid bytes pay a lossy conversion, which keeps a
+   collapsed `\u{FFFD}:` group matching exactly as before.
+4. **Collapsed lookup is O(1) (decision 4): `HashSet<String>`, not arena
+   `(offset, len)`.** An arena offset names one key's copy of the text, so
+   every probe would still need a byte comparison, and the set is a handful of
+   entries. `toggle`/`is_collapsed` keep their `&str` signatures.
+   `ancestor_collapsed` probes once per separator in the name. An `irregular`
+   count tracks collapsed prefixes not ending in the separator (nothing in the
+   app produces one, but `toggle` accepts any `&str`); while any exists the old
+   linear `starts_with` scan is used, so behaviour is identical.
+5. **`row_of` uses an inverse index (decision 5), on `KeyView` and on `Tree`,
+   not on `State`.** Each is the inverse of a structure rebuilt or extended in
+   exactly one place (`KeyView::rebuild`/`extend`/`narrow`, `Tree::rebuild`),
+   so no caller can change one and forget the other. Both are dense
+   `Vec<u32>` over Loaded set indices (`u32::MAX` = no row), counted in
+   `heap_bytes`; `State::row_of` picks by `tree_mode`. It costs ~4 MB each at
+   1M keys. It makes lookups O(1) *between* rebuilds; it does not make a
+   rebuild cheaper (the fill is O(n)), which is why `rebuild_list` itself
+   gained nothing from it.
+6. **Metadata fetches (decision 6): a core-minted epoch decides staleness; a
+   shell-side ledger does dedup.**
+   - *The build-time question — can a late stale reply cause visible
+     incorrectness today?* **Yes, in one case.** A reply carries bare Loaded
+     set indices. A rescan (`scan_started` -> `LoadedSet::clear`, refill in a
+     different `SCAN` order) renumbers them, so a reply that outlives the
+     rescan writes a type, TTL and size — or a *tombstone* — onto an unrelated
+     key. Within one numbering a late reply is correct and merely redundant,
+     so discarding it for scroll-away would only cause a re-fetch; it is
+     applied.
+   - *A shell-side counter does not suffice (corrected after review).* The
+     first cut bumped a shell generation when the shell handled
+     `Command::StartScan`. But the core renumbers only when `Msg::ScanStarted`
+     is dequeued, at least one `SCAN` round trip later; in between it still
+     shows the old keys and can emit `FetchMetadata` (scroll, resize) with old
+     indices, which the shell had already called "current" — its reply then
+     passed the shell's check and was applied after `ScanStarted`. A second,
+     narrower window: a task could pass its own check and reach `tx.send` after
+     the loop had already processed `ScanStarted`, since the check ran in the
+     task, not at dequeue. A timing argument cannot close either.
+   - *The fix is the plan's "core-checked token", shaped like `InfoToken`:*
+     `MetadataEpoch` (`crates/core/src/command.rs`), minted only by the core.
+     `State::metadata_epoch` is bumped exactly where indices are renumbered —
+     `scan_started`'s `keys.clear()`, the only place keys are cleared.
+     `Command::FetchMetadata { indices, epoch }` carries it; the shell echoes
+     it unchanged in `Msg::MetadataBatch { epoch, .. }`; `metadata_batch` drops
+     a batch whose epoch is not current, before touching anything. Staleness
+     is now a fact about the message, decided in the core at dequeue.
+   - *The shell ledger* (`crates/app/src/metadata.rs`) follows the epoch it
+     sees: a `FetchMetadata` under a new epoch forgets what is in flight and cancels
+     the old epoch's fetches. That is only an optimization (no wasted round
+     trips, no dedup entry held by a fetch whose answer will be dropped);
+     correctness does not depend on it or on the task-side `finish()` check.
+     The ledger also resets on **reconnect**, which is still needed for a
+     different reason: fetches issued on the replaced client may never be
+     answered, and an index held in flight by one that hangs would never be
+     asked for again.
+   - Dedup: `claim` skips indices with a fetch in flight. A `Claim` dropped
+     without `finish` — failure, cancellation, panic — releases its indices, so
+     none can wedge. A failure from the current generation still surfaces as
+     `Msg::Failed` exactly as before; only a superseded one is dropped.
+   - **Reversed from the plan, by the user: a row reported gone is
+     re-requested when it re-enters the window.** The plan said a tombstoned
+     row should be remembered as answered and never re-requested. The first
+     cut did that, which meant a key deleted and then recreated kept its
+     `✕ gone` badge in the list until a rescan, reconnect or its own Viewer
+     read — a stale display, against the product's no-stale-display
+     principle (ADR-0006's spirit). So the ledger keeps no gone set. The cost
+     is at most one window of extra `TYPE`s riding the same pipelined batch,
+     never an extra round trip; in-flight dedup still stops overlapping
+     windows from re-asking while a fetch is outstanding.
+
+## Measured (release, local, `--test-threads=1`)
+
+| Path at 1M keys | Main (before task 4) | After | Ceiling now |
+|---|---|---|---|
+| Filter keystroke (extends the query) | 22.3 ms | **0.27 ms** | AT TARGET 16 ms |
+| Filter first character (from empty) | n/a | 3.9 ms | AT TARGET 16 ms |
+| Filter backspace (rebuild deferred) | n/a | 0.04 ms | AT TARGET 16 ms |
+| Filter full rebuild (after debounce) | n/a (every keystroke) | 21.6 ms | CEILING 44 ms |
+| Tree toggle | 126 ms | 44.6 ms | CEILING 89 ms |
+| Sort change | 3.76 ms | 4.2 ms | AT TARGET 16 ms |
+| Whole-scan fold, tree mode | 0.60 s | 0.24 s | gate 10 s |
+| Whole-scan worst page | 105 ms | 32 ms | CEILING 65 ms |
+| ScanBatch page, tree mode | 0.93 ms | ~1.0-1.2 ms | AT TARGET 16 ms |
+| LoadedSet + View + Tree | 75.8 MB | 83.4 MB | AT TARGET 125 MB |
+
+Ceilings still above the PRD target use 2x the local measurement, rounded up
+(not 1.5x): CI's runner has measured ~1.4x slower than the development
+machine. To be calibrated against the first CI run.
+
+## Context (as planned)
 
 PLAN.md M4 row 4: "Million-key interaction · Proves: a filter keystroke at 1M keys meets the 16ms
 frame budget: it narrows from the previous result when the query extends, and otherwise rebuilds
@@ -97,6 +232,7 @@ Where task 3 (`m4-perf-scan.md`) fixes the cost of *arriving* keys, this task fi
    token the core checks, by looking at whether a stale metadata reply landing late can currently
    cause any visible incorrectness beyond wasted work). A tombstoned row (`gone`, from
    `metadata_batch`'s existing handling) should be remembered as answered and never re-requested
+   (**reversed at build time by the user** — see Resolved decisions, 6)
    just because it re-enters the visible window.
 
 ## Architecture
