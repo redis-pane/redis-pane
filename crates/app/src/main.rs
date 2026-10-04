@@ -6,12 +6,15 @@
 use clap::Parser;
 use fred::interfaces::ClientLike;
 use fred::prelude::Client;
+use redis_pane_core::clock::Clock;
+use redis_pane_core::msg::Msg;
 use redis_pane_core::resolve::{Credentials, EnvVars, Flags, resolve};
 use redis_pane_core::state::{Connection, Startup, State};
 use redis_pane_core::theme::Theme;
+use redis_pane_core::update::update;
 
 use redis_pane::redis::{ConnectError, Established};
-use redis_pane::{SystemClock, config_io, exit, redis, terminal};
+use redis_pane::{SystemClock, config_io, exit, redis, state_file, terminal};
 
 /// A terminal UI for Redis.
 ///
@@ -207,11 +210,33 @@ fn main() {
 
     // Which Read-only reason a session starts with is the core's rule
     // (`State::new`): a replica outranks the Environment's default.
-    let state = State::new(Startup {
+    let mut state = State::new(Startup {
         connection,
         server_read_only: established.read_only,
         condition: established.condition,
     });
+    // Session restore (M4 task 7): keyed by the display target, which carries
+    // no credentials. An unusable file is a visible error, never a crash.
+    let session_store = state_file::default_path().map(|path| state_file::Store {
+        path,
+        target: state.connection.target.clone(),
+    });
+    if let Some(store) = &session_store {
+        let loaded = state_file::load(&store.path, &store.target);
+        if let Some(session) = loaded.session {
+            state.apply_session(session);
+        }
+        if let Some(detail) = loaded.notice {
+            (state, _) = update(
+                state,
+                Msg::Failed {
+                    command: "restoring session state".into(),
+                    detail,
+                    at_ms: SystemClock.now_epoch_ms(),
+                },
+            );
+        }
+    }
     let theme = Theme::new(terminal::detect_color_depth());
 
     if let Err(err) = runtime.block_on(terminal::run(
@@ -222,6 +247,7 @@ fn main() {
         established,
         dial.to_string(),
         resolution.credentials.clone(),
+        session_store,
     )) {
         eprintln!("redis-pane: {err}");
         std::process::exit(exit::CONNECTION);

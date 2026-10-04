@@ -99,7 +99,10 @@ impl std::fmt::Display for SessionFileError {
                 "format version {v}, but this build reads version {SESSION_VERSION}"
             ),
             SessionFileError::UnknownVersion(None) => {
-                write!(f, "no format version; this build reads version {SESSION_VERSION}")
+                write!(
+                    f,
+                    "no format version; this build reads version {SESSION_VERSION}"
+                )
             }
         }
     }
@@ -131,8 +134,8 @@ pub struct SessionFile {
 
 impl SessionFile {
     pub fn parse(text: &str) -> Result<Self, SessionFileError> {
-        let value: serde_json::Value = serde_json::from_str(text)
-            .map_err(|e| SessionFileError::Unreadable(e.to_string()))?;
+        let value: serde_json::Value =
+            serde_json::from_str(text).map_err(|e| SessionFileError::Unreadable(e.to_string()))?;
         match value.get("version").and_then(serde_json::Value::as_u64) {
             Some(v) if v == u64::from(SESSION_VERSION) => {}
             other => return Err(SessionFileError::UnknownVersion(other)),
