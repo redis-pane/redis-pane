@@ -263,67 +263,33 @@ after the beta, designed in [`m5-cluster.md`](plans/m5-cluster.md). Rebuild cost
 order (below) is likewise deferred, to M6, designed in [`m6-perf-rebuild.md`](plans/m6-perf-rebuild.md). M4 ends in a beta (`0.1.0-beta.1`), not
 a 1.0.
 
-**Progress: in flight.** Task 1 is done — a Cluster-scheme URL is refused in `build_config`
-before any connection attempt, and a plain `redis://`/`rediss://` URL to a cluster-enabled
-server is refused via the `cluster_enabled:1` check folded into the same `INFO` read
-`connect_with` already made (no second round trip). `infer_environment` now strips
-`-sentinel`/`-cluster` scheme variants too, so a loopback Sentinel URL resolves `local`. See
-[`m4-cluster-refusal.md`](plans/m4-cluster-refusal.md) for the resolved build-time decisions.
-Task 2 is done — `[profile.dist]` gained `strip = true` (8.21MiB stripped, well under the 20MB
-budget); a new `size` CI job builds `--profile dist` and fails over 20MB; `crates/core/tests/perf.rs`
-times `update`+render for a scroll keystroke, a filter keystroke, a sort change, toggling tree
-mode and a `ScanBatch` of 500 landing on an already-1M-key set, plus render alone at 1M and a
-memory-accounting test covering `LoadedSet`+`KeyView.order`+`Tree`, all `#[ignore]`d and run by a
-new `perf` CI job in release; `crates/app/tests/integration.rs` gained a Docker-backed timing test
-for first-`ScanBatch`/interactive at 100k keys, run by the existing `integration` job. Baseline
-numbers are in [`m4-perf-harness.md`](plans/m4-perf-harness.md)'s table: 9 of 13 timing/memory
-metrics already meet the PRD §7 target outright. Four were held to a regression ceiling (1.5× the
-measured baseline) pending tasks 3 and 4, all from the same two causes (`rebuild_list`'s full
-rescan and `Tree::rebuild` on every page): a filter keystroke, toggling tree mode, a scan page
-arriving in tree mode (~130 ms against ~7 ms flat), and the worst page of a whole scan. The
-headline at the time: folding a full 1M-key scan in the default tree view cost about two minutes
-of CPU, during which every page blocked the UI for ~130 ms.
-
-Task 3 is done — `scan_batch` (`crates/core/src/update/scan.rs`) no longer rebuilds the whole view
-on every page. In the common case (flat, scan order — a scan's default) it appends the new page
-straight into `KeyView::extend`, `O(page)`, and patches the Open key's row directly if it landed
-in that page, without `rebuild_list`'s linear `row_of` scan. In a sorted or tree-mode view, where a
-new key can land anywhere in the order, it instead rebuilds on a geometric schedule — every time
-the Loaded set has grown 25% (`SCAN_REBUILD_GROWTH_PCT`) since the last rebuild, plus always on the
-first page and once more whenever the scan ends (`ScanComplete`/`ScanCancelled`/`Capped`/
-`ScanFailed` all call `rebuild_list` unconditionally) — turning total rebuild work across a whole
-scan into a convergent geometric series, O(n log n) instead of O(n²). An equivalence test suite
-(`update::scan::incremental_equivalence_tests`) pins that every shortcut still lands on the
-identical final `KeyView`/`Tree`/selection a full rebuild-every-page would have produced, across
-every sort, tree mode, filtering, and a sort/tree/filter change mid-scan. The shell
-(`crates/app/src/terminal.rs`) now coalesces redraws: a dirty flag, drawn at most once per 16 ms rather
-than once per `Msg` or once a second — a keystroke after any pause draws immediately, and an idle
-screen does not wake up. `LoadedSet::clear` now clears
-`ttl_read_at` too, with a regression test. Measured after task 3: the whole 1M-key scan in tree
-mode dropped from ~120s to well under a second locally (~0.6–0.8s), the per-page tree-mode and
-flat-sorted-by-name `ScanBatch` cases are now `AT TARGET` (<16ms, down from 130ms/7ms), and the
-`perf` CI job no longer skips the whole-scan-fold test. What remains above the 16ms target — the
-filter keystroke, toggling tree mode, and the worst single page of a scan (now ~100–145ms, down
-from ~130–251ms) — is `rebuild_list`'s own Name-sort/`Tree::rebuild` cost, M4 task 4's scope, not
-task 3's. See [`m4-perf-scan.md`](plans/m4-perf-scan.md) for the resolved decisions.
-
-Task 4 is done — acting on a million-key keyspace now fits the frame budget where it can. A filter
-keystroke that extends the query narrows from the rows already shown (`KeyView::narrow`): 22.3 ms
-to ~0.3 ms. Narrowing is sound for fuzzy but only conditionally for glob (`*a` -> `*ab` is not a
-subset), needs a `Scan`/`Name` sort and a view that covers every loaded key, and is checked against
-the filter the order was *built for*, not the typed text. A keystroke that cannot narrow shows its
-text at once and defers the full rebuild to a 100 ms shell debounce (`Command::ScheduleFilterRebuild`
-/ `Msg::FilterRebuildDue`; `State::filter_pending`). `Tree::rebuild` allocates nothing per key and
-collapsed-group lookup is a hash set (tree toggle 126 ms to ~44 ms, whole-scan worst page 105 ms to
-~32 ms). `row_of` is O(1) through an inverse index on `KeyView` and on `Tree`. Metadata fetches go
-through a shell-side `MetadataLedger` (`crates/app/src/metadata.rs`): in-flight indices are not
-re-requested, while a row reported gone is deliberately re-asked whenever it re-enters the window. Staleness is decided by the core, not the
-shell: `State::metadata_epoch` (a core-minted `MetadataEpoch`) is bumped where a rescan renumbers
-the Loaded set, rides on every `FetchMetadata`, and `metadata_batch` drops a reply from any other
-epoch — a shell-side counter left a window between the shell starting a scan and the core
-processing `ScanStarted`. Still above 16 ms, on ceilings of 1.5× the CI measurement: tree toggle, the
-debounced full rebuild (~22 ms) and the worst scan page. See
-[`m4-perf-interaction.md`](plans/m4-perf-interaction.md) for the resolved decisions.
+**Progress: done.** All eight tasks are built, released as `0.1.0-beta.1`. Task 1 (Cluster refusal)
+refuses a Cluster-scheme URL in `build_config` before any connection attempt, and a plain
+`redis://` URL to a cluster-enabled server via the `cluster_enabled:1` check folded into the `INFO`
+read `connect_with` already made; `infer_environment` now strips `-sentinel`/`-cluster` schemes, so
+a loopback Sentinel URL resolves `local` — see [`m4-cluster-refusal.md`](plans/m4-cluster-refusal.md)
+and ADR-0021. Task 2 (perf harness) added `strip = true` to `[profile.dist]` (8.21MiB, against the
+20MB budget), a `size` CI job, `crates/core/tests/perf.rs` timing `update`+render at 1M keys, and a
+Docker-backed timing test at 100k; baselines are in [`m4-perf-harness.md`](plans/m4-perf-harness.md).
+Task 3 (million-key scan) made `scan_batch` extend the view incrementally in the flat scan-order
+case and rebuild on a 25% geometric schedule when sorted or in tree mode, and coalesced redraws in
+the shell to one per 16 ms; a whole 1M-key scan in tree mode fell from ~120 s to under a second —
+see [`m4-perf-scan.md`](plans/m4-perf-scan.md). Task 4 (million-key interaction) narrows a filter
+keystroke from the rows already shown (22.3 ms to ~0.3 ms), debounces a full rebuild by 100 ms,
+removed per-key allocation from `Tree::rebuild`, gave `row_of` an inverse index, and moved metadata
+dedup to a shell-side ledger with a core-minted epoch to drop stale replies — see
+[`m4-perf-interaction.md`](plans/m4-perf-interaction.md). Task 5 (themes) made `Theme` data: `dark`,
+`light` and `high-contrast` built-ins checked for WCAG AA by a test, user themes in config,
+`--theme`, and `light`/`high-contrast` paint their own background — see
+[`m4-themes.md`](plans/m4-themes.md). Task 6 (ASCII glyph fallback) put every glyph behind one set
+with width-identical Unicode and ASCII variants, chosen by `--ascii`/`--unicode`, config `ascii`,
+or the locale — see [`m4-glyphs.md`](plans/m4-glyphs.md). Task 7 (session restore) writes
+`$XDG_STATE_HOME/redis-pane/state.json`, one entry per target, via a writer thread with atomic
+temp-and-rename; a corrupt file is ignored with a notice — see
+[`m4-session-restore.md`](plans/m4-session-restore.md). Task 8 (this close-out) bumped the version,
+retitled `ALPHA.md` as beta notes (the filename is kept) and marked these docs done — see
+[`m4-close-out.md`](plans/m4-close-out.md). Packaging stays the open end-of-alpha decision, recorded
+in PRD §10.
 
 **These task 2–4 figures are for keys loaded in name order, which is the easy case.** The perf
 harness pushes `user:00000000`, `user:00000001`, … in order; real `SCAN` order is effectively
@@ -333,29 +299,8 @@ random-order keys, a tree toggle (sort plus fold) takes ~373 ms, or ~482 ms with
 large rebuilds sliced across frames — is milestone M6, after the beta:
 [`m6-perf-rebuild.md`](plans/m6-perf-rebuild.md).
 
-Task 5 is done — `Theme` is data: a `Palette` (a fixed array indexed by token, truecolor and 256
-colour slots) resolved once into a `Copy` `Theme`. Built-ins are `dark`, `light` and
-`high-contrast`; a test measures WCAG AA (AAA for high-contrast) for every readable token over the
-palette's background and over the detached wash, at truecolor and 256 colours. `--theme` beats the
-config's `theme`, which beats `dark`; `themes` in config holds user themes over a built-in `base`,
-an unknown token name being a parse error. `env.local` is now a neutral grey (green is for `ok`
-alone), and `dark`'s `muted` was nudged one step lighter because the contrast test found it just
-under AA on the detached wash. `NO_COLOR` empty is unset. Light and high-contrast goldens exist.
-A follow-up made `light` and `high-contrast` paint their own `background` token, so they are
-readable on any terminal and the contrast test measures what is on screen; `dark` stays
-transparent.
-See [`m4-themes.md`](plans/m4-themes.md).
-
-Task 6 (ASCII glyph fallback) is done — see [`m4-glyphs.md`](plans/m4-glyphs.md).
-
-Task 7 is done — session restore. `$XDG_STATE_HOME/redis-pane/state.json` (falling back to
-`~/.local/state`) holds one entry per target (the credential-free `host:port/db`): pane split,
-tree/flat, sort, filter and the selected key (hex, byte-safe). The format and `State::session_snapshot`/
-`apply_session` are pure core (`crates/core/src/state/session.rs`); `crates/app/src/state_file.rs`
-does the I/O on a dedicated writer thread (atomic temp-and-rename, `0600`, 1s debounce, flushed on
-quit). A corrupt, unreadable or unknown-version file is ignored with an error notification, never a
-crash. See [`m4-session-restore.md`](plans/m4-session-restore.md) for the resolved decisions. Task 8
-is not started.
+Still unbuilt after M4 and not part of it: rename, copy, bulk operations and Hash field rename (M2
+tasks 11–14, §5); Cluster support (M5); rebuild cost at real `SCAN` order (M6).
 
 | # | Task | Proves |
 |---|---|---|

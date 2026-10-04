@@ -1,30 +1,37 @@
-# Trying redis-pane (alpha)
+# Trying redis-pane (beta)
 
 Thanks for testing this. It's early — expect rough edges, and please say so when you hit one.
 
-## It cannot write anything
+## What this beta does
 
-This build is **read-only**. There is no delete, no edit, no rename — that work hasn't started
-yet (it's milestone M2). Every Redis command the app can issue is a read: `SCAN`, `TYPE`, `TTL`,
-`GET`/`HGETALL`/`LRANGE`/`SMEMBERS`/`ZRANGE`/`XRANGE`, `MEMORY USAGE`. Point it at anything —
-local, staging, even something you'd hesitate to open RedisInsight against — it cannot change a
-byte of it.
+It browses a keyspace with `SCAN` (never `KEYS`), shows every core type, and updates the open key
+live when another client changes it. It can also **write**: edit a String, Hash, List, Set or
+Sorted set in place, change a key's TTL, add or remove members, and delete a key. Every change
+previews the exact command first and waits for your confirmation, and Read-only Mode refuses it
+where it should. Some Environments start locked, and the header says why.
+
+Beyond the keyspace there are four views over the server itself: Monitor, Pub/Sub, the Slowlog and
+the Dashboard. The beta also adds themes, an ASCII fallback and session restore, described under
+"What to try".
+
+Still not built: renaming or copying a key, and bulk operations across several keys. Treat a
+`prod` or `unknown` target with the same care you would give any tool that can write to it.
 
 ## Install
 
-Download the binary for your OS from the [Releases page](https://github.com/vinodsantharam/redis-pane/releases) — macOS (Intel or Apple Silicon), Linux (x86_64), and Windows are all built there. Or, on macOS/Linux, run the installer script from a release page (note: these alpha releases are marked as GitHub prereleases, so the `/latest/` URL alias doesn't resolve to them — use the tagged URL, matching whatever the current alpha tag is):
+Download the binary for your OS from the [Releases page](https://github.com/vinodsantharam/redis-pane/releases) — macOS (Intel or Apple Silicon), Linux (x86_64), and Windows are all built there. Or, on macOS/Linux, run the installer script from a release page (note: these beta releases are marked as GitHub prereleases, so the `/latest/` URL alias doesn't resolve to them — use the tagged URL, matching whatever the current beta tag is):
 
 ```bash
-curl --proto '=https' --tlsv1.2 -LsSf https://github.com/vinodsantharam/redis-pane/releases/download/v0.1.0-alpha.18/redis-pane-installer.sh | sh
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/vinodsantharam/redis-pane/releases/download/v0.1.0-beta.1/redis-pane-installer.sh | sh
 ```
 
 On Windows, from PowerShell:
 
 ```powershell
-irm https://github.com/vinodsantharam/redis-pane/releases/download/v0.1.0-alpha.18/redis-pane-installer.ps1 | iex
+irm https://github.com/vinodsantharam/redis-pane/releases/download/v0.1.0-beta.1/redis-pane-installer.ps1 | iex
 ```
 
-These builds are **unsigned** — expected for an alpha. On first run:
+These builds are **unsigned** — expected for a beta. On first run:
 
 - **macOS** will refuse to open it as "from an unidentified developer." Either right-click the
   binary → Open → confirm, or run `xattr -d com.apple.quarantine ./redis-pane` once.
@@ -120,6 +127,23 @@ redis-pane --profile mine --probe
     published. Nothing stays subscribed after you leave.
   - **`g d`** — the Dashboard: memory against `maxmemory`, hit ratio, ops/sec, clients,
     replication and evictions, refreshed every 2s; `Enter` shows the raw `INFO` behind a tile.
+- **Themes.** `redis-pane --theme light` (or `high-contrast`; `dark` is the default). Set it for
+  good with `"theme": "light"` in the config file. `light` and `high-contrast` paint their own
+  background, so they stay readable on any terminal. Your own theme goes under `"themes"` in the
+  config, over a built-in `base`. `NO_COLOR` is honoured.
+- **ASCII fallback.** If a glyph shows as a box or a gap, run `redis-pane --ascii`. It is chosen
+  automatically when your locale does not declare UTF-8, and `--unicode` forces the Unicode set
+  back. `"ascii": true` in the config makes it permanent.
+- **Session restore.** Set a split, a filter, a sort and a selected key, quit, and relaunch against
+  the same server: they come back. It is kept per target (`host:port/db`, never a password) in
+  `$XDG_STATE_HOME/redis-pane/state.json`, or `~/.local/state/redis-pane/` without it. A corrupt
+  file is ignored with a notice.
+- **A Cluster target.** Point it at a Cluster (a `redis-cluster://` URL, or any node of a
+  cluster-enabled server): it refuses at startup with a message instead of showing one node as if
+  it were everything.
+- **A very large keyspace.** Scrolling and typing into the filter stay quick at a million keys.
+  Toggling the tree, changing the sort or fully rebuilding the filter takes about half a second
+  there when keys arrive in real `SCAN` order. That is a known limitation, planned as M6.
 - **Resize the terminal.** Columns drop in order above 70 wide; below 70, opening a key pushes
   into a full-width view with a breadcrumb back to the list.
 - **If your server supports `CLIENT TRACKING`**, open a key and change it from another terminal
@@ -143,10 +167,11 @@ redis-pane --profile mine --probe
 ## What's not there yet, on purpose
 
 - No renaming or copying keys, and no bulk operations across several keys — coming next.
+- Large keyspaces: the half-second rebuilds above are known, not something to report as new.
 - No embedded Redis console — `redis-cli` is one keystroke away in the terminal you're already
   in. No command palette either: it shipped briefly and was withdrawn, since every action it
   listed already had a key.
-- No Cluster support — Sentinel works, Cluster is deferred (ADR-0021). A Cluster target is
+- No Cluster support — Sentinel works, Cluster is planned as M5 (ADR-0021). A Cluster target is
   refused at startup with a diagnostic, rather than silently served from one arbitrary node;
   use `redis-cli -c` for a Cluster deployment meanwhile.
 - Nothing older than Redis 6.0 / no RESP2 — you'll get a clear message naming the version, not a
