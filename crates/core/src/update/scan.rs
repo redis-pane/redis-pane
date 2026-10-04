@@ -42,6 +42,9 @@ fn grown_enough(current_len: usize, last_rebuild_len: usize) -> bool {
 
 pub(super) fn scan_started(mut state: State, estimated_total: u64) -> (State, Vec<Command>) {
     state.keys.clear();
+    // Every index just changed meaning: replies to fetches issued against the
+    // old numbering must not land (`metadata_batch` checks this).
+    state.metadata_epoch = state.metadata_epoch.next();
     // The Open key survives a rescan; its *index* must not. `SCAN` has
     // no stable order, so the same number will address a different key
     // once the set refills, and every use of it — the tombstone
@@ -129,8 +132,7 @@ pub(super) fn scan_batch(mut state: State, keys: Vec<Vec<u8>>) -> (State, Vec<Co
         if let Some(index) = state.open.as_ref().and_then(|open| open.index)
             && index >= prior_len
         {
-            let row = (order_len_before..state.list.len())
-                .find(|&r| state.list.index_at(r) == Some(index));
+            let row = state.list.row_of(index).filter(|&r| r >= order_len_before);
             if let Some(open) = &mut state.open {
                 open.row = row;
             }
@@ -150,7 +152,8 @@ pub(super) fn scan_batch(mut state: State, keys: Vec<Vec<u8>>) -> (State, Vec<Co
     if indices.is_empty() {
         (state, Vec::new())
     } else {
-        (state, vec![Command::FetchMetadata { indices }])
+        let epoch = state.metadata_epoch;
+        (state, vec![Command::FetchMetadata { indices, epoch }])
     }
 }
 
@@ -159,7 +162,13 @@ pub(super) fn metadata_batch(
     entries: Vec<crate::msg::MetadataEntry>,
     gone: Vec<usize>,
     at_ms: u64,
+    epoch: crate::command::MetadataEpoch,
 ) -> (State, Vec<Command>) {
+    // A reply to a fetch issued before the last rescan: its indices name
+    // different keys now. Dropped unread — no metadata, no tombstone.
+    if epoch != state.metadata_epoch {
+        return (state, Vec::new());
+    }
     let read_at_s = epoch_secs(at_ms);
     let open_index = state.open.as_ref().and_then(|open| open.index);
     let mut row_says_alive = false;
@@ -287,7 +296,7 @@ mod scan_tests {
 
         // The keys render immediately; their metadata is requested separately,
         // and only for the rows on screen (R2.4).
-        let Some(Command::FetchMetadata { indices }) = cmds.first() else {
+        let Some(Command::FetchMetadata { indices, .. }) = cmds.first() else {
             panic!("expected a metadata request, got {cmds:?}");
         };
         assert_eq!(
@@ -564,6 +573,52 @@ mod incremental_equivalence_tests {
             got.view.selected, want.view.selected,
             "{case}: selected row differs"
         );
+    }
+
+    /// `row_of` through the inverse index must equal the linear scan it
+    /// replaced (M4 task 4, decision 5) for every Loaded set index —
+    /// checked after *every page* of a scan, so the incremental-append
+    /// path's mid-scan state is covered, not just the settled end.
+    fn assert_row_of_matches_linear(state: &State, case: &str) {
+        for index in 0..state.keys.len() + 2 {
+            let linear = (0..state.row_count()).find(|&row| state.key_at(row) == Some(index));
+            assert_eq!(state.row_of(index), linear, "{case}: row_of({index})");
+        }
+    }
+
+    #[test]
+    fn row_of_matches_the_linear_scan_page_by_page_in_every_mode() {
+        for (tree_mode, sort, filter) in [
+            (false, SortBy::Scan, ""),
+            (false, SortBy::Scan, "user:00"),
+            (false, SortBy::Name, ""),
+            (true, SortBy::Scan, ""),
+            (true, SortBy::Scan, "session"),
+        ] {
+            let mut state = State {
+                rows: 30,
+                tree_mode,
+                list: KeyView::new(filter, FilterMode::Glob, sort),
+                ..State::default()
+            };
+            (state, _) = update(
+                state,
+                Msg::ScanStarted {
+                    estimated_total: 900,
+                },
+            );
+            let mut sent = 0;
+            while sent < 900 {
+                let keys = (sent..sent + 90)
+                    .map(|i| key_name(i).into_bytes())
+                    .collect();
+                (state, _) = update(state, Msg::ScanBatch { keys });
+                sent += 90;
+                assert_row_of_matches_linear(&state, &format!("{tree_mode} {sort:?} {filter:?}"));
+            }
+            (state, _) = update(state, Msg::ScanComplete);
+            assert_row_of_matches_linear(&state, "after ScanComplete");
+        }
     }
 
     #[test]
@@ -1400,9 +1455,11 @@ mod metadata_tests {
 
         // The row is refetched, because a tombstone has no type, and the server
         // says the key is there again.
+        let epoch = state.metadata_epoch;
         let (state, cmds) = update(
             state,
             Msg::MetadataBatch {
+                epoch,
                 entries: vec![MetadataEntry {
                     index: 3,
                     kind: crate::state::KeyKind::String,
@@ -1447,9 +1504,11 @@ mod metadata_tests {
                 at_ms: 1_000,
             },
         );
+        let epoch = state.metadata_epoch;
         let (_, cmds) = update(
             state,
             Msg::MetadataBatch {
+                epoch,
                 entries: Vec::new(),
                 gone: vec![3],
                 at_ms: 1_000,
@@ -1582,9 +1641,11 @@ mod metadata_tests {
     #[test]
     fn arriving_metadata_lands_on_the_right_rows() {
         let state = browsing(100);
+        let epoch = state.metadata_epoch;
         let (state, _) = update(
             state,
             Msg::MetadataBatch {
+                epoch,
                 entries: vec![MetadataEntry {
                     index: 2,
                     kind: KeyKind::Hash,
@@ -1612,9 +1673,11 @@ mod metadata_tests {
                 size_bytes: 10,
             })
             .collect();
+        let epoch = state.metadata_epoch;
         let (state, _) = update(
             state,
             Msg::MetadataBatch {
+                epoch,
                 entries,
                 gone: Vec::new(),
                 at_ms: 1_000,
@@ -1637,9 +1700,11 @@ mod metadata_tests {
                 size_bytes: 10,
             })
             .collect();
+        let epoch = state.metadata_epoch;
         let (state, _) = update(
             state,
             Msg::MetadataBatch {
+                epoch,
                 entries,
                 gone: Vec::new(),
                 at_ms: 1_000,
@@ -1648,7 +1713,7 @@ mod metadata_tests {
 
         // Page down past the known rows.
         let (state, cmds) = update(state, Msg::Key(KeyPress::plain(KeyCode::PageDown)));
-        let Some(Command::FetchMetadata { indices }) = cmds.first() else {
+        let Some(Command::FetchMetadata { indices, .. }) = cmds.first() else {
             panic!("scrolling into unknown rows must ask for them, got {cmds:?}");
         };
         assert!(!indices.is_empty());
@@ -1825,5 +1890,111 @@ mod metadata_tests {
             crate::render::hint_bar(&state, state.cols).contains("clear & exit"),
             "the filter hint must say what Esc does, since nothing else does"
         );
+    }
+
+    // ── metadata epoch (M4 task 4, decision 6) ─────────────────────────────
+
+    fn loaded(n: usize) -> State {
+        let (s, _) = update(
+            State {
+                rows: 30,
+                ..State::default()
+            },
+            Msg::ScanStarted {
+                estimated_total: n as u64,
+            },
+        );
+        let (s, _) = update(
+            s,
+            Msg::ScanBatch {
+                keys: (0..n).map(|i| format!("k:{i}").into_bytes()).collect(),
+            },
+        );
+        s
+    }
+
+    fn entry(index: usize) -> crate::msg::MetadataEntry {
+        crate::msg::MetadataEntry {
+            index,
+            kind: crate::state::KeyKind::Hash,
+            ttl_seconds: 99,
+            size_bytes: 1234,
+        }
+    }
+
+    #[test]
+    fn a_fetch_command_carries_the_current_epoch_and_a_rescan_changes_it() {
+        let s = loaded(50);
+        let before = s.metadata_epoch;
+        let (s2, _) = update(
+            s,
+            Msg::ScanStarted {
+                estimated_total: 50,
+            },
+        );
+        assert_ne!(s2.metadata_epoch, before, "indices were renumbered");
+        let (s3, cmds) = update(
+            s2,
+            Msg::ScanBatch {
+                keys: (0..50).map(|i| format!("z:{i}").into_bytes()).collect(),
+            },
+        );
+        let Some(Command::FetchMetadata { epoch, .. }) = cmds.first() else {
+            panic!("expected a fetch, got {cmds:?}");
+        };
+        assert_eq!(*epoch, s3.metadata_epoch);
+    }
+
+    #[test]
+    fn a_current_epoch_batch_applies() {
+        let s = loaded(50);
+        let epoch = s.metadata_epoch;
+        let (s, _) = update(
+            s,
+            Msg::MetadataBatch {
+                entries: vec![entry(3)],
+                gone: vec![4],
+                at_ms: 1_000,
+                epoch,
+            },
+        );
+        assert_eq!(s.keys.kind(3), Some(crate::state::KeyKind::Hash));
+        assert!(s.keys.is_gone(4));
+    }
+
+    /// The race: the shell issued a fetch under the old numbering; the rescan
+    /// renumbered; the reply lands afterwards. It must change nothing — no
+    /// type, TTL or size on key 3 and no tombstone on key 4, which now name
+    /// different keys.
+    #[test]
+    fn a_batch_from_before_the_rescan_changes_nothing() {
+        let s = loaded(50);
+        let stale = s.metadata_epoch;
+        let (s, _) = update(
+            s,
+            Msg::ScanStarted {
+                estimated_total: 50,
+            },
+        );
+        let (s, _) = update(
+            s,
+            Msg::ScanBatch {
+                keys: (0..50).map(|i| format!("z:{i}").into_bytes()).collect(),
+            },
+        );
+        let before = s.clone();
+        let (after, cmds) = update(
+            s,
+            Msg::MetadataBatch {
+                entries: vec![entry(3)],
+                gone: vec![4],
+                at_ms: 1_000,
+                epoch: stale,
+            },
+        );
+        assert_eq!(after.keys.kind(3), None);
+        assert!(!after.keys.is_gone(4));
+        assert_eq!(after, before, "a stale batch is dropped unread");
+        assert!(cmds.is_empty());
     }
 }

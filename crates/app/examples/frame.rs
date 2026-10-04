@@ -95,7 +95,7 @@ async fn main() {
         let cmds;
         (state, cmds) = update(state, msg);
         for c in cmds {
-            if let redis_pane_core::Command::FetchMetadata { indices } = c {
+            if let redis_pane_core::Command::FetchMetadata { indices, .. } = c {
                 pending = indices;
             }
         }
@@ -111,6 +111,7 @@ async fn main() {
         .iter()
         .filter_map(|i| state.keys.name(*i).map(|n| (*i, n.to_vec())))
         .collect();
+    let state_epoch = state.metadata_epoch;
     let t2 = Instant::now();
     if let Ok((entries, gone)) = redis_pane::redis::fetch_metadata(&client, &window).await {
         (state, _) = update(
@@ -119,6 +120,7 @@ async fn main() {
                 entries,
                 gone,
                 at_ms: clock.now_epoch_ms(),
+                epoch: state_epoch,
             },
         );
     }
