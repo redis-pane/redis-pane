@@ -122,7 +122,43 @@ pub fn frame(state: &State, theme: &Theme, clock: &dyn Clock, area: Rect) -> Buf
     if let Some(view) = state.help {
         help_overlay(state, view, theme, area, &mut buf);
     }
+    paint_background(&mut buf, theme);
     buf
+}
+
+/// Paint the theme's [`Token::Background`] under everything the frame drew.
+///
+/// Done once, last, over the finished buffer — not at the start — because
+/// almost every write goes through [`put`], which *replaces* a cell's style
+/// (`Style::reset()` first) and so would reset a pre-painted background to the
+/// terminal's, punching a dark hole under every string. And overlays blank
+/// their rectangle with spaces the same way. Painting after the last overlay
+/// means no draw path can leave a hole, and none has to remember to avoid one.
+///
+/// Only cells with *no* background of their own are touched, so `Selected` and
+/// `surface-detached` keep theirs. A cell showing text with no foreground gets
+/// `Token::Text`'s, since the terminal's default foreground is the one colour
+/// that cannot be trusted over a painted ground (light text on a light theme).
+/// A theme that paints nothing — `dark`, monochrome, `"background":
+/// "terminal"` — returns before touching the buffer, so its frames are
+/// byte-identical to what they were before the token existed.
+fn paint_background(buf: &mut Buffer, theme: &Theme) {
+    use ratatui::style::Color;
+    let Some(bg) = theme.background() else {
+        return;
+    };
+    let text_fg = theme.style(Token::Text).fg;
+    for cell in buf.content.iter_mut() {
+        if matches!(cell.bg, Color::Reset) {
+            cell.bg = bg;
+        }
+        if matches!(cell.fg, Color::Reset)
+            && !cell.symbol().trim().is_empty()
+            && let Some(fg) = text_fg
+        {
+            cell.fg = fg;
+        }
+    }
 }
 
 /// The value pane. Viewers land in M1.8; until then it states what is selected
@@ -1961,9 +1997,9 @@ fn describe_style(s: &Style) -> String {
         Some(other) => format!("{label}={other:?}"),
     };
     let fg = color(s.fg, "fg");
-    // A background is rare enough (only Token::Selected sets one) that it is
-    // worth calling out explicitly rather than silently dropping it, which is
-    // what this function did before the selection-highlight feature existed.
+    // A background is worth calling out explicitly rather than silently
+    // dropping it: `Selected`, `surface-detached`, and in a theme that paints
+    // one, `background` all set one.
     let bg = match s.bg {
         None => String::new(),
         Some(_) => format!(" {}", color(s.bg, "bg")),

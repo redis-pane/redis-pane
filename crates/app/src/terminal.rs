@@ -1110,7 +1110,9 @@ struct ColorEnv {
 /// on Windows an absent `TERM` means 256 colours, and `WT_SESSION` means
 /// truecolor.
 fn resolve_color_depth(env: ColorEnv) -> ColorDepth {
-    if env.no_color.is_some() {
+    // no-color.org: "present and not an empty string (regardless of its
+    // value)". `NO_COLOR=0` still disables colour; `NO_COLOR=` does not.
+    if env.no_color.as_deref().is_some_and(|v| !v.is_empty()) {
         return ColorDepth::Monochrome;
     }
     if matches!(env.colorterm.as_deref(), Some("truecolor") | Some("24bit"))
@@ -1219,10 +1221,29 @@ mod tests {
             ColorDepth::Monochrome
         );
         assert_eq!(
+            depth(Some("0"), Some("truecolor"), None),
+            ColorDepth::Monochrome,
+            "any non-empty value disables colour, including 0"
+        );
+    }
+
+    #[test]
+    fn an_empty_no_color_is_unset_per_no_color_org() {
+        // "present and not an empty string": `NO_COLOR=` must leave colour on.
+        assert_eq!(
+            depth(Some(""), Some("truecolor"), Some("xterm-256color")),
+            ColorDepth::TrueColor
+        );
+        assert_eq!(
+            depth(Some(""), None, Some("xterm-256color")),
+            ColorDepth::Ansi256
+        );
+        assert_eq!(
             depth(Some(""), None, None),
             ColorDepth::Monochrome,
-            "presence is what matters, not the value"
+            "an empty NO_COLOR is simply absent, and absence of TERM is monochrome"
         );
+        assert_eq!(windows_depth(Some(""), Some("1")), ColorDepth::TrueColor);
     }
 
     #[test]
