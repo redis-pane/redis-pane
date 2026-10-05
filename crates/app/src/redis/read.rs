@@ -17,10 +17,13 @@
 //! to decode invalid UTF-8 into a `String`, so one binary field used to fail
 //! the whole read. The Viewer decides how a cell is shown (review C2).
 
+use fred::clients::{Pipeline, WithOptions};
 use fred::prelude::*;
+use fred::types::ClusterHash;
 use fred::types::CustomCommand;
 use fred::types::InfoKind;
 use fred::types::Value as RedisValue;
+use fred::types::config::Options;
 use redis_pane_core::state::RawInfo;
 use redis_pane_core::state::slowlog::SlowlogEntry;
 use redis_pane_core::state::value::{
@@ -133,6 +136,54 @@ pub struct ReadValue {
     pub size_bytes: u32,
 }
 
+/// The pipeline the arming goes out in: on a Cluster client, pinned to the
+/// slot of `name` so `CLIENT CACHING YES` and `TYPE` share the owner's
+/// connection; on any other client, an ordinary pipeline.
+pub fn arming_pipeline(client: &Client, name: &[u8]) -> Pipeline<WithOptions<Client>> {
+    let options = if client.is_clustered() {
+        Options {
+            cluster_hash: Some(ClusterHash::Custom(fred::util::redis_keyslot(name))),
+            ..Options::default()
+        }
+    } else {
+        Options::default()
+    };
+    Pipeline::from(client.with_options(&options))
+}
+
+/// How many times the arming is re-sent because the slot's owner changed under
+/// it before giving up.
+const ARM_ATTEMPTS: u32 = 3;
+
+/// Send the arming and `TYPE` together and return `TYPE`'s answer.
+///
+/// On a Cluster there is one more way to arm the wrong node: the routing table
+/// can be stale. The pin sends `CLIENT CACHING YES` to the node the table names;
+/// if that is no longer the owner, `fred` follows `TYPE`'s `MOVED` to the new
+/// one but `CLIENT CACHING` is keyless and is never redirected, so the arming is
+/// spent on the old node and the pipeline still succeeds. `fred` corrects its
+/// table as it follows the redirect, so the owner read after the pipeline is
+/// the true one: if it differs from the one before, the arming went astray and
+/// is sent again, to the owner now in the table. A slot that will not settle
+/// is an error, never a quiet success the header would call live.
+async fn arm_and_type(client: &Client, name: &[u8], key: &Key) -> Result<String, Error> {
+    let slot = fred::util::redis_keyslot(name);
+    for _ in 0..ARM_ATTEMPTS {
+        let before = super::slot_owner(client, slot);
+        let pipeline = arming_pipeline(client, name);
+        let _: () = pipeline.client_caching(true).await?;
+        let _: () = pipeline.r#type(key.clone()).await?;
+        let (_, kind): (String, String) = pipeline.all().await?;
+        if before == super::slot_owner(client, slot) {
+            return Ok(kind);
+        }
+    }
+    Err(Error::new(
+        ErrorKind::Routing,
+        "the key's slot kept changing owner while arming tracking",
+    ))
+}
+
 /// Read a key and re-arm tracking for it.
 pub async fn read_value(
     client: &Client,
@@ -148,12 +199,15 @@ pub async fn read_value(
     // and `TYPE` go out as one pipeline, which fred writes with nothing in
     // between. Do not "simplify" this into fred's Options.caching, which is
     // inert in 10.1.0.
+    //
+    // On a Cluster `CLIENT CACHING` has no key, so left alone fred would send
+    // it to an arbitrary node while `TYPE` went to the owner, and the arming
+    // would be spent on a connection that tracks nothing for this key. Pinning
+    // the pipeline to the key's slot (`ClusterHash::Custom`) sends both to the
+    // owner's connection (M5 task 4, ADR-0022). On any other client the pin is
+    // not set, so there is still one read path here, not a cluster branch.
     let kind: String = if arming == Arming::Enabled {
-        let pipeline = client.pipeline();
-        let _: () = pipeline.client_caching(true).await?;
-        let _: () = pipeline.r#type(key.clone()).await?;
-        let (_, kind): (String, String) = pipeline.all().await?;
-        kind
+        arm_and_type(client, name, &key).await?
     } else {
         client.r#type(key.clone()).await?
     };

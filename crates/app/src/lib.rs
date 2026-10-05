@@ -9,6 +9,7 @@
 
 pub mod clipboard;
 pub mod config_io;
+pub mod liveness;
 pub mod metadata;
 pub mod redis;
 pub mod secret;

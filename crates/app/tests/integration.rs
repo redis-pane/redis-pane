@@ -5364,3 +5364,802 @@ mod cluster_scan {
         scan.await.unwrap();
     }
 }
+
+/// M5 task 4: liveness over a real cluster is pinned to the key's owner
+/// (ADR-0006, ADR-0009, ADR-0022).
+mod cluster_liveness {
+    use super::support::cluster::{Cluster, start_cluster};
+    use super::{ClusterSupport, Credentials};
+    use fred::interfaces::{ClientLike, TrackingInterface};
+    use fred::prelude::*;
+    use fred::types::CustomCommand;
+    use fred::types::config::Server;
+    use redis_pane::redis::read::{Arming, read_value};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::time::{Duration, Instant};
+
+    async fn connect(cluster: &Cluster) -> Client {
+        let (client, est) = redis_pane::redis::connect_with(
+            &cluster.seed_url(),
+            &Credentials::default(),
+            ClusterSupport::Allow,
+        )
+        .await
+        .expect("cluster client");
+        assert!(est.tracking_supported, "CLIENT TRACKING must be accepted");
+        client
+    }
+
+    fn slot(key: &str) -> u16 {
+        fred::util::redis_keyslot(key.as_bytes())
+    }
+
+    fn node(port: u16) -> Server {
+        Server::new("127.0.0.1", port)
+    }
+
+    /// `CLIENT TRACKINGINFO` as this client's own connection to `port` reports
+    /// it, rendered as text.
+    async fn tracking_info(client: &Client, port: u16) -> String {
+        let reply: fred::types::Value = client
+            .with_cluster_node(node(port))
+            .custom(
+                CustomCommand::new_static("CLIENT", None, false),
+                vec!["TRACKINGINFO"],
+            )
+            .await
+            .expect("CLIENT TRACKINGINFO");
+        format!("{reply:?}")
+    }
+
+    /// Unrelated traffic on the same client, to other slots: metadata reads
+    /// (pipelines of TYPE/TTL/MEMORY USAGE) and plain GETs. Interleaving with
+    /// the arming is the failure mode under test.
+    fn traffic(
+        client: &Client,
+        keys: Vec<String>,
+        stop: Arc<AtomicBool>,
+    ) -> tokio::task::JoinHandle<u64> {
+        let client = client.clone();
+        tokio::spawn(async move {
+            let mut n = 0u64;
+            while !stop.load(Ordering::Relaxed) {
+                let window: Vec<(usize, Vec<u8>)> = keys
+                    .iter()
+                    .enumerate()
+                    .map(|(i, k)| (i, k.as_bytes().to_vec()))
+                    .collect();
+                let _ = redis_pane::redis::fetch_metadata(&client, &window).await;
+                for k in &keys {
+                    let _ = client.get::<Option<String>, _>(k).await;
+                }
+                n += 1;
+            }
+            n
+        })
+    }
+
+    async fn next_invalidation(
+        rx: &mut tokio::sync::broadcast::Receiver<fred::types::client::Invalidation>,
+        key: &str,
+        within: Duration,
+    ) -> Option<fred::types::client::Invalidation> {
+        let deadline = Instant::now() + within;
+        loop {
+            let left = deadline.checked_duration_since(Instant::now())?;
+            match tokio::time::timeout(left, rx.recv()).await {
+                Ok(Ok(inv)) if inv.keys.iter().any(|k| k.as_bytes() == key.as_bytes()) => {
+                    return Some(inv);
+                }
+                Ok(Ok(_)) => {}
+                Ok(Err(_)) | Err(_) => return None,
+            }
+        }
+    }
+
+    /// SPIKE (M5 task 4, decision 1): the slot-pinned arming pipeline puts
+    /// `CLIENT CACHING YES` and `TYPE` on the owner's connection, with
+    /// nothing interleaved, for a key on each primary, across repeated
+    /// re-arms and under unrelated traffic on the same client.
+    #[tokio::test]
+    #[ignore = "needs docker"]
+    async fn spike_the_pinned_arming_lands_on_the_owner_under_concurrent_traffic() {
+        let cluster = start_cluster().await;
+        let client = connect(&cluster).await;
+        let writer = cluster.client().await;
+        let mut rx = client.invalidation_rx();
+        let primaries = cluster.primaries().await;
+
+        // Positive control: the flag is observable at all. A bare `CLIENT
+        // CACHING YES` sent to one node shows `caching-yes` until the next
+        // non-CLIENT command on that connection.
+        let p0 = primaries[0].port;
+        let _: () = client
+            .with_cluster_node(node(p0))
+            .client_caching(true)
+            .await
+            .unwrap();
+        let info = tracking_info(&client, p0).await;
+        assert!(info.contains("caching-yes"), "control: {info}");
+        let own = cluster.key_in_slot_of(p0).await;
+        let _: Option<String> = client.with_cluster_node(node(p0)).get(own).await.unwrap();
+        let info = tracking_info(&client, p0).await;
+        assert!(!info.contains("caching-yes"), "control after GET: {info}");
+
+        // Other-slot keys for the traffic.
+        let mut noise = Vec::new();
+        for p in &primaries {
+            for i in 0..4 {
+                let k = format!("noise:{}:{i}", p.port);
+                writer
+                    .set::<(), _, _>(&k, "n", None, None, false)
+                    .await
+                    .unwrap();
+                noise.push(k);
+            }
+        }
+
+        for primary in &primaries {
+            let key = cluster.key_in_slot_of(primary.port).await;
+            writer
+                .set::<(), _, _>(&key, "v0", None, None, false)
+                .await
+                .unwrap();
+            let owner = redis_pane::redis::slot_owner(&client, slot(&key)).expect("owner");
+            assert_eq!(owner.port, primary.port);
+
+            // Quiet phase: nothing else on the client, so a stray pending
+            // opt-in on a non-owner would still be there to see.
+            for round in 0..5 {
+                read_value(&client, key.as_bytes(), Arming::Enabled)
+                    .await
+                    .unwrap()
+                    .unwrap();
+                for other in primaries.iter().filter(|p| p.port != primary.port) {
+                    let info = tracking_info(&client, other.port).await;
+                    assert!(
+                        !info.contains("caching-yes"),
+                        "round {round}: non-owner {} holds a pending opt-in: {info}",
+                        other.port
+                    );
+                }
+                writer
+                    .set::<(), _, _>(&key, format!("q{round}"), None, None, false)
+                    .await
+                    .unwrap();
+                let inv = next_invalidation(&mut rx, &key, Duration::from_secs(5))
+                    .await
+                    .unwrap_or_else(|| panic!("quiet round {round}: no invalidation for {key}"));
+                assert_eq!(inv.server.port, primary.port, "quiet round {round}");
+            }
+
+            // Noisy phase: the same, under concurrent traffic to other slots.
+            let stop = Arc::new(AtomicBool::new(false));
+            let ts: Vec<_> = (0..4)
+                .map(|_| traffic(&client, noise.clone(), stop.clone()))
+                .collect();
+            for round in 0..20 {
+                read_value(&client, key.as_bytes(), Arming::Enabled)
+                    .await
+                    .unwrap()
+                    .unwrap();
+                writer
+                    .set::<(), _, _>(&key, format!("n{round}"), None, None, false)
+                    .await
+                    .unwrap();
+                let inv = next_invalidation(&mut rx, &key, Duration::from_secs(5))
+                    .await
+                    .unwrap_or_else(|| panic!("noisy round {round}: no invalidation for {key}"));
+                assert_eq!(inv.server.port, primary.port, "noisy round {round}");
+            }
+            stop.store(true, Ordering::Relaxed);
+            let mut passes = 0;
+            for t in ts {
+                passes += t.await.unwrap();
+            }
+            eprintln!(
+                "primary {}: {passes} traffic passes during arming",
+                primary.port
+            );
+            assert!(passes > 0);
+        }
+        let _ = client.quit().await;
+        let _ = writer.quit().await;
+    }
+
+    /// NEGATIVE CONTROL for the spike: the same arming without the pin. If
+    /// this never missed, the spike above would prove nothing. Un-pinned,
+    /// `CLIENT CACHING YES` has no key and goes to an arbitrary node, so some
+    /// arming must be lost.
+    #[tokio::test]
+    #[ignore = "needs docker"]
+    async fn spike_control_an_unpinned_arming_is_lost_on_some_nodes() {
+        let cluster = start_cluster().await;
+        let client = connect(&cluster).await;
+        let writer = cluster.client().await;
+        let mut rx = client.invalidation_rx();
+        // fred sends a keyless command to one node, the same one every time,
+        // so which key is hit depends on where that is: try a key on each
+        // primary, and at least the other two must miss.
+        let mut missed = 0;
+        for primary in cluster.primaries().await {
+            let key = cluster.key_in_slot_of(primary.port).await;
+            writer
+                .set::<(), _, _>(&key, "v0", None, None, false)
+                .await
+                .unwrap();
+            for round in 0..5 {
+                let pipeline = client.pipeline();
+                let _: () = pipeline.client_caching(true).await.unwrap();
+                let _: () = pipeline.r#type(key.as_str()).await.unwrap();
+                let _: (String, String) = pipeline.all().await.unwrap();
+                writer
+                    .set::<(), _, _>(&key, format!("u{round}"), None, None, false)
+                    .await
+                    .unwrap();
+                if next_invalidation(&mut rx, &key, Duration::from_millis(700))
+                    .await
+                    .is_none()
+                {
+                    missed += 1;
+                }
+            }
+        }
+        eprintln!("unpinned arming: {missed}/15 rounds produced no invalidation");
+        assert!(
+            missed > 0,
+            "the control never failed, so the spike discriminates nothing"
+        );
+        let _ = client.quit().await;
+        let _ = writer.quit().await;
+    }
+
+    // ── The Viewer's shell side, driven for real ────────────────────────────
+    //
+    // `terminal.rs` needs a terminal, so this reproduces the loop it runs for
+    // the open key with the same `redis_pane::liveness` listeners, the same
+    // `read_value`, and the same `OpenOwner` recording. The one thing standing
+    // in for the core is a two-line model of what its `Msg::Invalidated` and
+    // `Msg::Connected` handlers do (drop the liveness claim, refetch; live
+    // again only when the refetch has armed), which the core's own unit tests
+    // pin. Everything that decides *which node* is real.
+
+    use redis_pane_core::Msg;
+    use std::sync::atomic::AtomicU32;
+
+    struct Viewer {
+        /// The current client; replaced by the redial a lost link causes, as
+        /// the shell replaces its own.
+        cur: Arc<Mutex<Client>>,
+        key: String,
+        owner: redis_pane::liveness::OpenOwner,
+        /// The model's `● live`: true only after a read armed, false the
+        /// instant a message says the arming may be gone.
+        live: Arc<AtomicBool>,
+        /// Refetches (reads that re-armed) since the open.
+        refetches: Arc<AtomicU32>,
+        /// Times the model dropped `● live`.
+        drops: Arc<AtomicU32>,
+        /// `Msg::ConnectionLost`s received, each of which the shell answers
+        /// with a redial.
+        lost: Arc<AtomicU32>,
+        /// Servers named by each invalidation, in order.
+        invalidated_by: Arc<Mutex<Vec<Server>>>,
+    }
+
+    use std::sync::Mutex;
+
+    async fn dial(seed: &str) -> Client {
+        let (client, _) =
+            redis_pane::redis::connect_with(seed, &Credentials::default(), ClusterSupport::Allow)
+                .await
+                .expect("cluster client");
+        client
+    }
+
+    /// The listeners `Shell::watch_link` starts for a client, plus the
+    /// invalidation one.
+    fn attach(
+        client: &Client,
+        owner: &redis_pane::liveness::OpenOwner,
+        tx: &tokio::sync::mpsc::Sender<Msg>,
+        seen: &Arc<Mutex<Vec<Server>>>,
+        errors: bool,
+    ) {
+        let clock: Arc<dyn redis_pane_core::clock::Clock> = Arc::new(redis_pane::SystemClock);
+        redis_pane::liveness::watch_reconnects(client, owner, tx, &clock);
+        redis_pane::liveness::watch_topology(client, owner, tx);
+        if errors {
+            redis_pane::liveness::watch_errors(client, tx, &clock);
+        }
+        let mut invalidations = client.invalidation_rx();
+        let (tx, seen) = (tx.clone(), seen.clone());
+        tokio::spawn(async move {
+            while let Ok(inv) = invalidations.recv().await {
+                seen.lock().unwrap().push(inv.server);
+                if tx.send(Msg::Invalidated).await.is_err() {
+                    return;
+                }
+            }
+        });
+    }
+
+    /// `read_key` in the shell: arm and read, record the owner, and report a
+    /// wedged client as a lost link. Retries ordinary failures (a cluster in
+    /// the middle of a failover refuses reads for a moment); `false` means the
+    /// client is wedged and a redial is on its way.
+    async fn read(
+        client: &Client,
+        owner: &redis_pane::liveness::OpenOwner,
+        key: &str,
+        tx: &tokio::sync::mpsc::Sender<Msg>,
+    ) -> bool {
+        let deadline = Instant::now() + Duration::from_secs(60);
+        loop {
+            match read_value(client, key.as_bytes(), Arming::Enabled).await {
+                Ok(_) => {
+                    owner.armed(client, key.as_bytes());
+                    return true;
+                }
+                Err(e) if redis_pane::liveness::is_wedged(client, &e) => {
+                    eprintln!("viewer read wedged: {e:?}");
+                    let _ = tx.send(Msg::ConnectionLost).await;
+                    return false;
+                }
+                Err(e) => {
+                    eprintln!("viewer read failed: {e:?}");
+                    assert!(Instant::now() < deadline, "read never succeeded: {e:?}");
+                    tokio::time::sleep(Duration::from_millis(200)).await;
+                }
+            }
+        }
+    }
+
+    impl Viewer {
+        async fn open(cluster: &Cluster, key: &str) -> Viewer {
+            Viewer::open_as(cluster, key, false).await
+        }
+
+        /// `healing`: a client that *has* a reconnect policy, so a dropped
+        /// node connection is redialled in place and `reconnect_rx` names it.
+        /// The app's own Cluster client has none (see `watch_errors`), so
+        /// this is not what production does; it is the way to feed
+        /// `watch_reconnects` a real reconnect of an unrelated node. Its
+        /// `error_rx` is not listened to, as a drop is not a lost link there.
+        async fn open_as(cluster: &Cluster, key: &str, healing: bool) -> Viewer {
+            let seed = cluster.seed_url();
+            let client = if healing {
+                let mut config = Config::from_url(&seed).expect("cluster url");
+                config.version = fred::types::RespVersion::RESP3;
+                let mut builder = Builder::from_config(config);
+                builder.set_policy(ReconnectPolicy::new_constant(0, 250));
+                let client = builder.build().expect("client");
+                client.init().await.expect("init");
+                assert!(redis_pane::redis::probe_tracking(&client).await);
+                client
+            } else {
+                dial(&seed).await
+            };
+            let owner = redis_pane::liveness::OpenOwner::default();
+            let (tx, mut rx) = tokio::sync::mpsc::channel::<Msg>(64);
+            let v = Viewer {
+                cur: Arc::new(Mutex::new(client.clone())),
+                key: key.to_string(),
+                owner: owner.clone(),
+                live: Arc::new(AtomicBool::new(false)),
+                refetches: Arc::new(AtomicU32::new(0)),
+                drops: Arc::new(AtomicU32::new(0)),
+                lost: Arc::new(AtomicU32::new(0)),
+                invalidated_by: Arc::new(Mutex::new(Vec::new())),
+            };
+            attach(&client, &owner, &tx, &v.invalidated_by, !healing);
+            assert!(read(&client, &owner, key, &tx).await);
+            v.live.store(true, Ordering::SeqCst);
+
+            // The loop: what the core asks of the shell for each message.
+            let (cur, live, refetches, drops, lost, seen) = (
+                v.cur.clone(),
+                v.live.clone(),
+                v.refetches.clone(),
+                v.drops.clone(),
+                v.lost.clone(),
+                v.invalidated_by.clone(),
+            );
+            let (o, k) = (owner.clone(), key.to_string());
+            tokio::spawn(async move {
+                while let Some(msg) = rx.recv().await {
+                    let rearm = match msg {
+                        Msg::Invalidated
+                        | Msg::Connected {
+                            tracking_supported: true,
+                            ..
+                        } => true,
+                        Msg::Connected { .. } => {
+                            live.store(false, Ordering::SeqCst);
+                            drops.fetch_add(1, Ordering::SeqCst);
+                            false
+                        }
+                        Msg::ConnectionLost => {
+                            lost.fetch_add(1, Ordering::SeqCst);
+                            live.store(false, Ordering::SeqCst);
+                            drops.fetch_add(1, Ordering::SeqCst);
+                            // The shell's redial: a new client replaces the
+                            // old, which is quit, and the record is cleared.
+                            let fresh = dial(&seed).await;
+                            let old = std::mem::replace(&mut *cur.lock().unwrap(), fresh.clone());
+                            tokio::spawn(async move {
+                                let _ = old.quit().await;
+                            });
+                            o.clear();
+                            attach(&fresh, &o, &tx, &seen, true);
+                            true
+                        }
+                        _ => false,
+                    };
+                    if rearm {
+                        live.store(false, Ordering::SeqCst);
+                        drops.fetch_add(1, Ordering::SeqCst);
+                        let client = cur.lock().unwrap().clone();
+                        if read(&client, &o, &k, &tx).await {
+                            refetches.fetch_add(1, Ordering::SeqCst);
+                            live.store(true, Ordering::SeqCst);
+                        }
+                    }
+                }
+            });
+            v
+        }
+
+        fn client(&self) -> Client {
+            self.cur.lock().unwrap().clone()
+        }
+        fn refetches(&self) -> u32 {
+            self.refetches.load(Ordering::SeqCst)
+        }
+        fn drops(&self) -> u32 {
+            self.drops.load(Ordering::SeqCst)
+        }
+        fn live(&self) -> bool {
+            self.live.load(Ordering::SeqCst)
+        }
+        fn last_invalidated_by(&self) -> Option<Server> {
+            self.invalidated_by.lock().unwrap().last().cloned()
+        }
+    }
+
+    /// Poll `cond` every 50ms until it holds, or panic at `within`.
+    async fn until(what: &str, within: Duration, mut cond: impl FnMut() -> bool) {
+        let deadline = Instant::now() + within;
+        while !cond() {
+            assert!(Instant::now() < deadline, "timed out waiting for: {what}");
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    }
+
+    /// Write `key` from another client and wait for the Viewer to refetch and
+    /// be live again, returning once it has. Proves a *later* write still
+    /// invalidates, which is what re-arming is for.
+    async fn write_and_expect_refetch(v: &Viewer, writer: &Client, value: &str) {
+        let before = v.refetches();
+        writer
+            .set::<(), _, _>(&v.key, value, None, None, false)
+            .await
+            .unwrap();
+        until(
+            &format!("a refetch after writing {value}"),
+            Duration::from_secs(10),
+            || v.refetches() > before && v.live(),
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    #[ignore = "needs docker"]
+    async fn the_open_key_is_armed_on_its_owner_for_a_key_on_each_primary() {
+        let cluster = start_cluster().await;
+        let writer = cluster.client().await;
+        for primary in cluster.primaries().await {
+            let key = cluster.key_in_slot_of(primary.port).await;
+            writer
+                .set::<(), _, _>(&key, "v0", None, None, false)
+                .await
+                .unwrap();
+            let v = Viewer::open(&cluster, &key).await;
+            assert_eq!(v.owner.owner().map(|s| s.port), Some(primary.port));
+            assert!(v.live());
+            // The arming is consumed by every invalidation, so five in a row
+            // is five re-arms.
+            for round in 0..5 {
+                write_and_expect_refetch(&v, &writer, &format!("w{round}")).await;
+                assert_eq!(
+                    v.last_invalidated_by().map(|s| s.port),
+                    Some(primary.port),
+                    "round {round}: the push must come from the owner"
+                );
+            }
+            assert_eq!(v.refetches(), 5);
+            assert_eq!(v.lost.load(Ordering::SeqCst), 0);
+            let _ = v.client().quit().await;
+        }
+        let _ = writer.quit().await;
+    }
+
+    #[tokio::test]
+    #[ignore = "needs docker"]
+    async fn no_other_node_holds_a_pending_opt_in_for_the_open_key() {
+        // `CLIENT TRACKINGINFO` does show it: `caching-yes` is listed while a
+        // `CLIENT CACHING YES` is waiting for its command (the spike's control
+        // proves the flag is observable), so a mis-routed arming would leave it
+        // set on a non-owner.
+        let cluster = start_cluster().await;
+        let writer = cluster.client().await;
+        let primaries = cluster.primaries().await;
+        let key = cluster.key_in_slot_of(primaries[0].port).await;
+        writer
+            .set::<(), _, _>(&key, "v0", None, None, false)
+            .await
+            .unwrap();
+        let v = Viewer::open(&cluster, &key).await;
+        for round in 0..5 {
+            for other in primaries.iter().filter(|p| p.port != primaries[0].port) {
+                let info = tracking_info(&v.client(), other.port).await;
+                assert!(
+                    !info.contains("caching-yes"),
+                    "round {round}: {} holds a pending opt-in: {info}",
+                    other.port
+                );
+                // They are in tracking mode, though: the opt-in is what is absent.
+                assert!(
+                    info.contains("optin"),
+                    "{} is not tracking: {info}",
+                    other.port
+                );
+            }
+            write_and_expect_refetch(&v, &writer, &format!("w{round}")).await;
+        }
+        let _ = v.client().quit().await;
+        let _ = writer.quit().await;
+    }
+
+    /// `CLIENT KILL` this client's own connection to `port`.
+    async fn kill_connection(cluster: &Cluster, client: &Client, port: u16) {
+        let id: i64 = client
+            .with_cluster_node(node(port))
+            .client_id()
+            .await
+            .expect("CLIENT ID");
+        cluster
+            .cli(port, &["client", "kill", "id", &id.to_string()])
+            .await;
+    }
+
+    #[tokio::test]
+    #[ignore = "needs docker"]
+    async fn an_unrelated_node_reconnecting_in_place_neither_refetches_nor_drops_live() {
+        let cluster = start_cluster().await;
+        let writer = cluster.client().await;
+        let primaries = cluster.primaries().await;
+        let key = cluster.key_in_slot_of(primaries[0].port).await;
+        writer
+            .set::<(), _, _>(&key, "v0", None, None, false)
+            .await
+            .unwrap();
+        let v = Viewer::open_as(&cluster, &key, true).await;
+        let mut reconnects = v.client().reconnect_rx();
+
+        let other = primaries[1].port;
+        kill_connection(&cluster, &v.client(), other).await;
+        // fred redials it and says so.
+        let back = tokio::time::timeout(Duration::from_secs(15), async {
+            loop {
+                if let Ok(s) = reconnects.recv().await
+                    && s.port == other
+                {
+                    return s;
+                }
+            }
+        })
+        .await
+        .expect("the killed node connection never came back");
+        assert_eq!(back.port, other);
+        // ... and the shell re-enabled tracking on it, without a refetch.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let info = tracking_info(&v.client(), other).await;
+            if info.contains("optin") {
+                break;
+            }
+            assert!(Instant::now() < deadline, "never re-armed tracking: {info}");
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        // Give a (wrong) refetch every chance to happen, deterministically:
+        // a later round trip through the same channel ordering is the next
+        // invalidation, below. Anything wrong before it would already show.
+        assert!(v.live(), "an unrelated node reconnecting dropped live");
+        assert_eq!(v.refetches(), 0, "an unrelated node reconnecting refetched");
+        assert_eq!(v.drops(), 0);
+        assert_eq!(
+            v.lost.load(Ordering::SeqCst),
+            0,
+            "no redial for a node that came back"
+        );
+        // Still armed on the owner: a write still invalidates.
+        write_and_expect_refetch(&v, &writer, "after").await;
+        assert_eq!(v.refetches(), 1);
+        assert_eq!(
+            v.last_invalidated_by().map(|s| s.port),
+            Some(primaries[0].port)
+        );
+        let _ = v.client().quit().await;
+        let _ = writer.quit().await;
+    }
+
+    /// What the app actually does, since its Cluster client has no reconnect
+    /// policy: any node's dropped connection leaves the client unusable, so the
+    /// link is reported lost and redialled, and the key is refetched and
+    /// re-armed on the new client. The header may not claim live in between,
+    /// and must be live and armed afterwards.
+    #[tokio::test]
+    #[ignore = "needs docker"]
+    async fn an_unrelated_node_dropping_costs_a_redial_and_ends_live_and_armed() {
+        let cluster = start_cluster().await;
+        let writer = cluster.client().await;
+        let primaries = cluster.primaries().await;
+        let key = cluster.key_in_slot_of(primaries[0].port).await;
+        writer
+            .set::<(), _, _>(&key, "v0", None, None, false)
+            .await
+            .unwrap();
+        let v = Viewer::open(&cluster, &key).await;
+
+        kill_connection(&cluster, &v.client(), primaries[1].port).await;
+        until("a redial and a refetch", Duration::from_secs(30), || {
+            v.lost.load(Ordering::SeqCst) >= 1 && v.refetches() >= 1 && v.live()
+        })
+        .await;
+        assert!(v.drops() >= 1, "live was never dropped over the lost link");
+        assert_eq!(v.owner.owner().map(|s| s.port), Some(primaries[0].port));
+        write_and_expect_refetch(&v, &writer, "after").await;
+        assert_eq!(
+            v.last_invalidated_by().map(|s| s.port),
+            Some(primaries[0].port)
+        );
+        let _ = v.client().quit().await;
+        let _ = writer.quit().await;
+    }
+
+    #[tokio::test]
+    #[ignore = "needs docker"]
+    async fn the_owner_reconnecting_drops_live_then_re_arms_and_a_later_write_invalidates() {
+        let cluster = start_cluster().await;
+        let writer = cluster.client().await;
+        let primaries = cluster.primaries().await;
+        let key = cluster.key_in_slot_of(primaries[0].port).await;
+        writer
+            .set::<(), _, _>(&key, "v0", None, None, false)
+            .await
+            .unwrap();
+        let v = Viewer::open(&cluster, &key).await;
+
+        kill_connection(&cluster, &v.client(), primaries[0].port).await;
+        // The owner's drop is reported at once, and when the connection is
+        // back the claim is dropped, the key refetched and re-armed.
+        until(
+            "a refetch after the owner reconnected",
+            Duration::from_secs(20),
+            || v.refetches() >= 1 && v.live(),
+        )
+        .await;
+        assert!(v.drops() >= 1, "live was never dropped");
+        assert!(
+            v.lost.load(Ordering::SeqCst) >= 1,
+            "the owner's drop is a lost link"
+        );
+        // The re-arm is real: a write made now invalidates.
+        let inv_before = v.invalidated_by.lock().unwrap().len();
+        let refetches = v.refetches();
+        writer
+            .set::<(), _, _>(&key, "after", None, None, false)
+            .await
+            .unwrap();
+        until(
+            "an invalidation after the re-arm",
+            Duration::from_secs(10),
+            || {
+                v.invalidated_by.lock().unwrap().len() > inv_before
+                    && v.refetches() > refetches
+                    && v.live()
+            },
+        )
+        .await;
+        assert_eq!(
+            v.last_invalidated_by().map(|s| s.port),
+            Some(primaries[0].port)
+        );
+        let _ = v.client().quit().await;
+        let _ = writer.quit().await;
+    }
+
+    /// Drive a command at the key until `done`: `fred` learns of a failover or
+    /// slot move from traffic, and the Viewer's own sync is only periodic.
+    async fn nudge_until(v: &Viewer, what: &str, mut done: impl FnMut() -> bool) {
+        let deadline = Instant::now() + Duration::from_secs(60);
+        while !done() {
+            assert!(Instant::now() < deadline, "timed out waiting for: {what}");
+            let _ = v.client().get::<Option<String>, _>(&v.key).await;
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "needs docker"]
+    async fn a_forced_failover_re_arms_the_key_on_the_new_primary() {
+        let cluster = start_cluster().await;
+        let writer = cluster.client().await;
+        let primaries = cluster.primaries().await;
+        let old = &primaries[0];
+        let key = cluster.key_in_slot_of(old.port).await;
+        writer
+            .set::<(), _, _>(&key, "v0", None, None, false)
+            .await
+            .unwrap();
+        let v = Viewer::open(&cluster, &key).await;
+        let replica = cluster
+            .replicas()
+            .await
+            .into_iter()
+            .find(|r| r.primary_id.as_deref() == Some(old.id.as_str()))
+            .expect("a replica");
+
+        cluster.failover(replica.port).await;
+        nudge_until(&v, "the key re-armed on the promoted replica", || {
+            v.refetches() >= 1 && v.live() && v.owner.owner().map(|s| s.port) == Some(replica.port)
+        })
+        .await;
+        // A later write goes to the new primary, and invalidates from it.
+        let writer2 = cluster.client().await;
+        write_and_expect_refetch(&v, &writer2, "after-failover").await;
+        assert_eq!(v.last_invalidated_by().map(|s| s.port), Some(replica.port));
+        eprintln!(
+            "failover: {} lost link(s), {} refetch(es)",
+            v.lost.load(Ordering::SeqCst),
+            v.refetches()
+        );
+        let _ = v.client().quit().await;
+        let _ = writer.quit().await;
+        let _ = writer2.quit().await;
+    }
+
+    #[tokio::test]
+    #[ignore = "needs docker"]
+    async fn a_slot_migration_re_arms_the_key_on_the_new_owner() {
+        let cluster = start_cluster().await;
+        let writer = cluster.client().await;
+        let primaries = cluster.primaries().await;
+        let (from, to) = (primaries[0].port, primaries[1].port);
+        let key = cluster.key_in_slot_of(from).await;
+        writer
+            .set::<(), _, _>(&key, "v0", None, None, false)
+            .await
+            .unwrap();
+        let v = Viewer::open(&cluster, &key).await;
+
+        cluster.migrate_slot(slot(&key), from, to).await;
+        nudge_until(&v, "the key re-armed on the slot's new owner", || {
+            v.refetches() >= 1 && v.live() && v.owner.owner().map(|s| s.port) == Some(to)
+        })
+        .await;
+        let writer2 = cluster.client().await;
+        write_and_expect_refetch(&v, &writer2, "after-migration").await;
+        assert_eq!(v.last_invalidated_by().map(|s| s.port), Some(to));
+        eprintln!(
+            "migration: {} lost link(s), {} refetch(es)",
+            v.lost.load(Ordering::SeqCst),
+            v.refetches()
+        );
+        let _ = v.client().quit().await;
+        let _ = writer.quit().await;
+        let _ = writer2.quit().await;
+    }
+}

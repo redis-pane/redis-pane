@@ -169,6 +169,12 @@ they are expensive to retrofit:
   on one branch of several (verified against Redis 8.4.0; ADR-0006). Any memo keyed by key-name reintroduces
   the exact RedisInsight bug this project was started over — see ADR-0006 before adding one, and
   note that "just for the first frame" is how it starts.
+- **On a Cluster the arming is pinned to the key's owner** (ADR-0022). `read.rs` builds the arming
+  pipeline from a slot-pinned wrapper, and `crates/app/src/liveness.rs` records the owner `Server`
+  (`OpenOwner::armed`, called wherever a read arms) and filters reconnects and topology changes by
+  it: only the owner's reconnect, or the slot changing owner, sends `Msg::Connected`. The core
+  knows no node type. `fred` 10.1.0 wedges on a read of a migrating slot; `liveness::is_wedged`
+  turns that into a redial.
 - **Mutations flow through one path** that produces a command preview before executing. Read-only
   mode and confirmation-scaling are enforced at that chokepoint, not at each call site.
 - **The clipboard method is chosen by SSH detection, not fixed to one API** (ADR-0013). Over a
