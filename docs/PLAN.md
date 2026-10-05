@@ -336,7 +336,7 @@ files touched, tests, the CLAUDE.md rules it binds, and what stays out of scope:
 
 Palette, Console, dashboard, monitor, pub/sub, slowlog (M3) — Console cut, Palette shipped then
 withdrawn (ADR-0020), see §6 above. Cluster is milestone M5, after the beta — designed in
-[`m5-cluster.md`](plans/m5-cluster.md). Rebuild cost at real `SCAN` order is milestone M6, also
+[`m5-cluster.md`](plans/m5-cluster.md) and split into ten tasks in [`m5-planning.md`](plans/m5-planning.md). Rebuild cost at real `SCAN` order is milestone M6, also
 after the beta — [`m6-perf-rebuild.md`](plans/m6-perf-rebuild.md); until it ships, a Cluster target is refused at startup,
 not quietly served (§7, [ADR-0021](adr/0021-cluster-refused-until-supported.md)). Themes beyond the two M0 defaults, the ASCII glyph
 fallback, session restore, and the million-key performance work are M4 (§7). Packaging and

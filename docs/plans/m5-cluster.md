@@ -1,6 +1,6 @@
 # M5 — Cluster
 
-Status: **designed — not started.** Scheduled after the beta (`0.1.0-beta.1`, the end of M4).
+Status: **planned — not started.** The task breakdown is [`m5-planning.md`](m5-planning.md). Scheduled after the beta (`0.1.0-beta.1`, the end of M4).
 Decided 2026-10-03: Cluster is its own milestone rather than part of M4. Until M5 ships, a Cluster
 target is refused at startup ([ADR-0021](../adr/0021-cluster-refused-until-supported.md), M4
 task 1, [`m4-cluster-refusal.md`](m4-cluster-refusal.md)). That refusal is "stage 0" of this

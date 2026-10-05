@@ -297,7 +297,7 @@ config file; a **Connection** is a live session, which may be **ad-hoc** (no Pro
   (merged scan, liveness armed on the key's owner node, per-node reconnect), then the server
   views made cluster-aware (an aggregated Dashboard with a node table, merged Slowlog and Monitor,
   sharded Pub/Sub) — without a connection switcher, so ADR-0005 holds. Designed in
-  [`plans/m5-cluster.md`](plans/m5-cluster.md); until it ships a Cluster target is refused
+  [`plans/m5-cluster.md`](plans/m5-cluster.md), tasks in [`plans/m5-planning.md`](plans/m5-planning.md); until it ships a Cluster target is refused
   ([ADR-0021](adr/0021-cluster-refused-until-supported.md)).
 - **M6 — Rebuilds at real SCAN order.** After the beta. M4's perf harness loaded keys in name
   order; real `SCAN` order is effectively random, and at 1M keys a tree toggle, a sort change or a
