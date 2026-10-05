@@ -194,9 +194,12 @@ pub(super) fn build_copy(state: State, what: CopyWhat) -> (State, Vec<Command>) 
             None => return (state, nothing_open()),
         },
         CopyWhat::Command => match state.open.as_ref().map(|open| (open, open.value.as_ref())) {
-            Some((open, Some(value))) => {
-                redis_cli_command(&state.connection.target, &open.name, value)
-            }
+            Some((open, Some(value))) => redis_cli_command(
+                &state.connection.target,
+                &open.name,
+                value,
+                state.connection.topology.is_some(),
+            ),
             Some((_, None)) => return (state, gone()),
             None => return (state, nothing_open()),
         },

@@ -122,7 +122,11 @@ fn connect_or_exit(
         eprintln!("redis-pane: {e}");
         std::process::exit(exit::CONNECTION);
     });
-    match runtime.block_on(redis::connect_with(dial, credentials)) {
+    match runtime.block_on(redis::connect_with(
+        dial,
+        credentials,
+        redis::ClusterSupport::Refuse,
+    )) {
         Ok((client, established)) => (runtime, client, established),
         Err(err) => {
             eprintln!("{}", startup_failure(connection, &err));
@@ -273,6 +277,8 @@ fn main() {
         dial.to_string(),
         resolution.credentials.clone(),
         session_store,
+        // Until M5 task 5 opens the gate (ADR-0022).
+        redis::ClusterSupport::Refuse,
     )) {
         eprintln!("redis-pane: {err}");
         std::process::exit(exit::CONNECTION);

@@ -60,8 +60,19 @@ pub fn value_text(value: &Value, now_ms: u64) -> String {
 /// itself: there is no type to match when a key was confirmed gone before
 /// ever loading, and a function that cannot be called for that case is safer
 /// than one that has to be taught not to unwrap a `None`.
-pub fn redis_cli_command(target: &str, name: &crate::key::KeyName, value: &Value) -> String {
-    let connection = if target.contains("://") {
+///
+/// On a Cluster (`cluster`), the seed host and port with `-c` and no `-n`: `-c`
+/// follows `MOVED`, and a Cluster has only db 0. The seed is what the title bar
+/// shows, and `-c` makes the owner irrelevant (M5 task 2).
+pub fn redis_cli_command(
+    target: &str,
+    name: &crate::key::KeyName,
+    value: &Value,
+    cluster: bool,
+) -> String {
+    let connection = if cluster {
+        cluster_connection(target)
+    } else if target.contains("://") {
         format!("-u {}", shell_quote(target))
     } else {
         // `host:port/db` — the shape the title bar shows.
@@ -84,6 +95,21 @@ pub fn redis_cli_command(target: &str, name: &crate::key::KeyName, value: &Value
         Value::Stream(_) => format!("XRANGE {key} - +"),
     };
     format!("redis-cli {connection} {verb}")
+}
+
+/// `-c -h <seed host> -p <seed port>` from a target in either shape the title
+/// bar shows (`host:port/db`, or a URL), plus `--tls` for a `rediss` scheme.
+fn cluster_connection(target: &str) -> String {
+    let (scheme, rest) = target.split_once("://").unwrap_or(("", target));
+    let rest = rest.rsplit_once('@').map_or(rest, |(_, host)| host);
+    let address = rest.split('/').next().unwrap_or(rest);
+    let (host, port) = address.rsplit_once(':').unwrap_or((address, "6379"));
+    let tls = if scheme.starts_with("rediss") {
+        " --tls"
+    } else {
+        ""
+    };
+    format!("-c -h {host} -p {port}{tls}")
 }
 
 /// Single-quote for a POSIX shell.
@@ -162,28 +188,38 @@ mod tests {
     fn the_command_matches_the_type_so_it_actually_runs() {
         let target = "cache-01:6379/0";
         assert!(
-            redis_cli_command(target, &"k".into(), &hash()).ends_with("HGETALL k"),
+            redis_cli_command(target, &"k".into(), &hash(), false).ends_with("HGETALL k"),
             "GET on a hash is an error"
         );
         assert!(
-            redis_cli_command(target, &"k".into(), &Value::Str(StringValue::new("v", 8)))
-                .ends_with("GET k")
+            redis_cli_command(
+                target,
+                &"k".into(),
+                &Value::Str(StringValue::new("v", 8)),
+                false
+            )
+            .ends_with("GET k")
         );
         assert!(
-            redis_cli_command(target, &"k".into(), &Value::ZSet(ScoredValue::default()))
-                .ends_with("ZRANGE k 0 -1 WITHSCORES")
+            redis_cli_command(
+                target,
+                &"k".into(),
+                &Value::ZSet(ScoredValue::default()),
+                false
+            )
+            .ends_with("ZRANGE k 0 -1 WITHSCORES")
         );
     }
 
     #[test]
     fn the_command_carries_the_host_port_and_database() {
-        let cmd = redis_cli_command("cache-01:6380/3", &"k".into(), &hash());
+        let cmd = redis_cli_command("cache-01:6380/3", &"k".into(), &hash(), false);
         assert_eq!(cmd, "redis-cli -h cache-01 -p 6380 -n 3 HGETALL k");
     }
 
     #[test]
     fn a_url_target_is_passed_through_as_a_url() {
-        let cmd = redis_cli_command("redis://cache-01.eu-w1:6379", &"k".into(), &hash());
+        let cmd = redis_cli_command("redis://cache-01.eu-w1:6379", &"k".into(), &hash(), false);
         assert!(
             cmd.starts_with("redis-cli -u redis://cache-01.eu-w1:6379"),
             "{cmd}"
@@ -192,28 +228,57 @@ mod tests {
 
     #[test]
     fn keys_that_need_quoting_get_it() {
-        let cmd = redis_cli_command("h:6379/0", &"key with space".into(), &hash());
+        let cmd = redis_cli_command("h:6379/0", &"key with space".into(), &hash(), false);
         assert!(cmd.ends_with("HGETALL 'key with space'"), "{cmd}");
 
-        let cmd = redis_cli_command("h:6379/0", &"it's".into(), &hash());
+        let cmd = redis_cli_command("h:6379/0", &"it's".into(), &hash(), false);
         assert!(cmd.ends_with(r"HGETALL 'it'\''s'"), "{cmd}");
     }
 
     #[test]
     fn ordinary_keys_are_left_unquoted_because_quoting_them_is_noise() {
-        let cmd = redis_cli_command("h:6379/0", &"user:8812:session".into(), &hash());
+        let cmd = redis_cli_command("h:6379/0", &"user:8812:session".into(), &hash(), false);
         assert!(cmd.ends_with("HGETALL user:8812:session"), "{cmd}");
     }
 
     #[test]
     fn a_key_that_is_not_utf8_is_quoted_by_its_real_bytes() {
-        let cmd = redis_cli_command("h:6379/0", &b"\xff\xfe:s'".as_slice().into(), &hash());
+        let cmd = redis_cli_command(
+            "h:6379/0",
+            &b"\xff\xfe:s'".as_slice().into(),
+            &hash(),
+            false,
+        );
         assert!(cmd.ends_with(r"HGETALL $'\xff\xfe:s\''"), "{cmd}");
     }
 
     #[test]
     fn a_glob_in_a_key_name_is_quoted_so_the_shell_does_not_eat_it() {
-        let cmd = redis_cli_command("h:6379/0", &"cache:*:tmp".into(), &hash());
+        let cmd = redis_cli_command("h:6379/0", &"cache:*:tmp".into(), &hash(), false);
         assert!(cmd.ends_with("HGETALL 'cache:*:tmp'"), "{cmd}");
+    }
+
+    #[test]
+    fn on_a_cluster_the_command_follows_redirects_and_has_no_db() {
+        let cmd = redis_cli_command("127.0.0.1:30001/0", &"k".into(), &hash(), true);
+        assert_eq!(cmd, "redis-cli -c -h 127.0.0.1 -p 30001 HGETALL k");
+    }
+
+    #[test]
+    fn a_cluster_url_target_gives_its_seed_not_the_url() {
+        let cmd = redis_cli_command(
+            "redis-cluster://user:•••@cache-01:7000/0",
+            &"k".into(),
+            &hash(),
+            true,
+        );
+        assert_eq!(cmd, "redis-cli -c -h cache-01 -p 7000 HGETALL k");
+        assert!(!cmd.contains("-n"), "{cmd}");
+    }
+
+    #[test]
+    fn a_tls_cluster_keeps_tls() {
+        let cmd = redis_cli_command("rediss-cluster://cache-01:7000", &"k".into(), &hash(), true);
+        assert_eq!(cmd, "redis-cli -c -h cache-01 -p 7000 --tls HGETALL k");
     }
 }

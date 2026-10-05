@@ -33,7 +33,7 @@ use tokio::sync::mpsc::Sender;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
-use super::ConnectError;
+use super::{ClusterSupport, ConnectError};
 
 /// Which stream a feed connection carries.
 ///
@@ -227,6 +227,7 @@ fn split_subscriptions(subs: &[Subscription]) -> (Vec<String>, Vec<String>) {
 /// server it is actually talking to right now (`main.active_connections()`)
 /// when the resolved target is behind Sentinel (ADR-0008: Sentinel is a v1
 /// target). See [`open_monitor`]'s doc comment for why that lookup exists.
+#[allow(clippy::too_many_arguments)] // one connection hand-off; a struct would only move the list
 pub async fn open_feed(
     url: &str,
     credentials: &Credentials,
@@ -235,10 +236,13 @@ pub async fn open_feed(
     tx: Sender<Msg>,
     clock: Arc<dyn Clock>,
     main: &Client,
+    support: ClusterSupport,
 ) -> Result<FeedHandle, ConnectError> {
     match kind {
-        FeedKind::Monitor => open_monitor(url, credentials, token, tx, clock, main).await,
-        FeedKind::Subscribe(subs) => open_subscribe(url, credentials, subs, token, tx, clock).await,
+        FeedKind::Monitor => open_monitor(url, credentials, token, tx, clock, main, support).await,
+        FeedKind::Subscribe(subs) => {
+            open_subscribe(url, credentials, subs, token, tx, clock, support).await
+        }
     }
 }
 
@@ -313,8 +317,9 @@ async fn open_monitor(
     tx: Sender<Msg>,
     clock: Arc<dyn Clock>,
     main: &Client,
+    support: ClusterSupport,
 ) -> Result<FeedHandle, ConnectError> {
-    let config: Config = super::build_config(url, credentials)?;
+    let config: Config = super::build_config(url, credentials, support)?;
     let config = monitor_config(config, &main.active_connections())?;
     let stream = fred::monitor::run(config)
         .await
@@ -447,8 +452,9 @@ async fn open_subscribe(
     token: FeedToken,
     tx: Sender<Msg>,
     clock: Arc<dyn Clock>,
+    support: ClusterSupport,
 ) -> Result<FeedHandle, ConnectError> {
-    let config = super::build_config(url, credentials)?;
+    let config = super::build_config(url, credentials, support)?;
     let mut builder = fred::types::Builder::from_config(config);
     // Same backstop `connect_with` gives the main connection, and for the
     // same reason: fred's default `default_command_timeout` is `0` (never),

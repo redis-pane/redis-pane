@@ -57,6 +57,16 @@ database, and **Source** (`from profile` / `from --url` / `from REDIS_URL` / `de
 [ADR-0001](adr/0001-connection-resolution-order.md) the app resolves silently, and this readout
 is the entire mitigation for doing so — it is not optional chrome.
 
+**On a Cluster** (M5, [ADR-0022](adr/0022-cluster-supported-in-stages.md)) the database is not
+shown, because a Cluster has only db 0, and a segment `cluster · 3 primaries · 6 nodes` follows the
+target. The segment yields before the target does: it is drawn only when the whole target and the
+whole segment fit, so a cramped bar drops the shape first, then truncates the target, and never
+touches the Environment or the Source. The separator goes through the glyph set like every other
+readout's. `C` copies `redis-cli -c -h <seed host> -p <seed port> <verb> <key>`: `-c` follows
+`MOVED`, and there is no `-n`. The node count is what `CLUSTER SLOTS` advertises (primaries plus the
+replicas Redis lists), so a cluster that has seen no writes can show fewer nodes until its replicas
+report an offset.
+
 **Responsive behavior**
 
 | Width | Layout |

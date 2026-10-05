@@ -1,6 +1,6 @@
 # M5 task 2: Connection + title bar
 
-Status: **planned.**
+Status: **done.**
 
 ## Context
 
@@ -35,8 +35,8 @@ Two more places need the cluster's shape:
 2. **A plain `redis://` URL to a cluster node** (the `cluster_enabled:1` path) under `Allow`:
    **reconnect as a cluster client** using the same host and port as the seed. If that redial
    fails, keep the ADR-0021 diagnostic. The alternative was to stay refused and tell the user to
-   use `redis-cluster://`. **Confirm with the user at build time.** Recommended: redial, because
-   a user who pastes a node address expects the cluster.
+   use `redis-cluster://`. **Decided (user, 2026-10-05): redial**, because a user who pastes a
+   node address expects the cluster.
 3. **The Cluster's shape is core state**: a `Topology { primaries: u16, nodes: u16 }` on
    `Connection`, `None` for a non-cluster target. The shell fills it from
    `cached_cluster_state()` after connecting, and refreshes it on `cluster_change_rx()` with a
@@ -81,3 +81,49 @@ Two more places need the cluster's shape:
 ## Out of scope
 
 Scanning (task 3), arming (task 4), and lifting the gate for users (task 5).
+
+## Outcome
+
+Done. A Cluster target connects behind a gate that is still closed to users; `main.rs` passes
+`ClusterSupport::Refuse`, so the shipped behaviour (the ADR-0021 diagnostic) is unchanged. Implements
+R1.11 and ADR-0022 (still Proposed).
+
+- **Gate and redial:** `ClusterSupport { Refuse, Allow }` is threaded into `build_config`,
+  `connect_with`, `open_feed` (and so the Monitor and Subscribe feeds) and the shell's reconnect.
+  `connect()` stays the credential-less `Refuse` convenience. Under `Allow`, `redis-cluster://`
+  connects as a cluster client; a plain URL whose `INFO` says `cluster_enabled:1` is redialled to the
+  same seed through `build_config`, converting its `Centralized` server to `Clustered` so credentials
+  and TLS carry over. A failed redial returns the ADR-0021 `ConnectError::Cluster`. Monitor's own
+  clustered refusal is untouched.
+- **Topology:** `Topology { primaries, nodes }` on `Connection` (`Option`), `Msg::TopologyChanged`,
+  `Established::topology`. The shell reads it with `redis::topology_of` (from
+  `cached_cluster_state()`) after connecting and on a reconnect; a listener on `cluster_change_rx()`
+  inside `Shell::watch_link` re-sends it, so it is re-subscribed wherever `watch_link` runs.
+- **Render and copy:** the segment `cluster · 3 primaries · 6 nodes` follows the target, is drawn only
+  when the whole target and segment fit, and goes through the glyph set. A Cluster shows no `/db`.
+  `redis_cli_command` takes a `cluster` flag: `-c -h <seed> -p <port>` (plus `--tls` for a `rediss`
+  scheme), no `-n`. DESIGN §2 updated. Goldens: `title_bar_cluster` (140/120/100/80/60 and ASCII).
+- **Integration tests** (in `cluster_harness`): `Allow` by both URLs reports 3 primaries / 6 nodes;
+  `Refuse` through `connect_with` keeps the diagnostic on both; a failover reaches `cluster_change_rx`.
+
+### Deviations
+
+- **Cargo features:** `fred` now enables `i-cluster` (for `cached_cluster_state`) and `replicas` (so
+  `SlotRange::replicas` exists, needed to count nodes).
+- **`read_only` on a cluster client is never `Replica`.** A keyless `INFO` goes to whichever node `fred`
+  picks, so one replica answering would mark a healthy Cluster as a replica. Task 6 owns the real rule.
+- **`open_feed` takes a `ClusterSupport`** (and carries `#[allow(clippy::too_many_arguments)]`).
+- The `terminal.rs` listener has no automated test (it needs a terminal); the same `cluster_change_rx`
+  and `topology_of` are exercised directly by the failover test.
+
+### Findings about `fred` 10.1.0 for tasks 3-4
+
+- `cached_cluster_state()` is a list of `SlotRange { start, end, primary, id, replicas }`, from `CLUSTER
+  SLOTS`. **Redis omits a replica whose replication offset is still 0**, so a freshly formed, idle
+  cluster advertises 3 nodes, not 6, until it has seen a write (the tests `warm` it). The node count is
+  therefore "what CLUSTER SLOTS lists", and nothing fires `cluster_change_rx` when a replica later
+  appears.
+- `cluster_change_rx` **does fire on a forced failover**, once the client notices (it needs traffic or a
+  sync): `[Add(new primary), Remove(old primary)]`. After it, `cached_cluster_state()` converges to 3
+  primaries / 6 nodes.
+- The cluster client's keyless commands (`INFO`) are not pinned to a node.

@@ -134,6 +134,10 @@ pub enum Msg {
         version: String,
         tracking_supported: bool,
     },
+    /// The Cluster's shape, read from the client's routing table after
+    /// connecting and again whenever it changes (M5 task 2). Never sent for a
+    /// target that is not a Cluster.
+    TopologyChanged(crate::state::Topology),
     /// The link dropped mid-session.
     ConnectionLost,
     /// A reconnect attempt is scheduled. Backoff is visible, never a silent wait.

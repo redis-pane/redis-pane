@@ -75,6 +75,7 @@ fn make_state(n: usize, tree_mode: bool, sort: SortBy) -> State {
             target: "perf-harness:6379/0".into(),
             environment: Environment::Staging,
             source: Source::Profile("perf".into()),
+            topology: None,
         },
         last_read_ms: Some(0),
         link: Link::Up {
@@ -403,6 +404,7 @@ fn whole_scan_fold_in_tree_mode_from_empty() {
             target: "perf-harness:6379/0".into(),
             environment: Environment::Staging,
             source: Source::Profile("perf".into()),
+            topology: None,
         },
         last_read_ms: Some(0),
         link: Link::Up {

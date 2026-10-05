@@ -209,6 +209,10 @@ fn step(mut state: State, msg: Msg) -> (State, Vec<Command>) {
             version,
             tracking_supported,
         } => connected(state, version, tracking_supported),
+        Msg::TopologyChanged(topology) => {
+            state.connection.topology = Some(topology);
+            (state, Vec::new())
+        }
         Msg::ConnectionLost => connection_lost(state),
         Msg::ReconnectScheduled {
             attempt,
@@ -1698,5 +1702,24 @@ mod stack_navigation_tests {
         // No assertion on rendered output here — render::layout's own test
         // (`focus_is_ignored_at_any_wider_density`) is the proof;
         // this just confirms the state transition still happens uniformly.
+    }
+}
+
+#[cfg(test)]
+mod topology_tests {
+    use super::*;
+    use crate::state::Topology;
+
+    #[test]
+    fn a_topology_change_updates_the_connection_and_asks_for_nothing() {
+        let state = State::default();
+        assert_eq!(state.connection.topology, None);
+        let topology = Topology {
+            primaries: 3,
+            nodes: 6,
+        };
+        let (state, commands) = update(state, Msg::TopologyChanged(topology));
+        assert_eq!(state.connection.topology, Some(topology));
+        assert!(commands.is_empty());
     }
 }

@@ -1,0 +1,9 @@
+140 | ─ redis-pane ─ ● staging · cache-01:7000 · cluster · 3 primaries · 6 nodes · from profile staging ───────────────────────────────── ● live ─
+120 | ─ redis-pane ─ ● staging · cache-01:7000 · cluster · 3 primaries · 6 nodes · from profile staging ───────────── ● live ─
+100 | ─ redis-pane ─ ● staging · cache-01:7000 · from profile staging ─────────────────────────── ● live ─
+ 80 | ─ redis-pane ─ ● staging · cache-01:7000 · from profile staging ─────── ● live ─
+ 60 | ─ redis-pane ─ ● staging · from profile staging ─── ● live ─
+asc | - redis-pane - * staging - cache-01:7000 - cluster - 3 primaries - 6 nodes - from profile staging --------------------------------- * live -
+140 | ─ redis-pane ─ ● staging · redis-cluster://cache-01.eu-west-1.example.com:7000 · from profile staging ───────────────────────────── ● live ─
+ 80 | ─ redis-pane ─ ● staging · …-1.example.com:7000 · from profile staging  ● live ─
+ 60 | ─ redis-pane ─ ● staging · from profile staging ─── ● live ─

@@ -792,6 +792,7 @@ async fn a_key_that_vanished_between_scan_and_fetch_is_reported_gone() {
 
 // ── credentials actually reach the connection (ADR-0002) ────────────────────
 
+use redis_pane::redis::ClusterSupport;
 use redis_pane_core::resolve::{Credentials, PasswordSource};
 use redis_pane_core::state::ReadOnlyReason;
 
@@ -825,7 +826,9 @@ async fn a_literal_password_authenticates() {
         password: PasswordSource::Literal("s3cret".into()),
         ..Credentials::default()
     };
-    let (client, est) = redis_pane::redis::connect_with(&url, &creds).await.unwrap();
+    let (client, est) = redis_pane::redis::connect_with(&url, &creds, ClusterSupport::Refuse)
+        .await
+        .unwrap();
     assert!(est.version.meets_floor());
     let _ = client.quit().await;
 }
@@ -842,7 +845,9 @@ async fn a_password_env_reference_authenticates() {
         password: PasswordSource::Command("printf s3cret".into()),
         ..Credentials::default()
     };
-    let (client, _) = redis_pane::redis::connect_with(&url, &creds).await.unwrap();
+    let (client, _) = redis_pane::redis::connect_with(&url, &creds, ClusterSupport::Refuse)
+        .await
+        .unwrap();
     let _: () = client
         .set("auth:works", "yes", None, None, false)
         .await
@@ -860,7 +865,7 @@ async fn a_wrong_password_fails_with_a_diagnostic_rather_than_hanging() {
         password: PasswordSource::Literal("wrong".into()),
         ..Credentials::default()
     };
-    let err = redis_pane::redis::connect_with(&url, &creds)
+    let err = redis_pane::redis::connect_with(&url, &creds, ClusterSupport::Refuse)
         .await
         .expect_err("a wrong password must not connect");
     let msg = err.to_string();
@@ -920,7 +925,7 @@ async fn a_refused_info_is_reported_not_treated_as_a_primary() {
     // ever runs — the connect fails with a diagnostic rather than reaching
     // `Established`. That is still the safe outcome (a user sees why), so this
     // asserts the failure is visible rather than exercising the field.
-    let err = redis_pane::redis::connect_with(&url, &creds)
+    let err = redis_pane::redis::connect_with(&url, &creds, ClusterSupport::Refuse)
         .await
         .expect_err("an ACL that denies `info` also blocks the version check");
     let msg = err.to_string();
@@ -3932,6 +3937,7 @@ mod feed {
     use std::time::Duration;
 
     use fred::prelude::*;
+    use redis_pane::redis::ClusterSupport;
     use redis_pane::redis::feed::{FeedKind, open_feed};
     use redis_pane_core::Msg;
     use redis_pane_core::clock::Clock;
@@ -4006,6 +4012,7 @@ mod feed {
             tx,
             clock,
             &main,
+            ClusterSupport::Refuse,
         )
         .await
         .expect("MONITOR should be available on a fresh 7-alpine container");
@@ -4039,6 +4046,7 @@ mod feed {
             tx,
             clock,
             &writer,
+            ClusterSupport::Refuse,
         )
         .await
         .unwrap();
@@ -4084,6 +4092,7 @@ mod feed {
             tx,
             clock,
             &admin,
+            ClusterSupport::Refuse,
         )
         .await
         .unwrap();
@@ -4143,6 +4152,7 @@ mod feed {
             tx,
             clock,
             &admin,
+            ClusterSupport::Refuse,
         )
         .await
         .unwrap();
@@ -4220,6 +4230,7 @@ mod feed {
             tx,
             clock,
             &writer,
+            ClusterSupport::Refuse,
         )
         .await
         .unwrap();
@@ -4263,6 +4274,7 @@ mod feed {
             tx,
             clock,
             &writer,
+            ClusterSupport::Refuse,
         )
         .await
         .unwrap();
@@ -4319,6 +4331,7 @@ mod feed {
             tx,
             clock,
             &writer,
+            ClusterSupport::Refuse,
         )
         .await
         .unwrap();
@@ -4421,6 +4434,7 @@ mod feed {
             tx,
             clock,
             &writer,
+            ClusterSupport::Refuse,
         )
         .await
         .expect("a SubscriberClient should dial and subscribe on a fresh container");
@@ -4486,6 +4500,7 @@ mod feed {
             tx.clone(),
             clock.clone(),
             &writer,
+            ClusterSupport::Refuse,
         )
         .await
         .unwrap();
@@ -4560,6 +4575,7 @@ mod feed {
             tx,
             clock,
             &admin,
+            ClusterSupport::Refuse,
         )
         .await
         .unwrap();
@@ -4620,6 +4636,7 @@ mod feed {
             tx,
             clock,
             &admin,
+            ClusterSupport::Refuse,
         )
         .await
         .unwrap();
@@ -4688,7 +4705,42 @@ mod feed {
 // ── M5 task 1: the real-cluster harness (ADR-0022) ──────────────────────────
 
 mod cluster_harness {
+    use super::support::cluster::Cluster;
     use super::support::cluster::start_cluster;
+    use super::{ClusterSupport, Credentials};
+
+    /// A freshly formed, idle cluster advertises no replicas in `CLUSTER
+    /// SLOTS` (Redis leaves out a replica whose replication offset is still
+    /// 0), so a client's routing table reads 3 nodes, not 6. One write per
+    /// primary moves every offset, and this waits until all six ports are
+    /// listed, with a deadline.
+    async fn warm(cluster: &Cluster) {
+        let client = cluster.client().await;
+        for primary in cluster.primaries().await {
+            let key = cluster.key_in_slot_of(primary.port).await;
+            client
+                .set::<(), _, _>(&key, "v", None, None, false)
+                .await
+                .unwrap();
+        }
+        let _ = client.quit().await;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        loop {
+            let slots = cluster.cli(cluster.ports[0], &["cluster", "slots"]).await;
+            if cluster
+                .ports
+                .iter()
+                .all(|p| slots.lines().any(|l| l == p.to_string()))
+            {
+                return;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "CLUSTER SLOTS never listed every replica:\n{slots}"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+        }
+    }
     use fred::prelude::*;
 
     #[tokio::test]
@@ -4735,6 +4787,137 @@ mod cluster_harness {
             );
             assert!(err.to_string().contains("ADR-0021"), "{url}: {err}");
         }
+    }
+
+    /// M5 task 2: under `Allow`, `redis-cluster://` and a plain `redis://` to
+    /// one node both end in a cluster client that knows the 3 + 3 shape.
+    #[tokio::test]
+    #[ignore = "needs docker"]
+    async fn allow_connects_a_cluster_by_either_url_and_reports_its_shape() {
+        use fred::interfaces::ClientLike;
+        use redis_pane_core::state::Topology;
+        let cluster = start_cluster().await;
+        warm(&cluster).await;
+        let urls = [
+            cluster.seed_url(),
+            format!("redis://127.0.0.1:{}", cluster.ports[0]),
+        ];
+        for url in urls {
+            let (client, est) = redis_pane::redis::connect_with(
+                &url,
+                &Credentials::default(),
+                ClusterSupport::Allow,
+            )
+            .await
+            .unwrap_or_else(|e| panic!("{url}: {e}"));
+            assert!(client.is_clustered(), "{url}: not a cluster client");
+            assert_eq!(
+                est.topology,
+                Some(Topology {
+                    primaries: 3,
+                    nodes: 6
+                }),
+                "{url}"
+            );
+            assert_eq!(est.read_only, None, "{url}: a cluster is not a replica");
+            // It is a working cluster client: a key on each primary round-trips.
+            for primary in cluster.primaries().await {
+                let key = cluster.key_in_slot_of(primary.port).await;
+                client
+                    .set::<(), _, _>(&key, "v", None, None, false)
+                    .await
+                    .unwrap();
+                let got: String = client.get(&key).await.unwrap();
+                assert_eq!(got, "v");
+            }
+            let _ = client.quit().await;
+        }
+    }
+
+    /// `Refuse` keeps the ADR-0021 diagnostic on both paths, through
+    /// `connect_with` itself rather than the `connect` convenience.
+    #[tokio::test]
+    #[ignore = "needs docker"]
+    async fn refuse_keeps_the_adr_0021_diagnostic_through_connect_with() {
+        let cluster = start_cluster().await;
+        let urls = [
+            cluster.seed_url(),
+            format!("redis://127.0.0.1:{}", cluster.ports[0]),
+        ];
+        for url in urls {
+            let err = redis_pane::redis::connect_with(
+                &url,
+                &Credentials::default(),
+                ClusterSupport::Refuse,
+            )
+            .await
+            .expect_err("Refuse must refuse");
+            assert!(
+                matches!(err, redis_pane::redis::ConnectError::Cluster),
+                "{url}: {err:?}"
+            );
+            assert!(err.to_string().contains("ADR-0021"), "{url}: {err}");
+        }
+    }
+
+    /// What `fred` does on a failover, which `terminal.rs`'s listener relies
+    /// on: `cluster_change_rx` fires, and the routing table afterwards still
+    /// reads 3 primaries and 6 nodes.
+    #[tokio::test]
+    #[ignore = "needs docker"]
+    async fn a_failover_reaches_cluster_change_rx_and_the_topology_is_still_3_and_6() {
+        use fred::interfaces::EventInterface;
+        use redis_pane_core::state::Topology;
+        let cluster = start_cluster().await;
+        warm(&cluster).await;
+        let (client, est) = redis_pane::redis::connect_with(
+            &cluster.seed_url(),
+            &Credentials::default(),
+            ClusterSupport::Allow,
+        )
+        .await
+        .unwrap();
+        assert!(est.topology.is_some());
+        let mut changes = client.cluster_change_rx();
+        let replica = cluster.replicas().await.remove(0);
+        cluster.failover(replica.port).await;
+        // Generous: the client learns of it from a redirect or its next sync.
+        // Drive a command at every primary so one is made.
+        let mut seen = None;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while std::time::Instant::now() < deadline && seen.is_none() {
+            for primary in cluster.primaries().await {
+                let key = cluster.key_in_slot_of(primary.port).await;
+                let _ = client.get::<Option<String>, _>(&key).await;
+            }
+            if let Ok(Ok(change)) =
+                tokio::time::timeout(std::time::Duration::from_millis(500), changes.recv()).await
+            {
+                seen = Some(change);
+            }
+        }
+        eprintln!("cluster_change_rx after failover: {seen:?}");
+        assert!(seen.is_some(), "cluster_change_rx never fired on failover");
+        // The table the listener reads after the event: still 3 primaries,
+        // and 6 nodes once the demoted primary is advertised as a replica.
+        let want = Topology {
+            primaries: 3,
+            nodes: 6,
+        };
+        let mut last = redis_pane::redis::topology_of(&client);
+        while last != Some(want)
+            && std::time::Instant::now() < deadline + std::time::Duration::from_secs(30)
+        {
+            for primary in cluster.primaries().await {
+                let key = cluster.key_in_slot_of(primary.port).await;
+                let _ = client.get::<Option<String>, _>(&key).await;
+            }
+            let _ =
+                tokio::time::timeout(std::time::Duration::from_millis(500), changes.recv()).await;
+            last = redis_pane::redis::topology_of(&client);
+        }
+        assert_eq!(last, Some(want));
+        let _ = client.quit().await;
     }
 
     #[tokio::test]
