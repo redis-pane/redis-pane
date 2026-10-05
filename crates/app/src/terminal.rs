@@ -242,6 +242,7 @@ pub async fn run(
         scan_cancel: None,
         filter_debounce: Debounce::default(),
         metadata: MetadataLedger::default(),
+        owner: crate::liveness::OpenOwner::default(),
         reconnect: Reconnect {
             dial,
             credentials,
@@ -454,6 +455,9 @@ struct Shell {
     /// Which row-metadata fetches are in flight or answered, and which
     /// generation of the Loaded set they belong to (decision 6).
     metadata: MetadataLedger,
+    /// Which node's connection holds the open key's arming; only a Cluster
+    /// has an answer (`crate::liveness`, ADR-0022).
+    owner: crate::liveness::OpenOwner,
     reconnect: Reconnect,
     /// The single open feed connection, if any (`docs/plans/m3-feed-connection.md`).
     /// Never in `State` — the core holds no `fred` types (ADR-0011). Only one
@@ -697,6 +701,7 @@ impl Shell {
             Arming::Unsupported
         };
         let (client, tx, clock) = (self.client.clone(), self.tx.clone(), self.clock.clone());
+        let owner = self.owner.clone();
 
         // Stamps the loading indicator's delay gate (`PendingRead::APPEAR_DELAY_MS`,
         // `crates/core/src/state/open.rs`). `update()` has no clock of its own
@@ -727,9 +732,21 @@ impl Shell {
             // here means arming already succeeded on the wire — this message is
             // what makes that fact reach the core.
             if arming == Arming::Enabled && result.is_ok() {
+                // Note which node's connection now holds the arming *before*
+                // telling the core it is live, so no reconnect or slot move
+                // can be judged against an owner from the previous arming.
+                owner.armed(&client, key.as_bytes());
                 let _ = tx.send(Msg::TrackingArmed).await;
             }
 
+            // A Cluster client that has wedged says so only through its
+            // reads failing (`liveness::is_wedged`); the failure is reported as
+            // a read error below and, here, as a lost link, so the redial
+            // replaces the client.
+            let wedged = result
+                .as_ref()
+                .err()
+                .is_some_and(|e| crate::liveness::is_wedged(&client, e));
             let msg = match result {
                 Ok(Some(read)) => Msg::ValueLoaded {
                     token,
@@ -760,6 +777,9 @@ impl Shell {
                 },
             };
             let _ = tx.send(msg).await;
+            if wedged {
+                let _ = tx.send(Msg::ConnectionLost).await;
+            }
         });
     }
 
@@ -925,10 +945,18 @@ impl Shell {
     /// arrive only after the client was already swapped, and two independent
     /// channels give no such promise about which is drained first.
     fn reconnected(&mut self, client: Client, established: &Established) -> Msg {
-        self.client = client;
+        // The replaced client is closed rather than dropped, so it cannot go
+        // on holding connections (and their tracking) in the background.
+        let replaced = std::mem::replace(&mut self.client, client);
+        tokio::spawn(async move {
+            let _ = replaced.quit().await;
+        });
         self.reconnect.attempt = 0;
         // Fetches issued on the replaced client will never be answered by it.
         self.metadata.reset();
+        // The record described a connection that is gone; the refetch this
+        // reconnect causes arms again and records afresh.
+        self.owner.clear();
         // Subscriptions are tied to the `Client` they were opened on; one that
         // has been replaced no longer delivers anything.
         self.watch_link();
@@ -946,92 +974,11 @@ impl Shell {
         // `ReconnectPolicy` (this app sets none, so in practice this fires only
         // if that ever changes) — and the server on the other side remembers
         // nothing about what we were watching. Telling the core lets it drop the
-        // liveness claim and re-arm, the invariant ADR-0009 exists for.
-        {
-            let mut reconnects = self.client.reconnect_rx();
-            let tx = self.tx.clone();
-            let probe = self.client.clone();
-            let clock = self.clock.clone();
-            tokio::spawn(async move {
-                while reconnects.recv().await.is_ok() {
-                    // A fresh connection tracks nothing, so capability must be
-                    // re-probed rather than remembered.
-                    let tracking = crate::redis::probe_tracking(&probe).await;
-                    // A refused INFO here must be as visible as any other
-                    // failure — defaulting to "not a replica" is the silent
-                    // failure ADR-0009 exists to prevent (review M1).
-                    match crate::redis::server_conditions(&probe).await {
-                        Ok((read_only, condition)) => {
-                            let _ = tx
-                                .send(Msg::ServerState {
-                                    read_only,
-                                    condition,
-                                })
-                                .await;
-                        }
-                        Err(e) => {
-                            let _ = tx
-                                .send(Msg::Failed {
-                                    command: "INFO (replica and write-rejection checks)".into(),
-                                    detail: e.details().to_string(),
-                                    at_ms: clock.now_epoch_ms(),
-                                })
-                                .await;
-                        }
-                    }
-                    if tx
-                        .send(Msg::Connected {
-                            version: String::new(),
-                            tracking_supported: tracking,
-                        })
-                        .await
-                        .is_err()
-                    {
-                        return;
-                    }
-                }
-            });
-        }
-        {
-            let mut errors = self.client.error_rx();
-            let tx = self.tx.clone();
-            let clock = self.clock.clone();
-            tokio::spawn(async move {
-                while let Ok((error, _server)) = errors.recv().await {
-                    // A connection-level error means the link is gone; anything
-                    // else is a command failure and belongs in a notification.
-                    //
-                    // Both kinds matched here are what `connect_with`'s bounded-
-                    // responsiveness config (`crates/app/src/redis/mod.rs`) can
-                    // actually produce for a silently dead socket: `IO` from
-                    // fred's own unresponsive-connection detector
-                    // (`fred-10.1.0/src/router/types.rs:58`), and `Timeout` from
-                    // the per-command `default_command_timeout` backstop
-                    // (`fred-10.1.0/src/utils.rs:286-299`). The latter is
-                    // ordinarily returned straight to the awaiting caller rather
-                    // than broadcast here, but treating it the same on the rare
-                    // path where it does arrive on this stream costs nothing —
-                    // a command that just timed out on a wire this deliberately
-                    // slow to declare unresponsive is not a connection worth
-                    // still calling live.
-                    let msg = if matches!(
-                        error.kind(),
-                        fred::error::ErrorKind::IO | fred::error::ErrorKind::Timeout
-                    ) {
-                        Msg::ConnectionLost
-                    } else {
-                        Msg::Failed {
-                            command: "connection".into(),
-                            detail: error.details().to_string(),
-                            at_ms: clock.now_epoch_ms(),
-                        }
-                    };
-                    if tx.send(msg).await.is_err() {
-                        return;
-                    }
-                }
-            });
-        }
+        // liveness claim and re-arm, the invariant ADR-0009 exists for. On a
+        // Cluster only the owner of the open key's reconnect does (ADR-0022).
+        crate::liveness::watch_reconnects(&self.client, &self.owner, &self.tx, &self.clock);
+        crate::liveness::watch_topology(&self.client, &self.owner, &self.tx);
+        crate::liveness::watch_errors(&self.client, &self.tx, &self.clock);
 
         // The Cluster's shape: `fred` announces a node added or removed and a
         // slot rebalance (a failover is one), and the routing table it keeps is

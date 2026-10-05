@@ -52,11 +52,56 @@ ADR-0006 and the two re-arm invariants of ADR-0009 *per owner node*:
   reconnect: `● live` drops, then the key is refetched and re-armed on its new owner;
 - `Options.caching` stays unused (inert in `fred` 10.1.0).
 
-This is **unproven until task 4's first phase**: a spike must show `fred` writes a pinned pipeline
-contiguously on one node connection. If it does not, task 4 stops and this section is amended with
-the chosen alternative (`with_cluster_node` plus a per-node lock, or a dedicated per-node
-connection). ADR-0006's guarantee, that `● live` is never shown over a key no node is tracking for
-this client, is the acceptance test, not an aspiration.
+**Proven by task 4's spike, against a real 3-primary cluster** (`cluster_liveness` in
+`crates/app/tests/integration.rs`). The pipeline is built as `Pipeline::from(client.with_options(..))`,
+because `client.with_options(..).pipeline()` derefs to the plain `Client` and would drop the pin.
+For a key on each primary, in loops of re-arms, quiet and under four tasks of unrelated metadata
+reads and `GET`s to every primary on the same client:
+
+- every arming was followed by an `Invalidation` whose `server` is the owner, never another node;
+- `CLIENT TRACKINGINFO` is observable: it lists `caching-yes` while a `CLIENT CACHING YES` waits
+  for its command, and `with_cluster_node(non_owner)` runs it on this client's own connection to
+  that node. After each arming no non-owner showed `caching-yes`, and each showed `optin`;
+- the **negative control** discriminates: the same pipeline without the pin lost 10 of 15
+  armings (every key whose owner is not the node `fred` picks for a keyless command), so the
+  tests above would have failed on a mis-routed or interleaved arming.
+
+So `fred` writes a pinned pipeline contiguously on the owner's connection. What the spike found
+beyond that, all handled in task 4:
+
+- **A stale routing table mis-arms silently.** If the table names the old owner after a
+  failover or migration, `CLIENT CACHING YES` (keyless, never redirected) is spent on the old
+  node while `TYPE` follows its `MOVED` to the new one, and the pipeline still succeeds. `fred`
+  corrects its table as it follows the redirect, so `read_value` compares the slot's owner before
+  and after the pipeline and re-sends the arming when it changed (3 attempts, then an error).
+- **`fred` never reconnects a dropped node on its own without a reconnect policy, and the
+  client is unusable until it is redialled.** A `CLIENT KILL` on one node's connection gave
+  `error_rx` an `IO` error naming the node, no `reconnect_rx`, and from then on every command to any
+  node timed out, `sync_cluster` included. So on the app's Cluster client (which has no policy,
+  as before) *any* node's dropped connection is a lost link and the shell redials, refetching and
+  re-arming the open key; the plan's "an unrelated node's reconnect does not refetch" cannot happen
+  there. A policy would let one node heal in place, and it was tried: with a node down, `fred`
+  10.1.0's router retries buffered commands in a loop that never yields, which starved the test
+  runtime (task 3's dead-primary scan test hung) and would burn a core in the app. It was
+  rejected. The owner filter in `liveness::watch_reconnects` is kept for the day a client does
+  reconnect in place, and is tested against a test-only client that has a policy.
+- **A reconnect on a node that does not hold the arming still needs `CLIENT TRACKING ON`**, since
+  `fred` does not re-send it. That filter re-probes tracking and sends nothing else.
+- **`fred` 10.1.0 wedges permanently on a read of a key whose slot is mid-migration (`ASK`).**
+  The read fails with `Routing`, "Max attempts reached", and every later command on that client,
+  `sync_cluster` included, times out, even after the migration ends. Reproduced with a plain
+  `GET` and with the app's pinning removed; fresh clients are unaffected. A read that fails with
+  `Routing` or `Timeout` on a Cluster is therefore also reported as a lost link, so the redial
+  replaces the client.
+- **A failover is noticed late**, as in task 3: the shell asks the client to `sync_cluster()` once
+  a second while a key is armed, so `cluster_change_rx` fires without other traffic.
+
+ADR-0006's guarantee, that `● live` is never shown over a key no node is tracking for this
+client, is the acceptance test, not an aspiration. It holds in tests after an invalidation, after
+the owner reconnects, after an unrelated node reconnects, after a forced failover and after a
+slot migration. One residual, accepted: when the arming was spent on a stale owner, that node's
+connection keeps a pending opt-in until its next command, which can track one unrelated key and
+cause a single spurious refetch.
 
 ### The test harness uses identity port mapping
 
@@ -103,8 +148,7 @@ host on Docker Desktop for macOS. The harness
   inside a view, never a connection switcher.
 - The Docker integration suite gains a cluster that takes several seconds to form. Tests that need
   one start their own, as the suite already does for every container.
-- If task 4's spike disproves contiguous pinned pipelines, the arming section of this ADR is
-  rewritten before task 5 can accept it.
+- Task 4's spike proved contiguous pinned pipelines, so the arming section stands as decided.
 
 ## Amends
 

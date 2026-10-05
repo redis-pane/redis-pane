@@ -155,6 +155,19 @@ pub fn topology_of(client: &Client) -> Option<Topology> {
     })
 }
 
+/// The primary that owns `slot` in the client's cached routing table, or
+/// `None` when the client is not a cluster client or has no table yet.
+///
+/// The Viewer records this at every arming (M5 task 4, ADR-0022): the owner's
+/// connection is the only one that holds the arming, so it is the only one
+/// whose reconnect concerns the open key.
+pub fn slot_owner(client: &Client, slot: u16) -> Option<fred::types::config::Server> {
+    if !client.is_clustered() {
+        return None;
+    }
+    client.cached_cluster_state()?.get_server(slot).cloned()
+}
+
 /// Build a `fred` `Config` for the resolved target, credentials and all.
 ///
 /// The one place a URL and a `Credentials` become a dial-ready `Config` —

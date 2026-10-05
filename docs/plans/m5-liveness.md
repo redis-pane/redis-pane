@@ -1,6 +1,6 @@
 # M5 task 4: Owner-pinned liveness
 
-Status: **planned.** This is M5's riskiest task: liveness is the headline feature, and a wrong
+Status: **done.** This is M5's riskiest task: liveness is the headline feature, and a wrong
 arming here reopens the RedisInsight bug the project was started over (ADR-0006).
 
 ## Context
@@ -95,3 +95,62 @@ All of these are integration tests on the task 1 harness:
 ## Out of scope
 
 Server views (tasks 7–9). Opening the gate to users (task 5).
+
+## Outcome
+
+Done. A Cluster's open key is armed on its owner, and only the owner's reconnect, or the slot
+changing owner, drops `● live`. Implements R1.11 and ADR-0022 (still Proposed); the refusal gate in
+`main.rs` is unchanged, so no user sees this until task 5.
+
+- **Spike (phase 1): passed.** Pinned arming lands on the owner for a key on each primary, 5
+  quiet and 20 noisy re-arms each, under 4 concurrent traffic tasks; every `Invalidation::server`
+  was the owner; `CLIENT TRACKINGINFO` shows `caching-yes` and no non-owner held one. The unpinned
+  control lost 10 of 15 armings, so the spike discriminates. Evidence and findings are in
+  ADR-0022's arming section.
+- **`read.rs`:** `arming_pipeline` (`Pipeline::from(client.with_options(..))`, pinned only on a
+  Cluster client, so one read path) and `arm_and_type`, which re-sends the arming if the slot's
+  owner changed across the pipeline (stale table).
+- **`crates/app/src/liveness.rs` (new):** `OpenOwner` (the shell's record of the owner),
+  `watch_reconnects` (owner or non-Cluster: re-probe, `ServerState`, `Connected`; any other node:
+  re-probe tracking only), `watch_topology` (`cluster_change_rx` plus a 1s `sync_cluster` while a
+  key is armed; owner changed: `Connected`), `watch_errors` (the former inline `error_rx` task,
+  moved unchanged) and `is_wedged`. `terminal.rs` calls them from
+  `watch_link`, records the owner in `read_key` before sending `TrackingArmed`, and clears it in
+  `reconnected`.
+- **Core:** no change. No new message and no node type; `Msg::Connected` is the message a reconnect
+  and an owner change both send.
+- **Tests** (in `cluster_liveness`, all `#[ignore]`d, on the task 1 harness, 9 in all): the spike and
+  its negative control; armed on the owner for a key on each primary in a loop of 5; no non-owner
+  holds a pending opt-in; an unrelated node's reconnect, on a test-only client that has a reconnect
+  policy (no refetch, still live, no redial, tracking re-enabled on it, a later write still
+  invalidates); an unrelated node's connection killed on the app's own client (redial, then live and
+  armed again); the owner killed (live drops, re-arms, later write invalidates); forced failover
+  (0 lost links, re-armed through the topology path); slot migration. The tests drive the real `liveness`
+  listeners, `read_value` and `OpenOwner`, with a small stand-in for the core's two handlers (and
+  a redial on `ConnectionLost`), because `terminal.rs` needs a terminal. The core's own liveness
+  unit tests are unchanged and pass.
+
+### Deviations
+
+- **"Unrelated node reconnects, no refetch" is not reachable on the app's client.** The plan
+  assumed `fred` reconnects one node in place. It does not without a reconnect policy, and the client
+  is dead until redialled (ADR-0022). A Cluster-wide policy fixed that but made `fred`'s router spin
+  with a node down, hanging task 3's dead-primary scan test, so it was reverted. Any node's drop is
+  therefore a lost link and a redial, which refetches and re-arms (safe, never a false `● live`).
+  The non-owner filter in `watch_reconnects` is built and tested against a policy client, for
+  when one exists. `Shell::reconnected` now `quit()`s the replaced client.
+- **A wedged client is reported as a lost link** (`Routing` or `Timeout` on a read, Cluster only),
+  the only recovery from the `fred` ASK wedge in ADR-0022. The migration test passes because of it:
+  the key's own `MIGRATE` invalidates it, the refetch hits `ASK`, the client wedges, the redial
+  recovers.
+- **`arm_and_type`'s owner comparison** (not in the plan) for the stale-table mis-arm.
+- The spike tests stay in the suite as regression tests.
+
+### For tasks 5-9
+
+- Any read of a key whose slot is being migrated wedges the main client permanently (`fred`
+  10.1.0). Anything else that reads through the main client during a rebalance inherits that;
+  `liveness::is_wedged` is the detector. Task 6 (mutations on a Cluster) in particular.
+- `reconnect_rx` never fires on the app's Cluster client (no policy). Do not add a policy without
+  first re-running task 3's `a_dead_primary_fails_the_scan_naming_it`, which it hangs.
+- `OpenOwner::armed` is the one place the owner is recorded; a new surface that arms must call it.
