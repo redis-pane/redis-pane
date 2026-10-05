@@ -1,6 +1,6 @@
 # M5 task 1: Cluster test harness + ADR-0022
 
-Status: **planned.**
+Status: **done.**
 
 ## Context
 
@@ -85,3 +85,36 @@ especially on Docker Desktop for macOS, where container IPs are not routable fro
 
 Any product behaviour, which starts in task 2. Valkey cluster: same protocol, not separately
 tested in M5.
+
+## Outcome
+
+Done. A real 3-primary / 3-replica cluster comes up from `testcontainers` in about 4 seconds and is
+reachable from the test process. No product code changed; the refusal is as before.
+
+- **Helpers:** `crates/app/tests/support/cluster.rs`, declared with `mod support;` in
+  `integration.rs` (a `support/mod.rs` so Cargo does not treat it as a test target). It provides
+  `start_cluster`, `Cluster::{seed_url, client, nodes, primaries, replicas, owner_of_slot,
+  key_in_slot_of, failover, migrate_slot, wait_ready, cli, exec}`. Tests are in
+  `integration.rs`'s `cluster_harness` module (all `#[ignore]`d): the smoke test, the refusal
+  against the real cluster (by `redis-cluster://` and by plain `redis://` to one node), and tests
+  of `failover` and `migrate_slot`.
+- **`with_mapped_port` is supported** by `testcontainers` 0.28, so the fixed-range fallback was not
+  needed.
+- **Deviations from the plan:**
+  - Each node needs an explicit `--cluster-port` (a free port, unmapped). The default bus port
+    `N + 10000` overflows 65535 for ephemeral host ports, and `redis-server` refuses to start.
+  - Nodes need `--bind 0.0.0.0 --protected-mode no`, since host traffic arrives through Docker NAT.
+  - `redis-cli --cluster create` returns before the replicas finish attaching, so readiness is
+    `cluster_state:ok` **and** the 3+3 shape on every node (CLUSTER NODES), not `cluster_state:ok`
+    alone.
+  - `key_in_slot_of` takes a primary's port and is async, because ownership changes after a
+    failover or migration.
+  - Ports are drawn from 20000-31999, not by binding port 0. Ephemeral ports collide with the ones
+    Docker assigns to other containers: a failed `docker run` ("address already in use") and, worse,
+    unrelated tests failing with `Invalid HELLO` / `Invalid frame type` in 2 of 3 full-suite runs,
+    apparently from a stale forward of a just-removed cluster container shadowing a reused port.
+    After the change, 3 of 3 full runs passed. A start that still fails retries (5 attempts) with
+    fresh ports.
+  - Readiness polls on a 250ms interval under a 60s deadline; that is a poll, not a fixed wait.
+- **ADR-0022** is written as Proposed. ADR-0021's status is unchanged; it changes in task 5.
+- **CI:** `.github/workflows/ci.yml` needed no change (see the PR for the port/timing reasoning).

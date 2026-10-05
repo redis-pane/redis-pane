@@ -24,6 +24,8 @@ use testcontainers::core::{ContainerPort, WaitFor};
 use testcontainers::runners::AsyncRunner;
 use testcontainers::{ContainerAsync, GenericImage, ImageExt};
 
+mod support;
+
 const REDIS_PORT: ContainerPort = ContainerPort::Tcp(6379);
 
 async fn start(image: &str, tag: &str) -> (ContainerAsync<GenericImage>, String) {
@@ -4681,4 +4683,115 @@ mod feed {
     // tests assume arrives. Flagged for whoever picks this up next rather
     // than left as a silently-passing test that does not actually exercise
     // the failure path it claims to.
+}
+
+// ── M5 task 1: the real-cluster harness (ADR-0022) ──────────────────────────
+
+mod cluster_harness {
+    use super::support::cluster::start_cluster;
+    use fred::prelude::*;
+
+    #[tokio::test]
+    #[ignore = "needs docker"]
+    async fn a_real_cluster_comes_up_and_moved_redirects_resolve_from_the_host() {
+        let cluster = start_cluster().await;
+        let nodes = cluster.nodes().await;
+        assert_eq!(nodes.iter().filter(|n| n.is_primary).count(), 3);
+        assert_eq!(nodes.iter().filter(|n| !n.is_primary).count(), 3);
+
+        // One key per primary: a plain cluster client reaches each only by
+        // following `MOVED` to an announced address, so this proves those
+        // addresses are reachable from the test process.
+        let client = cluster.client().await;
+        for primary in cluster.primaries().await {
+            let key = cluster.key_in_slot_of(primary.port).await;
+            client
+                .set::<(), _, _>(&key, "v", None, None, false)
+                .await
+                .unwrap();
+            let got: String = client.get(&key).await.unwrap();
+            assert_eq!(got, "v");
+        }
+        let _ = client.quit().await;
+    }
+
+    #[tokio::test]
+    #[ignore = "needs docker"]
+    async fn a_real_cluster_is_refused_with_the_adr_0021_diagnostic_by_either_url() {
+        let cluster = start_cluster().await;
+        // By scheme, and by the server's own `cluster_enabled:1` over a plain
+        // `redis://` URL to one node: both must end in the same refusal.
+        let urls = [
+            cluster.seed_url(),
+            format!("redis://127.0.0.1:{}", cluster.ports[0]),
+        ];
+        for url in urls {
+            let err = redis_pane::redis::connect(&url)
+                .await
+                .expect_err("a real cluster must be refused, not half-served");
+            assert!(
+                matches!(err, redis_pane::redis::ConnectError::Cluster),
+                "{url}: expected ConnectError::Cluster, got {err:?}"
+            );
+            assert!(err.to_string().contains("ADR-0021"), "{url}: {err}");
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "needs docker"]
+    async fn failover_promotes_a_replica_and_keeps_the_data() {
+        let cluster = start_cluster().await;
+        let client = cluster.client().await;
+        let primary = cluster.primaries().await.remove(0);
+        let key = cluster.key_in_slot_of(primary.port).await;
+        client
+            .set::<(), _, _>(&key, "kept", None, None, false)
+            .await
+            .unwrap();
+
+        let replica = cluster
+            .replicas()
+            .await
+            .into_iter()
+            .find(|r| r.primary_id.as_deref() == Some(primary.id.as_str()))
+            .expect("every primary has a replica");
+        cluster.failover(replica.port).await;
+
+        let nodes = cluster.nodes().await;
+        let promoted = nodes.iter().find(|n| n.port == replica.port).unwrap();
+        let demoted = nodes.iter().find(|n| n.port == primary.port).unwrap();
+        assert!(promoted.is_primary && !demoted.is_primary);
+        assert!(promoted.owns(fred::util::redis_keyslot(key.as_bytes())));
+        assert_eq!(nodes.iter().filter(|n| n.is_primary).count(), 3);
+
+        // The client follows the move on its own.
+        let got: String = client.get(&key).await.unwrap();
+        assert_eq!(got, "kept");
+        let _ = client.quit().await;
+    }
+
+    #[tokio::test]
+    #[ignore = "needs docker"]
+    async fn migrate_slot_moves_a_slot_and_its_keys_to_another_primary() {
+        let cluster = start_cluster().await;
+        let client = cluster.client().await;
+        let primaries = cluster.primaries().await;
+        let (from, to) = (primaries[0].port, primaries[1].port);
+        let key = cluster.key_in_slot_of(from).await;
+        let slot = fred::util::redis_keyslot(key.as_bytes());
+        client
+            .set::<(), _, _>(&key, "moved", None, None, false)
+            .await
+            .unwrap();
+
+        cluster.migrate_slot(slot, from, to).await;
+
+        assert_eq!(cluster.owner_of_slot(slot).await.port, to);
+        let on_dest = cluster.cli(to, &["get", &key]).await;
+        assert_eq!(on_dest.trim(), "moved");
+        // The client's routing table is stale until it follows `MOVED`.
+        let got: String = client.get(&key).await.unwrap();
+        assert_eq!(got, "moved");
+        let _ = client.quit().await;
+    }
 }

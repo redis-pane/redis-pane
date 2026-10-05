@@ -62,3 +62,7 @@ different question than the user asked.
 briefly scheduled there in PRD §9), and until it is supported, a Cluster target is refused
 clearly at startup rather than connected and silently served from one arbitrary node, which is
 what this deferral has meant in practice since this ADR shipped.
+
+[ADR-0022](0022-cluster-supported-in-stages.md) (Proposed, 2026-10-05) — Cluster is no longer
+merely deferred: M5 supports it in stages, behind the ADR-0021 refusal until the keyspace is safe
+to browse.
