@@ -58,6 +58,7 @@ fn staging_state() -> State {
             target: "cache-01:6379/0".into(),
             environment: Environment::Staging,
             source: Source::Profile("staging".into()),
+            topology: None,
         },
         last_read_ms: Some(60_000),
         link: Link::Up {
@@ -185,6 +186,7 @@ fn base() -> State {
             target: "cache-01:6379/0".into(),
             environment: Environment::Staging,
             source: Source::Profile("staging".into()),
+            topology: None,
         },
         last_read_ms: Some(60_000),
         ..State::default()
@@ -788,6 +790,7 @@ fn narrowing_never_costs_the_environment_or_the_source() {
             target: "redis-primary.eu-west-1.internal:6379/0".into(),
             environment: Environment::Prod,
             source: Source::Profile("prod".into()),
+            topology: None,
         },
         link: up(Tk::Armed),
         read_only: Some(ReadOnlyReason::Environment),
@@ -1721,6 +1724,7 @@ fn the_command_uses_the_target_the_title_bar_is_showing() {
         &state.connection.target,
         &open.name,
         open.value.as_ref().unwrap(),
+        false,
     );
     assert!(cmd.contains("cache-01"), "{cmd}");
     assert_eq!(state.connection.target, "cache-01:6379/0");
@@ -4767,4 +4771,124 @@ fn golden_help_overlay_light_truecolor() {
     let theme = Theme::with_palette(ColorDepth::TrueColor, &Palette::light());
     let buf = render::frame(&state, &theme, &CLOCK, Rect::new(0, 0, 90, 24));
     assert_golden("help_overlay_light_truecolor", &render::to_golden(&buf));
+}
+
+// ── M5 task 2 — the Cluster's shape in the title bar (ADR-0022) ─────────────
+
+fn cluster_state(target: &str) -> State {
+    State {
+        cols: 140,
+        rows: 3,
+        connection: Connection {
+            target: target.into(),
+            environment: Environment::Staging,
+            source: Source::Profile("staging".into()),
+            topology: Some(redis_pane_core::state::Topology {
+                primaries: 3,
+                nodes: 6,
+            }),
+        },
+        link: up(Tk::Armed),
+        ..State::default()
+    }
+}
+
+fn title_at(state: &State, w: u16, set: GlyphSet) -> String {
+    let buf = render::frame(
+        state,
+        &Theme::new(ColorDepth::Monochrome).with_glyphs(set),
+        &CLOCK,
+        Rect::new(0, 0, w, 3),
+    );
+    render::to_text(&buf).lines().next().unwrap().to_string()
+}
+
+#[test]
+fn golden_title_bar_cluster() {
+    let state = cluster_state("cache-01:7000/0");
+    let long = cluster_state("redis-cluster://cache-01.eu-west-1.example.com:7000/0");
+    let mut rendered = Vec::new();
+    for w in [140u16, 120, 100, 80, 60] {
+        rendered.push(format!(
+            "{w:>3} | {}",
+            title_at(&state, w, GlyphSet::Unicode)
+        ));
+    }
+    rendered.push(format!(
+        "{:>3} | {}",
+        "asc",
+        title_at(&state, 140, GlyphSet::Ascii)
+    ));
+    for w in [140u16, 80, 60] {
+        rendered.push(format!(
+            "{w:>3} | {}",
+            title_at(&long, w, GlyphSet::Unicode)
+        ));
+    }
+    assert_golden("title_bar_cluster", &rendered.join("\n"));
+}
+
+#[test]
+fn the_cluster_segment_yields_before_the_target_and_never_costs_environment_or_source() {
+    let state = cluster_state("cache-01:7000/0");
+    let wide = title_at(&state, 140, GlyphSet::Unicode);
+    assert!(
+        wide.contains("cache-01:7000 · cluster · 3 primaries · 6 nodes"),
+        "{wide}"
+    );
+    assert!(!wide.contains("/0"), "a Cluster shows no db: {wide}");
+    for w in 50..=140u16 {
+        let title = title_at(&state, w, GlyphSet::Unicode);
+        assert!(
+            title.contains("staging"),
+            "Environment lost at {w}: {title}"
+        );
+        assert!(
+            title.contains("from profile staging"),
+            "Source lost at {w}: {title}"
+        );
+        if title.contains("cluster") {
+            assert!(
+                title.contains("cache-01:7000"),
+                "the segment outlived the whole target at {w}: {title}"
+            );
+        }
+    }
+}
+
+#[test]
+fn the_cluster_segment_uses_the_ascii_separator_and_keeps_its_width() {
+    let state = cluster_state("cache-01:7000/0");
+    let uni = title_at(&state, 140, GlyphSet::Unicode);
+    let ascii = title_at(&state, 140, GlyphSet::Ascii);
+    assert!(ascii.is_ascii(), "{ascii}");
+    assert!(ascii.contains("cluster"), "{ascii}");
+    assert_eq!(uni.chars().count(), ascii.chars().count());
+}
+
+#[test]
+fn a_single_node_target_is_unchanged_by_the_cluster_work() {
+    let mut state = cluster_state("cache-01:7000/0");
+    state.connection.topology = None;
+    let title = title_at(&state, 140, GlyphSet::Unicode);
+    assert!(title.contains("cache-01:7000/0"), "{title}");
+    assert!(!title.contains("cluster"), "{title}");
+}
+
+#[test]
+fn copying_the_command_on_a_cluster_updates_through_the_core() {
+    let mut state = opened("k", hash_value(), 600);
+    state.connection.target = "cache-01:7000/0".into();
+    state.connection.topology = Some(redis_pane_core::state::Topology {
+        primaries: 3,
+        nodes: 6,
+    });
+    let open = state.open.as_ref().unwrap();
+    let cmd = redis_cli_command(
+        &state.connection.target,
+        &open.name,
+        open.value.as_ref().unwrap(),
+        true,
+    );
+    assert_eq!(cmd, "redis-cli -c -h cache-01 -p 7000 HGETALL k");
 }

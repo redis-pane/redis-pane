@@ -141,6 +141,19 @@ pub struct Connection {
     pub target: String,
     pub environment: Environment,
     pub source: Source,
+    /// The Cluster's shape; `None` for a target that is not a Cluster. Filled
+    /// by the shell from `fred`'s cached routing table, never asked for by the
+    /// core (M5 task 2, ADR-0022).
+    pub topology: Option<Topology>,
+}
+
+/// How big the Cluster behind the Connection is, for the title bar.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Topology {
+    /// Nodes that own slots.
+    pub primaries: u16,
+    /// Every node the client knows of, replicas included.
+    pub nodes: u16,
 }
 
 impl Default for Connection {
@@ -149,6 +162,7 @@ impl Default for Connection {
             target: "127.0.0.1:6379/0".into(),
             environment: Environment::Local,
             source: Source::Default,
+            topology: None,
         }
     }
 }

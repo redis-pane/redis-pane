@@ -22,14 +22,30 @@ pub mod scan;
 
 use std::time::Duration;
 
-use fred::interfaces::TrackingInterface;
+use fred::interfaces::{ClusterInterface, TrackingInterface};
 use fred::prelude::*;
 use fred::types::config::TlsConnector;
 use fred::types::{InfoKind, RespVersion};
 use redis_pane_core::msg::MetadataEntry;
 use redis_pane_core::resolve::Credentials;
 use redis_pane_core::server::{FLOOR, Version};
-use redis_pane_core::state::{ReadOnlyReason, ServerCondition};
+use redis_pane_core::state::{ReadOnlyReason, ServerCondition, Topology};
+
+/// Whether this build lets a Redis Cluster through (ADR-0022).
+///
+/// A value threaded into [`connect_with`] and [`build_config`] rather than a
+/// cargo feature (it would split the shipped binary from the tested one) or an
+/// environment variable (a hidden, user-reachable switch). `main.rs` passes
+/// [`ClusterSupport::Refuse`] until M5 task 5 opens the gate; the integration
+/// suite passes [`ClusterSupport::Allow`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClusterSupport {
+    /// The ADR-0021 refusal: a Cluster target is a [`ConnectError::Cluster`].
+    Refuse,
+    /// Connect as a cluster client, redialling a plain URL that turns out to
+    /// name a cluster node.
+    Allow,
+}
 
 /// Why a connection could not be established or kept.
 #[derive(Debug)]
@@ -107,11 +123,36 @@ pub struct Established {
     /// reason, shown to the reader rather than silently treated as a primary
     /// (review M1).
     pub server_state_error: Option<String>,
+    /// The Cluster's shape, read from the client's routing table; `None` when
+    /// the target is not a Cluster (M5 task 2).
+    pub topology: Option<Topology>,
 }
 
-/// Connect over RESP3, check the floor, then probe for tracking.
+/// Connect over RESP3, check the floor, then probe for tracking. Refuses a
+/// Cluster, as the shipped binary does.
 pub async fn connect(url: &str) -> Result<(Client, Established), ConnectError> {
-    connect_with(url, &Credentials::default()).await
+    connect_with(url, &Credentials::default(), ClusterSupport::Refuse).await
+}
+
+/// The Cluster's shape from `fred`'s cached routing table, or `None` when the
+/// client is not a cluster client or has no table yet. Core does no I/O, so the
+/// shell reads this and sends the result as a `Msg`.
+pub fn topology_of(client: &Client) -> Option<Topology> {
+    if !client.is_clustered() {
+        return None;
+    }
+    let routing = client.cached_cluster_state()?;
+    let mut primaries = std::collections::BTreeSet::new();
+    let mut nodes = std::collections::BTreeSet::new();
+    for range in routing.slots() {
+        primaries.insert(range.primary.clone());
+        nodes.insert(range.primary.clone());
+        nodes.extend(range.replicas.iter().cloned());
+    }
+    Some(Topology {
+        primaries: u16::try_from(primaries.len()).unwrap_or(u16::MAX),
+        nodes: u16::try_from(nodes.len()).unwrap_or(u16::MAX),
+    })
 }
 
 /// Build a `fred` `Config` for the resolved target, credentials and all.
@@ -123,7 +164,11 @@ pub async fn connect(url: &str) -> Result<(Client, Established), ConnectError> {
 /// does rather than re-parsing flags or, worse, falling back to the
 /// credential-less [`connect`] (`docs/plans/m3-feed-connection.md`: "the same
 /// credential path `connect_with` already resolves").
-pub(crate) fn build_config(url: &str, credentials: &Credentials) -> Result<Config, ConnectError> {
+pub(crate) fn build_config(
+    url: &str,
+    credentials: &Credentials,
+    support: ClusterSupport,
+) -> Result<Config, ConnectError> {
     // Redacted, because this string is printed. A URL that fails to parse is
     // exactly the one someone pasted by hand with a real password in it, and
     // the next thing they do with a startup diagnostic is paste it into a bug
@@ -141,7 +186,7 @@ pub(crate) fn build_config(url: &str, credentials: &Credentials) -> Result<Confi
     // string-matching the scheme ourselves, means every spelling `fred`
     // recognizes is covered without this list having to track fred's own
     // (ADR-0021).
-    if config.server.is_clustered() {
+    if config.server.is_clustered() && support == ClusterSupport::Refuse {
         return Err(ConnectError::Cluster);
     }
 
@@ -180,9 +225,41 @@ pub(crate) fn build_config(url: &str, credentials: &Credentials) -> Result<Confi
 pub async fn connect_with(
     url: &str,
     credentials: &Credentials,
+    support: ClusterSupport,
 ) -> Result<(Client, Established), ConnectError> {
-    let config = build_config(url, credentials)?;
+    let config = build_config(url, credentials, support)?;
+    let (client, established, clustered) = establish(config).await?;
+    if !clustered || client.is_clustered() {
+        return Ok((client, established));
+    }
+    // A plain `redis://` URL that names a cluster node: every node reports
+    // `cluster_enabled:1` whichever scheme dialled it (ADR-0021).
+    if support == ClusterSupport::Refuse {
+        return Err(ConnectError::Cluster);
+    }
+    // Redial as a cluster client to the same seed, with the same credentials
+    // and TLS, because `build_config` produced them (M5 task 2, decision 2).
+    // A redial that fails keeps the ADR-0021 diagnostic, which is the more
+    // useful message than a half-explained second failure.
+    let mut redial = build_config(url, credentials, support)?;
+    if let ServerConfig::Centralized { server } = &redial.server {
+        redial.server = ServerConfig::Clustered {
+            hosts: vec![server.clone()],
+            policy: Default::default(),
+        };
+    }
+    match establish(redial).await {
+        Ok((cluster_client, cluster_established, _)) => {
+            let _ = client.quit().await;
+            Ok((cluster_client, cluster_established))
+        }
+        Err(_) => Err(ConnectError::Cluster),
+    }
+}
 
+/// Dial `config`, check the floor and probe. The third value is whether `INFO`
+/// reported `cluster_enabled:1`; the caller decides what to do about it.
+async fn establish(config: Config) -> Result<(Client, Established, bool), ConnectError> {
     let mut builder = Builder::from_config(config);
     // Bound how long a silently dead socket can hide, on both the connection
     // and the command. Neither timing default fred ships is enough on its
@@ -252,15 +329,12 @@ pub async fn connect_with(
     // Cluster target reached by a plain `redis://`/`rediss://` URL, which the
     // scheme check in `build_config` cannot — every node of a Cluster reports
     // this regardless of which scheme dialled it.
-    let (read_only, condition, server_state_error) = match fetch_conditions(&client).await {
-        Ok((read_only, condition, clustered)) => {
-            if clustered {
-                return Err(ConnectError::Cluster);
-            }
-            (read_only, condition, None)
-        }
-        Err(e) => (None, None, Some(describe(&e))),
-    };
+    let (read_only, condition, server_state_error, clustered) =
+        match fetch_conditions(&client).await {
+            Ok((read_only, condition, clustered)) => (read_only, condition, None, clustered),
+            Err(e) => (None, None, Some(describe(&e)), false),
+        };
+    let topology = topology_of(&client);
     Ok((
         client,
         Established {
@@ -269,7 +343,9 @@ pub async fn connect_with(
             read_only,
             condition,
             server_state_error,
+            topology,
         },
+        clustered,
     ))
 }
 
@@ -305,8 +381,11 @@ async fn fetch_conditions(
             .map(|v| v.trim().to_string())
     };
 
+    // A cluster client sends a keyless `INFO` to whichever node it picks, so
+    // one replica answering would make a healthy Cluster read as a replica.
+    // Whether a Cluster is read-only is task 6's question, not this probe's.
     let read_only = match field("role:").as_deref() {
-        Some("slave") | Some("replica") => Some(ReadOnlyReason::Replica),
+        Some("slave") | Some("replica") if !client.is_clustered() => Some(ReadOnlyReason::Replica),
         _ => None,
     };
 
@@ -469,7 +548,7 @@ mod tests {
             "redis-cluster://127.0.0.1:30001",
             "rediss-cluster://127.0.0.1:30001",
         ] {
-            let err = build_config(url, &Credentials::default())
+            let err = build_config(url, &Credentials::default(), ClusterSupport::Refuse)
                 .expect_err("a Cluster-scheme URL must be refused");
             assert!(
                 matches!(err, ConnectError::Cluster),
@@ -479,10 +558,26 @@ mod tests {
     }
 
     /// A plain scheme must not trip the Cluster refusal.
+    /// Under `Allow` the same scheme builds a clustered `Config`.
+    #[test]
+    fn a_clustered_url_builds_under_allow() {
+        let config = build_config(
+            "redis-cluster://127.0.0.1:30001",
+            &Credentials::default(),
+            ClusterSupport::Allow,
+        )
+        .expect("Allow must let a Cluster scheme through");
+        assert!(config.server.is_clustered());
+    }
+
     #[test]
     fn a_plain_scheme_url_is_not_refused_as_clustered() {
-        let config = build_config("redis://127.0.0.1:6379", &Credentials::default())
-            .expect("a plain redis:// URL must build a Config");
+        let config = build_config(
+            "redis://127.0.0.1:6379",
+            &Credentials::default(),
+            ClusterSupport::Refuse,
+        )
+        .expect("a plain redis:// URL must build a Config");
         assert!(!config.server.is_clustered());
     }
 

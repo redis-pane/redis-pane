@@ -50,9 +50,13 @@ async fn main() {
     let display = redis_pane_core::resolve::redact(&url);
 
     let t0 = Instant::now();
-    let (client, est) = redis_pane::redis::connect_with(&url, &credentials)
-        .await
-        .expect("connect");
+    let (client, est) = redis_pane::redis::connect_with(
+        &url,
+        &credentials,
+        redis_pane::redis::ClusterSupport::Refuse,
+    )
+    .await
+    .expect("connect");
     let connect_ms = t0.elapsed();
 
     let mut state = State {
@@ -64,6 +68,7 @@ async fn main() {
             source: Source::Profile(
                 std::env::var("REDIS_PANE_PROFILE_NAME").unwrap_or_else(|_| "profile".into()),
             ),
+            topology: None,
         },
         ..State::default()
     };

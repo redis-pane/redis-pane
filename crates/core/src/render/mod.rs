@@ -1795,14 +1795,33 @@ fn title_bar(state: &State, theme: &Theme, clock: &dyn Clock, area: Rect, buf: &
     // Whatever is left over, the target may have — truncated from the left, so
     // the part that distinguishes one host from another survives.
     let target_budget = left_budget.saturating_sub(required + 3);
+    // A Cluster has one logical database, so the `/db` the target carries is
+    // not shown for it (M5 task 2). Anything else is left exactly as resolved.
+    let shown_target = match state.connection.topology {
+        Some(_) => strip_db(&state.connection.target),
+        None => &state.connection.target,
+    };
+    let mut target_len = 0;
     if target_budget >= 4 {
-        let target = truncate_left(
-            &state.connection.target,
-            target_budget,
-            g.get(Glyph::Ellipsis),
-        );
+        let target = truncate_left(shown_target, target_budget, g.get(Glyph::Ellipsis));
+        target_len = target.chars().count();
         x = put(buf, x, 0, &g.text(" · "), theme.style(Token::Muted));
         x = put(buf, x, 0, &target, theme.style(Token::Text));
+    }
+    // The Cluster's shape sits after the target and yields before it: it is
+    // drawn only when the whole target and the whole segment both fit, so a
+    // cramped bar loses the shape first and the target second, never the
+    // Environment or the Source (DESIGN §2).
+    if let Some(topology) = state.connection.topology {
+        let segment = g.text(&cluster_segment(topology)).into_owned();
+        let sep = g.text(" · ");
+        let sep_w = sep.chars().count();
+        if target_len == shown_target.chars().count()
+            && target_len + sep_w + segment.chars().count() <= target_budget
+        {
+            x = put(buf, x, 0, &sep, theme.style(Token::Muted));
+            x = put(buf, x, 0, &segment, theme.style(Token::Muted));
+        }
     }
 
     x = put(buf, x, 0, &g.text(" · "), theme.style(Token::Muted));
@@ -1816,6 +1835,27 @@ fn title_bar(state: &State, theme: &Theme, clock: &dyn Clock, area: Rect, buf: &
             x = put(buf, x, 0, text, theme.style(*token));
         }
         put(buf, x, 0, " ", border);
+    }
+}
+
+/// `cluster · 3 primaries · 6 nodes`, with the `·` still to go through the
+/// glyph set, as every other readout's separator does.
+fn cluster_segment(topology: crate::state::Topology) -> String {
+    let noun = |n: u16, one: &'static str, many: &'static str| if n == 1 { one } else { many };
+    format!(
+        "cluster · {} {} · {} {}",
+        topology.primaries,
+        noun(topology.primaries, "primary", "primaries"),
+        topology.nodes,
+        noun(topology.nodes, "node", "nodes"),
+    )
+}
+
+/// `host:port/0` without its `/0`: a trailing slash and digits only.
+fn strip_db(target: &str) -> &str {
+    match target.rsplit_once('/') {
+        Some((head, db)) if !db.is_empty() && db.bytes().all(|b| b.is_ascii_digit()) => head,
+        _ => target,
     }
 }
 
