@@ -36,7 +36,7 @@ pub use pubsub::{
     PUBSUB_CAP, PUBSUB_PAYLOAD_MAX, PubSubFocus, PubSubMessage, PubSubState, Subscription,
     parse_subscription, redis_glob_match,
 };
-pub use scan::ScanState;
+pub use scan::{InterruptReason, ScanState};
 pub use session::{SessionFile, SessionFileError, SessionState};
 pub use slowlog::{SlowlogEntry, SlowlogSort, SlowlogState};
 pub use tail::LiveTail;

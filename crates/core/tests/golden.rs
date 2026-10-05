@@ -2746,6 +2746,34 @@ fn golden_capped_keyspace() {
     assert_golden("browser_capped", &draw(&capped_state(), 130, 14));
 }
 
+fn interrupted_state() -> State {
+    let mut state = many_keys();
+    state.scan = redis_pane_core::state::ScanState::Interrupted {
+        scanned: 6,
+        reason: redis_pane_core::state::InterruptReason::TopologyChanged,
+    };
+    state
+}
+
+#[test]
+fn golden_scan_interrupted() {
+    let frame = draw(&interrupted_state(), 130, 14);
+    assert!(
+        frame.contains("the cluster changed during the scan — r to rescan"),
+        "{frame}"
+    );
+    assert!(!frame.contains("scanning"), "{frame}");
+    assert_golden("browser_interrupted", &frame);
+}
+
+#[test]
+fn golden_scan_interrupted_narrow() {
+    assert_golden(
+        "browser_interrupted_60",
+        &draw(&interrupted_state(), 60, 14),
+    );
+}
+
 #[test]
 fn the_banner_names_the_cap_and_what_to_do_about_it() {
     let frame = draw(&capped_state(), 130, 14);

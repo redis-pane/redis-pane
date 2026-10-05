@@ -4978,3 +4978,389 @@ mod cluster_harness {
         let _ = client.quit().await;
     }
 }
+
+/// M5 task 3: the merged scan across a real cluster (R1.11, ADR-0022).
+mod cluster_scan {
+    use super::support::cluster::{Cluster, start_cluster};
+    use super::{ClusterSupport, Credentials};
+    use fred::prelude::*;
+    use redis_pane::redis::scan::{Tuning, stream_keys_with};
+    use redis_pane_core::Msg;
+    use std::collections::HashSet;
+    use std::time::Duration;
+    use tokio::sync::mpsc::Receiver;
+    use tokio_util::sync::CancellationToken;
+
+    async fn connect(cluster: &Cluster) -> Client {
+        let (client, _) = redis_pane::redis::connect_with(
+            &cluster.seed_url(),
+            &Credentials::default(),
+            ClusterSupport::Allow,
+        )
+        .await
+        .expect("cluster client");
+        client
+    }
+
+    /// `user:N` for even N and `order:N` for odd N, 30,000 in all, so every
+    /// slot range holds keys and a pattern has something to separate.
+    async fn seed(client: &Client, n: u32) {
+        for chunk in (0..n).collect::<Vec<_>>().chunks(1_000) {
+            let pipe = client.pipeline();
+            for i in chunk {
+                let name = if i % 2 == 0 { "user" } else { "order" };
+                pipe.set::<(), _, _>(format!("{name}:{i}"), "v", None, None, false)
+                    .await
+                    .unwrap();
+            }
+            pipe.all::<()>().await.unwrap();
+        }
+    }
+
+    /// Everything up to and including the terminal message.
+    struct Run {
+        started: Option<u64>,
+        keys: Vec<String>,
+        end: Msg,
+    }
+
+    fn is_terminal(m: &Msg) -> bool {
+        matches!(
+            m,
+            Msg::ScanComplete
+                | Msg::ScanCancelled
+                | Msg::ScanFailed { .. }
+                | Msg::ScanInterrupted { .. }
+        )
+    }
+
+    async fn drain(rx: &mut Receiver<Msg>, run: &mut Run, deadline: Duration) {
+        let end = tokio::time::timeout(deadline, async {
+            loop {
+                match rx.recv().await {
+                    Some(Msg::ScanStarted { estimated_total }) => {
+                        run.started = Some(estimated_total)
+                    }
+                    Some(Msg::ScanBatch { keys }) => run
+                        .keys
+                        .extend(keys.into_iter().map(|k| String::from_utf8(k).unwrap())),
+                    Some(m) if is_terminal(&m) => return m,
+                    Some(other) => panic!("unexpected {other:?}"),
+                    None => panic!("scan ended without a terminal message"),
+                }
+            }
+        })
+        .await
+        .expect("the scan did not end in time");
+        run.end = end;
+    }
+
+    fn new_run() -> Run {
+        Run {
+            started: None,
+            keys: Vec::new(),
+            end: Msg::ScanCancelled,
+        }
+    }
+
+    async fn scan_all(client: &Client, pattern: Option<&str>) -> Run {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(64);
+        let mut run = new_run();
+        let scan = stream_keys_with(
+            client,
+            pattern,
+            tx,
+            CancellationToken::new(),
+            Tuning::default(),
+        );
+        let (_, ()) = tokio::join!(scan, drain(&mut rx, &mut run, Duration::from_secs(120)));
+        run
+    }
+
+    async fn dbsize_total(cluster: &Cluster) -> u64 {
+        let mut total = 0;
+        for p in cluster.primaries().await {
+            total += cluster
+                .cli(p.port, &["dbsize"])
+                .await
+                .trim()
+                .parse::<u64>()
+                .unwrap();
+        }
+        total
+    }
+
+    #[tokio::test]
+    #[ignore = "needs docker"]
+    async fn every_key_across_every_primary_is_seen_exactly_once_and_the_scan_completes() {
+        let cluster = start_cluster().await;
+        let client = connect(&cluster).await;
+        seed(&client, 30_000).await;
+
+        // The seed must really span the cluster, or this proves nothing.
+        for p in cluster.primaries().await {
+            let n: u64 = cluster
+                .cli(p.port, &["dbsize"])
+                .await
+                .trim()
+                .parse()
+                .unwrap();
+            assert!(n > 5_000, "primary {} holds only {n} keys", p.port);
+        }
+
+        let run = scan_all(&client, None).await;
+        assert_eq!(run.end, Msg::ScanComplete);
+        assert_eq!(run.keys.len(), 30_000, "a key was missed or repeated");
+        let unique: HashSet<_> = run.keys.iter().collect();
+        assert_eq!(unique.len(), 30_000, "a key repeated in a stable cluster");
+        // The progress denominator is the cluster-wide total, not one node's.
+        assert_eq!(run.started, Some(30_000));
+        assert_eq!(run.started, Some(dbsize_total(&cluster).await));
+    }
+
+    #[tokio::test]
+    #[ignore = "needs docker"]
+    async fn a_pattern_filter_works_across_every_node() {
+        let cluster = start_cluster().await;
+        let client = connect(&cluster).await;
+        seed(&client, 30_000).await;
+
+        let run = scan_all(&client, Some("user:*")).await;
+        assert_eq!(run.end, Msg::ScanComplete);
+        assert_eq!(run.keys.len(), 15_000);
+        assert!(run.keys.iter().all(|k| k.starts_with("user:")));
+        assert_eq!(run.keys.iter().collect::<HashSet<_>>().len(), 15_000);
+    }
+
+    async fn scan_calls(cluster: &Cluster) -> u64 {
+        let mut total = 0;
+        for p in cluster.primaries().await {
+            let info = cluster.cli(p.port, &["info", "commandstats"]).await;
+            total += info
+                .lines()
+                .find(|l| l.starts_with("cmdstat_scan:"))
+                .and_then(|l| {
+                    l.trim_start_matches("cmdstat_scan:calls=")
+                        .split(',')
+                        .next()
+                })
+                .and_then(|n| n.parse::<u64>().ok())
+                .unwrap_or(0);
+        }
+        total
+    }
+
+    #[tokio::test]
+    #[ignore = "needs docker"]
+    async fn esc_mid_scan_cancels_within_a_page_and_stops_asking_the_servers() {
+        let cluster = start_cluster().await;
+        let client = connect(&cluster).await;
+        seed(&client, 30_000).await;
+
+        let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+        let cancel = CancellationToken::new();
+        let tuning = Tuning {
+            page_size: 50,
+            ..Tuning::default()
+        };
+        let c = client.clone();
+        let token = cancel.clone();
+        let scan = tokio::spawn(async move {
+            stream_keys_with(&c, None, tx, token, tuning).await;
+        });
+
+        // Take the start and one page, then press Esc.
+        let mut seen = 0;
+        loop {
+            match rx.recv().await.expect("scan ended early") {
+                Msg::ScanStarted { .. } => {}
+                Msg::ScanBatch { keys } => {
+                    seen += keys.len();
+                    break;
+                }
+                other => panic!("unexpected {other:?}"),
+            }
+        }
+        cancel.cancel();
+
+        // The terminal message follows; at most the batch the loop was
+        // already holding can precede it.
+        let mut batches_after = 0;
+        let end = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                match rx.recv().await.expect("no terminal message") {
+                    Msg::ScanBatch { keys } => {
+                        seen += keys.len();
+                        batches_after += 1;
+                    }
+                    m => return m,
+                }
+            }
+        })
+        .await
+        .expect("Esc was not answered within 5s");
+        assert_eq!(end, Msg::ScanCancelled);
+        assert!(batches_after <= 1, "{batches_after} pages after Esc");
+        assert!(seen < 30_000);
+        scan.await.unwrap();
+
+        // And the servers are not still being asked for pages.
+        let first = scan_calls(&cluster).await;
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        assert_eq!(
+            first,
+            scan_calls(&cluster).await,
+            "SCAN continued after Esc"
+        );
+    }
+
+    /// A failover during a scan ends it as interrupted, never as complete.
+    /// Deterministic: the scan is held between pages by an undrained channel,
+    /// the failover is carried out, and draining resumes only once the
+    /// client's own routing table shows the new primary.
+    #[tokio::test]
+    #[ignore = "needs docker"]
+    async fn a_failover_during_a_scan_interrupts_it_and_never_completes_it() {
+        let cluster = start_cluster().await;
+        let client = connect(&cluster).await;
+        seed(&client, 30_000).await;
+
+        let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+        let tuning = Tuning {
+            page_size: 20,
+            topology_sync_every: Duration::from_millis(200),
+            ..Tuning::default()
+        };
+        let c = client.clone();
+        let scan = tokio::spawn(async move {
+            stream_keys_with(&c, None, tx, CancellationToken::new(), tuning).await;
+        });
+        let mut run = new_run();
+        loop {
+            match rx.recv().await.expect("scan ended early") {
+                Msg::ScanStarted { estimated_total } => run.started = Some(estimated_total),
+                Msg::ScanBatch { keys } => {
+                    run.keys
+                        .extend(keys.into_iter().map(|k| String::from_utf8(k).unwrap()));
+                    break;
+                }
+                other => panic!("unexpected {other:?}"),
+            }
+        }
+
+        // The scan now waits on us, mid-keyspace. Fail a primary over.
+        let replica = cluster.replicas().await.remove(0);
+        let new_primary = format!("127.0.0.1:{}", replica.port);
+        cluster.failover(replica.port).await;
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
+        loop {
+            let moved = client.cached_cluster_state().is_some_and(|r| {
+                r.slots()
+                    .iter()
+                    .any(|s| s.primary.to_string() == new_primary)
+            });
+            if moved {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the client never noticed the failover"
+            );
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+
+        drain(&mut rx, &mut run, Duration::from_secs(30)).await;
+        assert!(
+            matches!(run.end, Msg::ScanInterrupted { .. }),
+            "expected ScanInterrupted, got {:?}",
+            run.end
+        );
+        assert!(run.keys.len() < 30_000, "the scan was not mid-way");
+        scan.await.unwrap();
+    }
+
+    /// A primary that is down fails the scan and is named, rather than the
+    /// scan hanging or reporting a smaller total.
+    #[tokio::test]
+    #[ignore = "needs docker"]
+    async fn a_dead_primary_fails_the_scan_naming_it() {
+        let cluster = start_cluster().await;
+        let client = connect(&cluster).await;
+        seed(&client, 3_000).await;
+        let dead = cluster.primaries().await[1].port;
+        cluster
+            .exec(vec![
+                "sh".into(),
+                "-c".into(),
+                format!("redis-cli -p {dead} shutdown nosave; true"),
+            ])
+            .await;
+
+        let (tx, mut rx) = tokio::sync::mpsc::channel(64);
+        let mut run = new_run();
+        let tuning = Tuning {
+            node_page_timeout: Duration::from_secs(3),
+            topology_sync_every: Duration::from_secs(3_600),
+            ..Tuning::default()
+        };
+        let c = client.clone();
+        let scan = tokio::spawn(async move {
+            stream_keys_with(&c, None, tx, CancellationToken::new(), tuning).await;
+        });
+        drain(&mut rx, &mut run, Duration::from_secs(60)).await;
+        let Msg::ScanFailed { error } = &run.end else {
+            panic!("expected ScanFailed, got {:?}", run.end);
+        };
+        assert!(
+            error.contains(&format!("127.0.0.1:{dead}")),
+            "the failing node is not named: {error}"
+        );
+        scan.await.unwrap();
+    }
+
+    /// The same, but the node dies after the denominator was read, so it is the
+    /// per-node page timeout that names it.
+    #[tokio::test]
+    #[ignore = "needs docker"]
+    async fn a_primary_that_dies_mid_scan_fails_the_scan_naming_it() {
+        let cluster = start_cluster().await;
+        let client = connect(&cluster).await;
+        seed(&client, 30_000).await;
+        let dead = cluster.primaries().await[1].port;
+
+        let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+        let tuning = Tuning {
+            page_size: 20,
+            node_page_timeout: Duration::from_secs(3),
+            topology_sync_every: Duration::from_secs(3_600),
+        };
+        let c = client.clone();
+        let scan = tokio::spawn(async move {
+            stream_keys_with(&c, None, tx, CancellationToken::new(), tuning).await;
+        });
+        let mut run = new_run();
+        loop {
+            match rx.recv().await.expect("scan ended early") {
+                Msg::ScanStarted { .. } => {}
+                Msg::ScanBatch { .. } => break,
+                other => panic!("unexpected {other:?}"),
+            }
+        }
+        cluster
+            .exec(vec![
+                "sh".into(),
+                "-c".into(),
+                format!("redis-cli -p {dead} shutdown nosave; true"),
+            ])
+            .await;
+        drain(&mut rx, &mut run, Duration::from_secs(60)).await;
+        let Msg::ScanFailed { error } = &run.end else {
+            panic!("expected ScanFailed, got {:?}", run.end);
+        };
+        assert!(
+            error.contains(&format!("127.0.0.1:{dead}")),
+            "the failing node is not named: {error}"
+        );
+        scan.await.unwrap();
+    }
+}

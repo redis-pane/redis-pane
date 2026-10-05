@@ -275,6 +275,22 @@ pub(super) fn scan_failed(mut state: State, error: String) -> (State, Vec<Comman
     (state, Vec::new())
 }
 
+pub(super) fn scan_interrupted(
+    mut state: State,
+    reason: crate::state::InterruptReason,
+) -> (State, Vec<Command>) {
+    state.restore_key = None;
+    // A cap reached first is the more important fact, as for `ScanCancelled`.
+    if !matches!(state.scan, ScanState::Capped { .. }) {
+        state.scan = ScanState::Interrupted {
+            scanned: state.keys.len() as u64,
+            reason,
+        };
+    }
+    state.rebuild_list();
+    (state, Vec::new())
+}
+
 #[cfg(test)]
 mod scan_tests {
     //! The keyspace traversal, as seen by the core: batches arrive, the cap is
@@ -469,6 +485,76 @@ mod scan_tests {
     fn esc_with_nothing_in_flight_does_nothing() {
         let (_, cmds) = update(State::default(), Msg::Key(KeyPress::plain(KeyCode::Esc)));
         assert!(cmds.is_empty());
+    }
+
+    #[test]
+    fn an_interrupted_scan_keeps_its_keys_and_never_claims_completion() {
+        use crate::state::InterruptReason;
+        let (s, _) = update(started(100), Msg::ScanBatch { keys: batch(30, 0) });
+        let (s, _) = update(
+            s,
+            Msg::ScanInterrupted {
+                reason: InterruptReason::TopologyChanged,
+            },
+        );
+        assert_eq!(s.keys.len(), 30);
+        assert_eq!(
+            s.scan,
+            ScanState::Interrupted {
+                scanned: 30,
+                reason: InterruptReason::TopologyChanged
+            }
+        );
+        assert_eq!(
+            s.scan.readout(),
+            "the cluster changed during the scan — r to rescan"
+        );
+        assert!(!s.scan.is_running());
+    }
+
+    #[test]
+    fn an_interruption_does_not_overwrite_the_cap() {
+        use crate::state::InterruptReason;
+        let mut s = State {
+            keys: LoadedSet::with_cap(10),
+            ..State::default()
+        };
+        (s, _) = update(
+            s,
+            Msg::ScanStarted {
+                estimated_total: 100,
+            },
+        );
+        (s, _) = update(s, Msg::ScanBatch { keys: batch(50, 0) });
+        let (s, _) = update(
+            s,
+            Msg::ScanInterrupted {
+                reason: InterruptReason::TopologyChanged,
+            },
+        );
+        assert!(matches!(s.scan, ScanState::Capped { .. }));
+    }
+
+    #[test]
+    fn r_rescans_from_an_interrupted_scan() {
+        use crate::state::InterruptReason;
+        let (s, _) = update(started(100), Msg::ScanBatch { keys: batch(30, 0) });
+        let (s, _) = update(
+            s,
+            Msg::ScanInterrupted {
+                reason: InterruptReason::TopologyChanged,
+            },
+        );
+        let (s, cmds) = update(s, Msg::Key(KeyPress::plain(KeyCode::Char('r'))));
+        assert_eq!(cmds, vec![Command::StartScan { pattern: None }]);
+        let (s, _) = update(
+            s,
+            Msg::ScanStarted {
+                estimated_total: 100,
+            },
+        );
+        assert!(s.scan.is_running());
+        assert!(s.keys.is_empty());
     }
 
     #[test]

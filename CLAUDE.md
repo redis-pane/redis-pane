@@ -138,9 +138,11 @@ they are expensive to retrofit:
   has no random access and no stable order, which makes a sliding window harder *and* worse
   (ADR-0010). This shapes every access to the key list — it belongs in the first commit that
   stores a key.
-- **The keyspace source abstracts over a stream of keys**, not over a cursor. v1 has exactly one
-  cursor behind it, but Cluster will have N (ADR-0008) and the browser above must not know. It
-  lives in `crates/app/src/redis/scan.rs`; the core sees only `Msg::ScanBatch`.
+- **The keyspace source abstracts over a stream of keys**, not over a cursor. A standalone server
+  has one cursor behind it, a Cluster one per primary (ADR-0008, ADR-0022), merged in
+  `crates/app/src/redis/scan.rs`; the browser above must not know. The core sees only
+  `Msg::ScanBatch`, plus `Msg::ScanInterrupted` when a topology change makes the walk's coverage
+  unknowable (it keeps its keys, never records completion, and `r` rescans).
 - **The cap is enforced in exactly one place** — `scan_batch` in `update/scan.rs` — so no path can grow
   the Loaded set past it. Measured: 1M keys of average length occupy 40MB (`cargo run --release
   -p redis-pane-core --example memreport`).

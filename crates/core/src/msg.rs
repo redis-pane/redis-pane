@@ -166,6 +166,12 @@ pub enum Msg {
     ScanFailed {
         error: String,
     },
+    /// The traversal stopped because the keyspace's shape changed under it
+    /// (M5 task 3). Not a failure and not a completion: the keys already sent
+    /// stay, and the core must not claim the list is whole.
+    ScanInterrupted {
+        reason: crate::state::InterruptReason,
+    },
     /// Lazily-fetched metadata arrived for some rows (R2.4).
     ///
     /// `gone` carries the rows whose key had vanished by the time the fetch

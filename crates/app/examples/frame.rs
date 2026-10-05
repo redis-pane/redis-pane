@@ -93,7 +93,10 @@ async fn main() {
     let mut first_batch: Option<Duration> = None;
     let mut pending: Vec<usize> = Vec::new();
     while let Some(msg) = rx.recv().await {
-        let done = matches!(msg, Msg::ScanComplete | Msg::ScanFailed { .. });
+        let done = matches!(
+            msg,
+            Msg::ScanComplete | Msg::ScanFailed { .. } | Msg::ScanInterrupted { .. }
+        );
         if matches!(msg, Msg::ScanBatch { .. }) && first_batch.is_none() {
             first_batch = Some(t1.elapsed());
         }
