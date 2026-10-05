@@ -33,6 +33,23 @@ pub enum ScanState {
     Failed {
         error: String,
     },
+    /// The scan stopped because the thing it was walking changed shape under
+    /// it (M5 task 3). What was loaded stays, as after `Esc`, but completion
+    /// is never recorded: keys may be missing or repeated, and a list that
+    /// looks finished is the one thing this state exists to prevent.
+    Interrupted {
+        scanned: u64,
+        reason: InterruptReason,
+    },
+}
+
+/// Why a scan was interrupted. The core knows the reason, never the nodes
+/// behind it (ADR-0008).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum InterruptReason {
+    /// A Cluster's topology changed (failover, resharding, a node joining).
+    TopologyChanged,
 }
 
 impl ScanState {
@@ -65,6 +82,11 @@ impl ScanState {
                 )
             }
             ScanState::Failed { error } => format!("scan failed: {error}"),
+            ScanState::Interrupted { reason, .. } => match reason {
+                InterruptReason::TopologyChanged => {
+                    "the cluster changed during the scan — r to rescan".into()
+                }
+            },
         }
     }
 }

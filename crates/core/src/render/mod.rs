@@ -971,9 +971,9 @@ fn status_bar(state: &State, theme: &Theme, clock: &dyn Clock, area: Rect, buf: 
         Token::Ok
     } else {
         match state.scan {
-            crate::state::ScanState::Capped { .. } | crate::state::ScanState::Failed { .. } => {
-                Token::Warn
-            }
+            crate::state::ScanState::Capped { .. }
+            | crate::state::ScanState::Failed { .. }
+            | crate::state::ScanState::Interrupted { .. } => Token::Warn,
             _ => Token::Muted,
         }
     };

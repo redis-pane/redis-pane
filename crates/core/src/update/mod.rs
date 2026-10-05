@@ -231,6 +231,7 @@ fn step(mut state: State, msg: Msg) -> (State, Vec<Command>) {
         Msg::ScanComplete => scan_complete(state),
         Msg::ScanCancelled => scan_cancelled(state),
         Msg::ScanFailed { error } => scan_failed(state, error),
+        Msg::ScanInterrupted { reason } => scan_interrupted(state, reason),
         Msg::ValueLoaded {
             token,
             index,
