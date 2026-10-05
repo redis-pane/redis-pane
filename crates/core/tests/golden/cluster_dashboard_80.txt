@@ -1,0 +1,24 @@
+─ redis-pane ─ ● staging · …ter://cache-01:7000 · from profile staging  ● live ─
+
+ DASHBOARD
+
+ ⚠ INFO is per node on a Cluster — the Dashboard comes in M5 (task 8)
+ Keys, the Viewer and Pub/Sub work on a Cluster as usual.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ ⌃R read-only   g s slowlog   g m monitor   g p pub/sub   ? F1 help

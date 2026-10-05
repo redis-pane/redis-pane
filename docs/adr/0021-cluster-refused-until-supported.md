@@ -1,6 +1,6 @@
 # ADR-0021 — Cluster is refused at startup until it is supported
 
-**Status:** Accepted · **Date:** 2026-10-01
+**Status:** Superseded by ADR-0022 (from M5 task 5) · **Date:** 2026-10-01
 
 ## Context
 

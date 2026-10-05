@@ -35,6 +35,16 @@ pub fn render(state: &State, theme: &Theme, clock: &dyn Clock, area: Rect, buf: 
     if area.width < 8 || area.height < 3 {
         return;
     }
+    if state.on_cluster() {
+        super::cluster_notice(
+            theme,
+            area,
+            "DASHBOARD",
+            "⚠ INFO is per node on a Cluster — the Dashboard comes in M5 (task 8)",
+            buf,
+        );
+        return;
+    }
     let mut y = area.y;
     summary_line(state, theme, clock, area, y, buf);
     y += 1;

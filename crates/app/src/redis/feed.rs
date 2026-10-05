@@ -33,7 +33,7 @@ use tokio::sync::mpsc::Sender;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
-use super::{ClusterSupport, ConnectError};
+use super::ConnectError;
 
 /// Which stream a feed connection carries.
 ///
@@ -236,13 +236,10 @@ pub async fn open_feed(
     tx: Sender<Msg>,
     clock: Arc<dyn Clock>,
     main: &Client,
-    support: ClusterSupport,
 ) -> Result<FeedHandle, ConnectError> {
     match kind {
-        FeedKind::Monitor => open_monitor(url, credentials, token, tx, clock, main, support).await,
-        FeedKind::Subscribe(subs) => {
-            open_subscribe(url, credentials, subs, token, tx, clock, support).await
-        }
+        FeedKind::Monitor => open_monitor(url, credentials, token, tx, clock, main).await,
+        FeedKind::Subscribe(subs) => open_subscribe(url, credentials, subs, token, tx, clock).await,
     }
 }
 
@@ -307,9 +304,10 @@ pub async fn open_feed(
 /// of its own for a second, short-lived connection — the main connection
 /// already paid that cost and already knows the answer. A Clustered target
 /// is refused outright with a reason that says why, rather than reaching
-/// `monitor::run`'s own generic error: Cluster is not a v1 target at all
-/// (ADR-0008), so this is "not supported yet", not "temporarily
-/// unreachable".
+/// `monitor::run`'s own generic error: Monitor is per node on a Cluster
+/// (ADR-0022, M5 task 8), so this is "not supported yet", not "temporarily
+/// unreachable". The Monitor view never asks for a feed on a Cluster, so this
+/// is the second guard behind it.
 async fn open_monitor(
     url: &str,
     credentials: &Credentials,
@@ -317,9 +315,8 @@ async fn open_monitor(
     tx: Sender<Msg>,
     clock: Arc<dyn Clock>,
     main: &Client,
-    support: ClusterSupport,
 ) -> Result<FeedHandle, ConnectError> {
-    let config: Config = super::build_config(url, credentials, support)?;
+    let config: Config = super::build_config(url, credentials)?;
     let config = monitor_config(config, &main.active_connections())?;
     let stream = fred::monitor::run(config)
         .await
@@ -342,8 +339,7 @@ async fn open_monitor(
 fn monitor_config(mut config: Config, active: &[Server]) -> Result<Config, ConnectError> {
     if config.server.is_clustered() {
         return Err(ConnectError::Unreachable(
-            "MONITOR is not supported against a Cluster target (ADR-0008: Cluster is not a v1 target)"
-                .into(),
+            "MONITOR is per node on a Cluster — coming in M5 (task 8, ADR-0022)".into(),
         ));
     }
     if config.server.is_sentinel() {
@@ -452,9 +448,8 @@ async fn open_subscribe(
     token: FeedToken,
     tx: Sender<Msg>,
     clock: Arc<dyn Clock>,
-    support: ClusterSupport,
 ) -> Result<FeedHandle, ConnectError> {
-    let config = super::build_config(url, credentials, support)?;
+    let config = super::build_config(url, credentials)?;
     let mut builder = fred::types::Builder::from_config(config);
     // Same backstop `connect_with` gives the main connection, and for the
     // same reason: fred's default `default_command_timeout` is `0` (never),

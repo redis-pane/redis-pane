@@ -34,6 +34,13 @@ pub(super) fn open_slowlog(mut state: State) -> (State, Vec<Command>) {
     let mut commands = leave_monitor(&mut state);
     commands.extend(leave_pubsub(&mut state));
     state.screen = View::Slowlog;
+    // On a Cluster `SLOWLOG GET` would answer from an arbitrary node and show
+    // it as the whole Cluster's (ADR-0022); the view renders a notice instead
+    // and nothing is fetched until M5 task 8.
+    if state.on_cluster() {
+        state.slowlog.loading = false;
+        return (state, commands);
+    }
     state.slowlog.loading = true;
     commands.push(Command::FetchSlowlog {
         count: SLOWLOG_FETCH_COUNT,
@@ -91,6 +98,12 @@ pub(super) fn reset_slowlog_landed(mut state: State, at_ms: u64) -> (State, Vec<
 /// actions this view gives a meaning to; everything else is a no-op while
 /// it is showing.
 pub(super) fn slowlog_dispatch(mut state: State, action: Action) -> (State, Vec<Command>) {
+    // Nothing here has a meaning on a Cluster (`open_slowlog`): not `r`, and
+    // above all not `d`, which would stage `SLOWLOG RESET` against whichever
+    // node answered.
+    if state.on_cluster() {
+        return (state, Vec::new());
+    }
     match action {
         Action::MoveDown => {
             state.slowlog.move_selection(1);

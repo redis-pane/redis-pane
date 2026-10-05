@@ -71,6 +71,16 @@ pub fn render(state: &State, theme: &Theme, area: Rect, buf: &mut Buffer) {
     if area.width < 8 || area.height < 3 {
         return;
     }
+    if state.on_cluster() {
+        super::cluster_notice(
+            theme,
+            area,
+            "MONITOR",
+            "⚠ Monitor is per node on a Cluster — coming in M5 (task 8)",
+            buf,
+        );
+        return;
+    }
     let mut y = area.y;
     banner(state, theme, area, y, buf);
     y += 1;

@@ -52,3 +52,24 @@ python3 scripts/churn.py --no-delete --no-create # mutations only
 ```
 
 Both tools take `--host/--port/--username/--password/--db`.
+
+## A local Redis Cluster
+
+`fixtures.py` and `churn.py` speak to one node and do not follow `MOVED`, so they cannot fill a
+Cluster; use `redis-cli -c` for that. This brings up 3 primaries and 3 replicas in one container,
+on host ports 7100-7105 (7000 is taken by AirPlay Receiver on macOS; the nodes announce `127.0.0.1`, so the same ports must be published, which
+is why they are not remapped):
+
+```bash
+docker run -d --name redis-pane-cluster $(for p in 7100 7101 7102 7103 7104 7105; do printf -- '-p %s:%s ' $p $p; done) \
+  redis:8.4-alpine sh -c 'for p in 7100 7101 7102 7103 7104 7105; do mkdir -p /data/$p; \
+    redis-server --port $p --cluster-enabled yes --cluster-config-file /data/$p/nodes.conf --dir /data/$p \
+    --cluster-announce-ip 127.0.0.1 --cluster-node-timeout 3000 --bind 0.0.0.0 --protected-mode no \
+    --appendonly no --save "" --daemonize yes; done; echo started; exec tail -f /dev/null'
+docker exec redis-pane-cluster redis-cli --cluster create \
+  127.0.0.1:7100 127.0.0.1:7101 127.0.0.1:7102 127.0.0.1:7103 127.0.0.1:7104 127.0.0.1:7105 \
+  --cluster-replicas 1 --cluster-yes
+for i in $(seq 1 300); do docker exec redis-pane-cluster redis-cli -c -p 7100 set key:$i v >/dev/null; done
+cargo run -p redis-pane -- --url redis-cluster://127.0.0.1:7100
+docker rm -f redis-pane-cluster                # throw it away
+```

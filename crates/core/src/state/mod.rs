@@ -1020,6 +1020,17 @@ pub struct Startup {
 }
 
 impl State {
+    /// Whether the Connection is a Cluster (M5 task 5, ADR-0022).
+    ///
+    /// The server views that read one node's own figures (Slowlog, Monitor,
+    /// Dashboard) ask this before issuing anything: on a Cluster a keyless
+    /// command lands on an arbitrary node, which would present one node's
+    /// numbers as the whole Cluster's. They render a notice instead until
+    /// M5 task 8 makes them per node.
+    pub fn on_cluster(&self) -> bool {
+        self.connection.topology.is_some()
+    }
+
     /// The state a session starts in (review H2).
     ///
     /// The shell used to assemble this field by field in `main.rs`, including
