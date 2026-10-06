@@ -25,6 +25,12 @@ pub(super) const MONITOR_PAGE_ROWS: usize = 10;
 /// Monitor view itself — pressing `g m` again always restarts fresh
 /// (decision 2), same as every other entry.
 pub(super) fn open_monitor(mut state: State) -> (State, Vec<Command>) {
+    // On a Cluster there is no feed to dial, so there is no cost to confirm
+    // either: the view opens straight onto its notice (ADR-0022; MONITOR is
+    // per node until M5 task 8).
+    if state.on_cluster() {
+        return open_monitor_view(state);
+    }
     match state.connection.environment {
         crate::state::Environment::Prod | crate::state::Environment::Unknown => {
             state.pending_feed = Some(FeedKindMsg::Monitor);
@@ -44,6 +50,10 @@ pub(super) fn open_monitor_view(mut state: State) -> (State, Vec<Command>) {
     commands.extend(leave_pubsub(&mut state));
     state.screen = View::Monitor;
     state.monitor.reset();
+    if state.on_cluster() {
+        // The shell's own `monitor_config` refusal stays as a second guard.
+        return (state, commands);
+    }
     state.monitor.feed_token = issue_feed_token(&mut state);
     state.monitor.status = FeedStatus::Connecting;
     commands.push(Command::OpenFeed {
@@ -133,6 +143,11 @@ pub(super) fn feed_confirm_key(
 /// `dispatch_action`'s own guard routes here for exactly the actions this
 /// view gives a meaning to; everything else is a no-op while it is showing.
 pub(super) fn monitor_dispatch(mut state: State, action: Action) -> (State, Vec<Command>) {
+    // Nothing to move through, pause, filter or reopen on a Cluster
+    // (`open_monitor_view`).
+    if state.on_cluster() {
+        return (state, Vec::new());
+    }
     match action {
         Action::MoveDown => {
             state.monitor.move_selection(1);

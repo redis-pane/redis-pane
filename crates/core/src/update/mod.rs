@@ -1724,3 +1724,99 @@ mod topology_tests {
         assert!(commands.is_empty());
     }
 }
+
+/// M5 task 5 (ADR-0022): on a Cluster the server views that read one node's
+/// own figures open onto a notice and issue nothing.
+#[cfg(test)]
+mod cluster_server_view_tests {
+    use super::*;
+    use crate::state::{Environment, Topology};
+
+    fn cluster(environment: Environment) -> State {
+        let mut state = State::default();
+        state.connection.environment = environment;
+        state.connection.topology = Some(Topology {
+            primaries: 3,
+            nodes: 6,
+        });
+        state
+    }
+
+    fn key(state: State, c: char) -> (State, Vec<Command>) {
+        update(state, Msg::Key(KeyPress::plain(KeyCode::Char(c))))
+    }
+
+    fn chord(state: State, second: char) -> (State, Vec<Command>) {
+        let (state, _) = key(state, 'g');
+        key(state, second)
+    }
+
+    #[test]
+    fn g_s_g_m_and_g_d_open_their_views_and_emit_no_fetch_and_no_feed() {
+        for env in [
+            Environment::Local,
+            Environment::Staging,
+            Environment::Prod,
+            Environment::Unknown,
+        ] {
+            for (second, view) in [
+                ('s', View::Slowlog),
+                ('m', View::Monitor),
+                ('d', View::Dashboard),
+            ] {
+                let (state, commands) = chord(cluster(env), second);
+                assert_eq!(state.screen, view, "{env:?} g {second}");
+                assert!(commands.is_empty(), "{env:?} g {second}: {commands:?}");
+                assert!(state.pending_feed.is_none(), "no cost dialog for a no-op");
+                assert!(!state.slowlog.loading && !state.dashboard.loading);
+            }
+        }
+    }
+
+    #[test]
+    fn nothing_in_the_views_issues_anything_on_a_cluster() {
+        for second in ['s', 'm', 'd'] {
+            let (state, _) = chord(cluster(Environment::Staging), second);
+            for c in ['r', 'd', 'c', '/', 'p', 'j', 'k'] {
+                let (after, commands) = key(state.clone(), c);
+                assert!(commands.is_empty(), "g {second} then {c}: {commands:?}");
+                assert!(after.confirm.is_none(), "g {second} then {c} staged one");
+                assert!(!after.filtering, "g {second} then {c} opened a filter");
+            }
+            let (_, commands) = update(state, Msg::DashboardPollTick);
+            assert!(commands.is_empty());
+        }
+    }
+
+    #[test]
+    fn navigation_still_leaves_the_view() {
+        let (state, _) = chord(cluster(Environment::Staging), 's');
+        let (state, _) = chord(state, 'k');
+        assert_eq!(state.screen, View::Keys);
+        let (state, _) = chord(state, 'd');
+        let (state, _) = update(state, Msg::Key(KeyPress::plain(KeyCode::Esc)));
+        assert_eq!(state.screen, View::Keys);
+    }
+
+    #[test]
+    fn pubsub_still_opens_on_a_cluster() {
+        let (state, _) = chord(cluster(Environment::Staging), 'p');
+        assert_eq!(state.screen, View::PubSub);
+    }
+
+    #[test]
+    fn a_single_node_target_still_fetches() {
+        let (_, commands) = chord(State::default(), 's');
+        assert!(matches!(
+            commands.as_slice(),
+            [Command::FetchSlowlog { .. }]
+        ));
+        let (_, commands) = chord(State::default(), 'd');
+        assert!(matches!(
+            commands.as_slice(),
+            [Command::FetchServerInfo { .. }]
+        ));
+        let (_, commands) = chord(State::default(), 'm');
+        assert!(matches!(commands.as_slice(), [Command::OpenFeed { .. }]));
+    }
+}

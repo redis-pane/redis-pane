@@ -547,8 +547,10 @@ through the theme's semantic `Token::Warn`/`Token::Danger` tokens, never a liter
 every tile can be expanded (`Enter`) into the raw `INFO` section behind it as a scrollable
 overlay (`Esc` closes it, `Esc` again leaves the view — nearest thing first).
 
-Single node (ADR-0008): `INFO`, like `SLOWLOG`, is per-server, so a Cluster-scoped Dashboard would
-need a node selector this app's premise has no room for — out of scope for v1.
+`INFO`, like `SLOWLOG`, is per-server. On a Cluster (ADR-0022) a keyless `INFO` would answer from
+an arbitrary node and present its figures as the whole Cluster's, so until M5 task 8 the Dashboard
+shows an in-view notice ("INFO is per node on a Cluster") and issues no `INFO` at all. Navigation
+in and out works as usual, and help dims the view's keys with the reason.
 
 Data source is `INFO`, request/response on the main connection, not a feed — unlike Monitor and
 Pub/Sub there is no `CLIENT TRACKING` equivalent to arm. `g d` fetches once immediately (no blank
@@ -785,10 +787,11 @@ buffer is genuinely empty (a real state right after a fresh reset, or simply not
 crossed the server's threshold yet) — three different reasons, three different sentences, not one
 placeholder standing in for all of them.
 
-Single-node only ([ADR-0008](adr/0008-sentinel-in-v1-cluster-deferred.md),
-[ADR-0021](adr/0021-cluster-refused-until-supported.md)): `SLOWLOG` is per-node, and a Cluster
-target would need a node selector this app's one-Connection premise has no room for — inherited
-scope from Cluster being out of v1 entirely, not a new limitation this screen introduces.
+`SLOWLOG` is per node ([ADR-0008](adr/0008-sentinel-in-v1-cluster-deferred.md),
+[ADR-0022](adr/0022-cluster-supported-in-stages.md)). On a Cluster the view shows an in-view
+notice ("Slowlog is per node on a Cluster — coming in M5 (task 8)") and fetches nothing, so one
+node's log is never shown as the Cluster's; `d` (reset) is inert there too. Monitor does the same.
+Pub/Sub stays open, because classic `PUBLISH` is cluster-wide.
 
 ## 7. Interaction details that carry the product
 

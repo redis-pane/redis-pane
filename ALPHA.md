@@ -138,9 +138,13 @@ redis-pane --profile mine --probe
   the same server: they come back. It is kept per target (`host:port/db`, never a password) in
   `$XDG_STATE_HOME/redis-pane/state.json`, or `~/.local/state/redis-pane/` without it. A corrupt
   file is ignored with a notice.
-- **A Cluster target.** Point it at a Cluster (a `redis-cluster://` URL, or any node of a
-  cluster-enabled server): it refuses at startup with a message instead of showing one node as if
-  it were everything.
+- **A Cluster target.** Point it at a Cluster (a `redis-cluster://` URL, or a plain `redis://` URL
+  to any one node of a cluster-enabled server). The title bar shows its shape (`cluster · 3
+  primaries · 6 nodes`), the key list covers every primary, and an open key is live: change it from
+  another terminal and it updates, even when it lives on a different node from the one you dialled.
+  The Dashboard, Slowlog and Monitor show a notice for now ("per node on a Cluster") instead of
+  one node's figures; Pub/Sub works. If the title bar says a node is gone or a redial happens
+  mid-session, that is worth reporting with the steps that led to it.
 - **A very large keyspace.** Scrolling and typing into the filter stay quick at a million keys.
   Toggling the tree, changing the sort or fully rebuilding the filter takes about half a second
   there when keys arrive in real `SCAN` order. That is a known limitation, planned as M6.
@@ -171,9 +175,8 @@ redis-pane --profile mine --probe
 - No embedded Redis console — `redis-cli` is one keystroke away in the terminal you're already
   in. No command palette either: it shipped briefly and was withdrawn, since every action it
   listed already had a key.
-- No Cluster support — Sentinel works, Cluster is planned as M5 (ADR-0021). A Cluster target is
-  refused at startup with a diagnostic, rather than silently served from one arbitrary node;
-  use `redis-cli -c` for a Cluster deployment meanwhile.
+- On a Cluster, the Dashboard, Slowlog and Monitor are not there yet (they are per node and come
+  later in M5, ADR-0022).
 - Nothing older than Redis 6.0 / no RESP2 — you'll get a clear message naming the version, not a
   crash.
 - A handful of known UI gaps are already tracked in `docs/UI_TASKS.md` if you want to check

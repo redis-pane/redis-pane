@@ -1,0 +1,24 @@
+─ redis-pane ─ ● staging · redis-cluster://cache-01:7000 · from profile staging ─────────── ● live ─
+
+ SLOWLOG
+
+ ⚠ Slowlog is per node on a Cluster — coming in M5 (task 8)
+┌─ help · slowlog ─────────────────────────────────────────────────────────────────────────────────┐
+│ s         sort  per node on a Cluster                                                            │
+│ r         refetch  per node on a Cluster                                                         │
+│ c         copy command  per node on a Cluster                                                    │
+│ d         reset slowlog  per node on a Cluster                                                   │
+│ ↑↓ jk     move  per node on a Cluster                                                            │
+│ PgUp/PgDn page  per node on a Cluster                                                            │
+│ Home/End  top/bottom  per node on a Cluster                                                      │
+│                                                                                                  │
+│ ⌃R read-only   g s slowlog   g m monitor   g p pub/sub   g d dashboard   g k keys   Esc back   q q
+│                                                                                                  │
+│ Esc close                                                                                        │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+
+
+
+
+ ⌃R read-only   g s slowlog   g m monitor   g p pub/sub   g d dashboard   g k keys   ? F1 help

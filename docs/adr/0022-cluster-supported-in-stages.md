@@ -1,11 +1,11 @@
 # ADR-0022 — Cluster is supported, in stages
 
-**Status:** Proposed · **Date:** 2026-10-05
+**Status:** Accepted (M5 task 5) · **Date:** 2026-10-05
 
-Becomes **Accepted** in M5 task 5, the moment a user can reach a Cluster. It supersedes
-[ADR-0021](0021-cluster-refused-until-supported.md) from that same change, which is also where
-ADR-0021's status line gains "Superseded by ADR-0022 (from M5 task 5)". Until then ADR-0021 is in
-force and the refusal is unchanged.
+Accepted in M5 task 5, the change that lets a user reach a Cluster. It supersedes
+[ADR-0021](0021-cluster-refused-until-supported.md) from that same change, whose status line reads
+"Superseded by ADR-0022 (from M5 task 5)". The `ClusterSupport` switch and the `ConnectError::Cluster`
+diagnostic that implemented the refusal were deleted with it.
 
 ## Context
 
@@ -141,8 +141,8 @@ host on Docker Desktop for macOS. The harness
 
 ## Consequences
 
-- ADR-0021 is superseded from M5 task 5, not before. Until then the refusal and its diagnostic are
-  exactly as ADR-0021 specifies.
+- ADR-0021 is superseded from M5 task 5. The refusal and its diagnostic held exactly as ADR-0021
+  specifies until then, and were removed in that change.
 - ADR-0008's "Amended by" gains this ADR: Cluster is now planned and staged, not deferred.
 - ADR-0005 holds. A Cluster is one logical target; the Dashboard's node table is a drill-down
   inside a view, never a connection switcher.

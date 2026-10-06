@@ -1987,6 +1987,18 @@ pub fn hint_bar(state: &State, width: u16) -> String {
     let (help_row, everywhere): (Vec<_>, Vec<_>) =
         everywhere.into_iter().partition(|r| r.label == "help");
     let mut rows = help::here(state, ctx);
+    // A row refused because the view is per node on a Cluster would only
+    // advertise a key that does nothing; the help overlay still lists it,
+    // dimmed with the reason (R7.5, ADR-0022).
+    rows.retain(|r| {
+        !matches!(
+            r.refused,
+            Some(help::Refusal {
+                reason: help::RefusalReason::PerNodeOnCluster,
+                ..
+            })
+        )
+    });
     rows.extend(everywhere);
 
     let help_suffix = if help_row.is_empty() {
@@ -2074,6 +2086,42 @@ fn repaint_reversed_cursor(buf: &mut Buffer, area: Rect, style: Style) {
 pub(crate) fn put_right(buf: &mut Buffer, x: u16, y: u16, width: u16, s: &str, style: Style) {
     let len = s.chars().count() as u16;
     put(buf, x + width.saturating_sub(len), y, s, style);
+}
+
+/// The in-view notice a server view shows on a Cluster instead of data
+/// (M5 task 5, ADR-0022): the view's own `title` line, then `notice` in
+/// [`Token::Warn`] in the view's own wording, then a muted line saying what
+/// still works. Not a modal; the frame around it, navigation and the hint bar
+/// are untouched.
+pub(crate) fn cluster_notice(
+    theme: &Theme,
+    area: Rect,
+    title: &str,
+    notice: &str,
+    buf: &mut Buffer,
+) {
+    let width = area.width.saturating_sub(2) as usize;
+    let rows = [
+        (title, Token::Text),
+        (notice, Token::Warn),
+        (
+            "Keys, the Viewer and Pub/Sub work on a Cluster as usual.",
+            Token::Muted,
+        ),
+    ];
+    for (i, (text, token)) in rows.into_iter().enumerate() {
+        let y = area.y + i as u16 + u16::from(i > 0);
+        if y >= area.y + area.height {
+            break;
+        }
+        put(
+            buf,
+            area.x + 1,
+            y,
+            &keys::truncate(&theme.glyphs.text(text), width, theme.glyphs),
+            theme.style(token),
+        );
+    }
 }
 
 pub(crate) fn put(buf: &mut Buffer, x: u16, y: u16, s: &str, style: Style) -> u16 {

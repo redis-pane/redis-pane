@@ -41,6 +41,13 @@ pub(super) fn open_dashboard(mut state: State) -> (State, Vec<Command>) {
     let mut commands = leave_monitor(&mut state);
     commands.extend(leave_pubsub(&mut state));
     state.screen = View::Dashboard;
+    // On a Cluster `INFO` would answer from an arbitrary node and show its
+    // figures as the whole Cluster's (ADR-0022): a notice, and no fetch,
+    // until M5 task 8.
+    if state.on_cluster() {
+        state.dashboard.loading = false;
+        return (state, commands);
+    }
     state.dashboard.loading = true;
     let token = issue_info_token(&mut state);
     commands.push(Command::FetchServerInfo { token });
@@ -57,7 +64,7 @@ pub(super) fn open_dashboard(mut state: State) -> (State, Vec<Command>) {
 /// (`state.dashboard.loading` — a slow reply must not get a second request
 /// stacked behind it).
 pub(super) fn dashboard_poll_tick(mut state: State) -> (State, Vec<Command>) {
-    if state.screen != View::Dashboard {
+    if state.screen != View::Dashboard || state.on_cluster() {
         return (state, Vec::new());
     }
     if !matches!(state.link, crate::state::Link::Up { .. }) {
@@ -126,6 +133,10 @@ pub(super) fn server_info_failed(
 /// handled in `cancel()` (`update/mod.rs`), the same "nearest thing first"
 /// place every other overlay's `Esc` is decided.
 pub(super) fn dashboard_dispatch(mut state: State, action: Action) -> (State, Vec<Command>) {
+    // No tiles, no overlay and no fetch on a Cluster (`open_dashboard`).
+    if state.on_cluster() {
+        return (state, Vec::new());
+    }
     if state.dashboard.expanded_tile.is_some() {
         return match action {
             Action::MoveUp => {

@@ -26,8 +26,9 @@ server's own vitals, each a keystroke away. It ships dark, light and high-contra
 fallback for terminals without Unicode, and restores your pane split, filter, sort and selected key
 when you relaunch against the same server.
 
-Known limits: Cluster is not supported yet and a Cluster target is refused at startup, not served
-half-right. At a million keys, scrolling, typing into the filter and drawing are fast, but toggling
+Known limits: a Redis Cluster can be browsed (point it at a `redis-cluster://` URL or any node),
+but the Dashboard, Slowlog and Monitor show a notice on a Cluster until they are made per node
+later in M5. At a million keys, scrolling, typing into the filter and drawing are fast, but toggling
 the tree, changing the sort or rebuilding the whole filter takes roughly half a second when keys
 arrive in a real `SCAN` order. Rename, copy, and bulk operations across several keys are not built
 yet and are still coming next.

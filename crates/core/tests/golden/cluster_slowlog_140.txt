@@ -1,0 +1,24 @@
+─ redis-pane ─ ● staging · redis-cluster://cache-01:7000 · cluster · 3 primaries · 6 nodes · from profile staging ───────────────── ● live ─
+
+ SLOWLOG
+
+ ⚠ Slowlog is per node on a Cluster — coming in M5 (task 8)
+ Keys, the Viewer and Pub/Sub work on a Cluster as usual.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ ⌃R read-only   g s slowlog   g m monitor   g p pub/sub   g d dashboard   g k keys   Esc back   q quit   ? F1 help

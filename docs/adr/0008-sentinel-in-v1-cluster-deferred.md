@@ -63,6 +63,6 @@ briefly scheduled there in PRD §9), and until it is supported, a Cluster target
 clearly at startup rather than connected and silently served from one arbitrary node, which is
 what this deferral has meant in practice since this ADR shipped.
 
-[ADR-0022](0022-cluster-supported-in-stages.md) (Proposed, 2026-10-05) — Cluster is no longer
-merely deferred: M5 supports it in stages, behind the ADR-0021 refusal until the keyspace is safe
-to browse.
+[ADR-0022](0022-cluster-supported-in-stages.md) (Accepted, M5 task 5) — Cluster is no longer
+deferred: the keyspace, the Viewer and liveness work on a Cluster, and the server views follow
+later in M5. ADR-0021's refusal is superseded.

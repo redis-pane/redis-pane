@@ -127,7 +127,6 @@ pub async fn run(
     dial: String,
     credentials: Credentials,
     session_store: Option<crate::state_file::Store>,
-    cluster: crate::redis::ClusterSupport,
 ) -> std::io::Result<()> {
     terminal::enable_raw_mode()?;
     execute!(
@@ -246,7 +245,6 @@ pub async fn run(
         reconnect: Reconnect {
             dial,
             credentials,
-            cluster,
             attempt: 0,
             cancel: None,
             landed: landed_tx,
@@ -487,9 +485,6 @@ struct Feed {
 struct Reconnect {
     dial: String,
     credentials: Credentials,
-    /// Whether a Cluster may be dialled (ADR-0022); every connection path the
-    /// shell opens, main or feed, passes it on.
-    cluster: crate::redis::ClusterSupport,
     /// How many attempts this outage has cost, purely for the backoff curve
     /// and the header's countdown (`Msg::ReconnectScheduled`) — reset to 0 the
     /// moment a reconnect actually lands. `Command::Reconnect` carries no
@@ -870,19 +865,10 @@ impl Shell {
             self.feed.landed.clone(),
         );
         let main = self.client.clone();
-        let support = self.reconnect.cluster;
         tokio::spawn(async move {
-            let result = crate::redis::feed::open_feed(
-                &dial,
-                &credentials,
-                kind,
-                token,
-                tx,
-                clock,
-                &main,
-                support,
-            )
-            .await;
+            let result =
+                crate::redis::feed::open_feed(&dial, &credentials, kind, token, tx, clock, &main)
+                    .await;
             let _ = landed.send((token, result)).await;
         });
     }
@@ -1038,12 +1024,8 @@ impl Reconnect {
         }
         let token = CancellationToken::new();
         self.cancel = Some(token.clone());
-        let (dial, credentials, attempt, support) = (
-            self.dial.clone(),
-            self.credentials.clone(),
-            self.attempt,
-            self.cluster,
-        );
+        let (dial, credentials, attempt) =
+            (self.dial.clone(), self.credentials.clone(), self.attempt);
         let (landed, tx, clock) = (self.landed.clone(), tx.clone(), clock.clone());
         tokio::spawn(async move {
             tokio::select! {
@@ -1051,7 +1033,7 @@ impl Reconnect {
                 () = token.cancelled() => {}
                 () = async {
                     tokio::time::sleep(std::time::Duration::from_millis(after_ms)).await;
-                    match crate::redis::connect_with(&dial, &credentials, support).await {
+                    match crate::redis::connect_with(&dial, &credentials).await {
                         Ok((client, established)) => {
                             // A refused INFO on this connection must be as
                             // visible as it is at startup (review M1); it must

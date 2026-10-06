@@ -169,6 +169,13 @@ they are expensive to retrofit:
   on one branch of several (verified against Redis 8.4.0; ADR-0006). Any memo keyed by key-name reintroduces
   the exact RedisInsight bug this project was started over — see ADR-0006 before adding one, and
   note that "just for the first frame" is how it starts.
+- **A Cluster is browsable; the server views say so rather than read one node** (ADR-0022, which
+  superseded the ADR-0021 refusal in M5 task 5). `connect_with` dials a `redis-cluster://` URL as a
+  cluster client and redials a plain URL to any node as one. There is no refusal switch any more.
+  `State::on_cluster()` (core: `Connection::topology.is_some()`) makes Slowlog, Monitor and Dashboard
+  render an in-view notice and emit no `FetchSlowlog`, `FetchServerInfo` or `OpenFeed`, because a
+  keyless command on a cluster client lands on an arbitrary node; help dims their rows with the
+  reason. Pub/Sub stays open. Any new server-view fetch must check `on_cluster()` until M5 task 8.
 - **On a Cluster the arming is pinned to the key's owner** (ADR-0022). `read.rs` builds the arming
   pipeline from a slot-pinned wrapper, and `crates/app/src/liveness.rs` records the owner `Server`
   (`OpenOwner::armed`, called wherever a read arms) and filters reconnects and topology changes by

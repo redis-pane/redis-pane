@@ -122,11 +122,7 @@ fn connect_or_exit(
         eprintln!("redis-pane: {e}");
         std::process::exit(exit::CONNECTION);
     });
-    match runtime.block_on(redis::connect_with(
-        dial,
-        credentials,
-        redis::ClusterSupport::Refuse,
-    )) {
+    match runtime.block_on(redis::connect_with(dial, credentials)) {
         Ok((client, established)) => (runtime, client, established),
         Err(err) => {
             eprintln!("{}", startup_failure(connection, &err));
@@ -150,6 +146,9 @@ fn probe(
 ) -> i32 {
     println!("{}", readout(connection));
     println!("redis {}", established.version);
+    if let Some(t) = established.topology {
+        println!("cluster: {} primaries, {} nodes", t.primaries, t.nodes);
+    }
     if let Some(reason) = established.read_only {
         println!("read-only: {} (not liftable)", reason.label());
     }
@@ -277,8 +276,6 @@ fn main() {
         dial.to_string(),
         resolution.credentials.clone(),
         session_store,
-        // Until M5 task 5 opens the gate (ADR-0022).
-        redis::ClusterSupport::Refuse,
     )) {
         eprintln!("redis-pane: {err}");
         std::process::exit(exit::CONNECTION);

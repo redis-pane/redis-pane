@@ -4920,3 +4920,50 @@ fn copying_the_command_on_a_cluster_updates_through_the_core() {
     );
     assert_eq!(cmd, "redis-cli -c -h cache-01 -p 7000 HGETALL k");
 }
+
+// ── M5 task 5 — server views on a Cluster show a notice, not data ───────────
+
+fn cluster_view(view: redis_pane_core::state::View, w: u16) -> State {
+    let mut state = cluster_state("redis-cluster://cache-01:7000/0");
+    state.cols = w;
+    state.rows = 24;
+    state.screen = view;
+    state
+}
+
+#[test]
+fn golden_server_views_on_a_cluster() {
+    use redis_pane_core::state::View;
+    for (name, view) in [
+        ("slowlog", View::Slowlog),
+        ("monitor", View::Monitor),
+        ("dashboard", View::Dashboard),
+    ] {
+        for w in [140u16, 80] {
+            assert_golden(
+                &format!("cluster_{name}_{w}"),
+                &draw(&cluster_view(view, w), w, 24),
+            );
+        }
+    }
+}
+
+#[test]
+fn golden_slowlog_on_a_cluster_ascii() {
+    use redis_pane_core::state::View;
+    assert_golden(
+        "cluster_slowlog_ascii",
+        &ascii_frame(&cluster_view(View::Slowlog, 100), 100, 24, &CLOCK),
+    );
+}
+
+#[test]
+fn golden_help_in_slowlog_on_a_cluster_dims_every_row_with_the_reason() {
+    use redis_pane_core::state::View;
+    let mut state = cluster_view(View::Slowlog, 100);
+    state.help = Some(HelpView { pane: state.focus });
+    assert_golden("cluster_help_slowlog_100", &draw(&state, 100, 24));
+    let rows = help::here(&state, help::context(&state));
+    assert!(!rows.is_empty());
+    assert!(rows.iter().all(|r| r.refused.is_some()));
+}

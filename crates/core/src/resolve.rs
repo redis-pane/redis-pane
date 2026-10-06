@@ -313,8 +313,8 @@ pub fn redact(url: &str) -> String {
 ///
 /// Strips every scheme `fred::Config::from_url` accepts, not just the two
 /// plain ones — a loopback `redis-sentinel://` or `redis-cluster://` URL must
-/// resolve to `Local` exactly like a plain `redis://127.0.0.1` does (ADR-0021,
-/// `docs/plans/m4-cluster-refusal.md`). The `-cluster`/`-sentinel` variants
+/// resolve to `Local` exactly like a plain `redis://127.0.0.1` does (ADR-0022;
+/// first handled in `docs/plans/m4-cluster-refusal.md`). The `-cluster`/`-sentinel` variants
 /// are stripped first so e.g. `redis-cluster://` is never left with a
 /// dangling `-cluster` prefix after only the plain scheme is stripped.
 fn infer_environment(target: &str) -> Environment {
@@ -506,7 +506,7 @@ mod tests {
         }
     }
 
-    /// ADR-0021 / `docs/plans/m4-cluster-refusal.md`: `infer_environment` must
+    /// ADR-0022 (first handled in `docs/plans/m4-cluster-refusal.md`): `infer_environment` must
     /// strip Sentinel and Cluster scheme variants the same way it already
     /// strips `redis://`/`rediss://`, so a loopback target under either
     /// scheme is `Local` like every other loopback target — not `Unknown`
