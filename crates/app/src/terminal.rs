@@ -242,6 +242,7 @@ pub async fn run(
         filter_debounce: Debounce::default(),
         metadata: MetadataLedger::default(),
         owner: crate::liveness::OpenOwner::default(),
+        dash: crate::redis::cluster_info::Poller::default(),
         reconnect: Reconnect {
             dial,
             credentials,
@@ -456,6 +457,9 @@ struct Shell {
     /// Which node's connection holds the open key's arming; only a Cluster
     /// has an answer (`crate::liveness`, ADR-0022).
     owner: crate::liveness::OpenOwner,
+    /// The Cluster Dashboard's per-node connections and poll in flight
+    /// (M5 task 7). Empty and idle on a standalone server.
+    dash: crate::redis::cluster_info::Poller,
     reconnect: Reconnect,
     /// The single open feed connection, if any (`docs/plans/m3-feed-connection.md`).
     /// Never in `State` — the core holds no `fred` types (ADR-0011). Only one
@@ -525,6 +529,7 @@ impl Shell {
             }
             Command::FetchSlowlog { count } => self.fetch_slowlog(count),
             Command::FetchServerInfo { token } => self.fetch_server_info(token),
+            Command::CancelServerInfo => self.dash.cancel(),
             Command::ReadKey {
                 key,
                 index,
@@ -649,6 +654,12 @@ impl Shell {
     /// to make.
     fn fetch_server_info(&self, token: redis_pane_core::command::InfoToken) {
         let (client, tx, clock) = (self.client.clone(), self.tx.clone(), self.clock.clone());
+        // On a Cluster the poll reads every node on its own connection
+        // (`redis::cluster_info`); the main client is never asked.
+        if client.is_clustered() {
+            self.dash.start(client, tx, clock, token);
+            return;
+        }
         tokio::spawn(async move {
             let msg = match crate::redis::read::fetch_server_info(&client).await {
                 Ok(info) => Msg::ServerInfoLoaded {
@@ -947,6 +958,9 @@ impl Shell {
         // The record described a connection that is gone; the refetch this
         // reconnect causes arms again and records afresh.
         self.owner.clear();
+        // The Dashboard's per-node connections were built from the old client's
+        // config; the next poll rebuilds them.
+        self.dash.cancel();
         // Subscriptions are tied to the `Client` they were opened on; one that
         // has been replaced no longer delivers anything.
         self.watch_link();

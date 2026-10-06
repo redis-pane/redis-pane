@@ -33,6 +33,7 @@ pub(super) fn open_slowlog(mut state: State) -> (State, Vec<Command>) {
     // unless one was actually open.
     let mut commands = leave_monitor(&mut state);
     commands.extend(leave_pubsub(&mut state));
+    commands.extend(leave_dashboard(&mut state));
     state.screen = View::Slowlog;
     // On a Cluster `SLOWLOG GET` would answer from an arbitrary node and show
     // it as the whole Cluster's (ADR-0022); the view renders a notice instead
@@ -54,6 +55,7 @@ pub(super) fn open_slowlog(mut state: State) -> (State, Vec<Command>) {
 pub(super) fn open_keys_view(mut state: State) -> (State, Vec<Command>) {
     let mut commands = leave_monitor(&mut state);
     commands.extend(leave_pubsub(&mut state));
+    commands.extend(leave_dashboard(&mut state));
     state.screen = View::Keys;
     (state, commands)
 }

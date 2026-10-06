@@ -61,8 +61,8 @@ excuse.
   A second target means a second terminal. See
   [ADR-0005](adr/0005-one-connection-per-process.md).
 - **Cluster was not in v1 or M4; it is milestone M5.** Sentinel shipped first. Cluster browsing,
-  the Viewer and liveness work from M5 task 5; the Dashboard, Slowlog and Monitor show an in-view
-  notice on a Cluster until M5 task 8 makes them per node (see
+  the Viewer and liveness work from M5 task 5; the Dashboard shows the whole Cluster from task 7,
+  and the Slowlog and Monitor show an in-view notice on a Cluster until M5 task 8 makes them per node (see
   [`plans/m5-cluster.md`](plans/m5-cluster.md)). The earlier refusal
   ([ADR-0021](adr/0021-cluster-refused-until-supported.md)) is superseded by
   [ADR-0022](adr/0022-cluster-supported-in-stages.md); see also
@@ -116,7 +116,8 @@ config file; a **Connection** is a live session, which may be **ad-hoc** (no Pro
   [`plans/m5-cluster.md`](plans/m5-cluster.md)). From M5 task 5 a Cluster target (a
   `redis-cluster://` URL, or a plain URL to any node of a cluster-enabled server) connects as a
   cluster client: the keyspace, the Viewer and liveness work across every primary, and the
-  Dashboard, Slowlog and Monitor show an in-view notice until M5 task 8. See
+  Dashboard shows the whole Cluster (a health line, summed tiles, a node table; M5 task 7), and
+  Slowlog and Monitor show an in-view notice until M5 task 8. See
   [ADR-0008](adr/0008-sentinel-in-v1-cluster-deferred.md),
   [ADR-0022](adr/0022-cluster-supported-in-stages.md) (which superseded
   [ADR-0021](adr/0021-cluster-refused-until-supported.md)'s startup refusal), and §5.

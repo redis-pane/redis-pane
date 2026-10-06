@@ -435,14 +435,14 @@ async fn cluster_dbsize(nodes: &[(String, Client)], limit: Duration) -> Result<u
 
 /// Close connections this scan opened. Bounded: a dead node must not hold the
 /// scan's exit open.
-async fn close(nodes: Vec<Client>) {
+pub(super) async fn close(nodes: Vec<Client>) {
     for node in nodes {
         let _ = tokio::time::timeout(Duration::from_secs(2), node.quit()).await;
     }
 }
 
 /// Server states that are not really errors deserve their own words (ADR-0009).
-fn describe_scan_error(e: &Error) -> String {
+pub(super) fn describe_scan_error(e: &Error) -> String {
     let details = e.details();
     if details.starts_with("LOADING") {
         "server is loading its dataset".into()

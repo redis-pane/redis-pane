@@ -293,6 +293,12 @@ fn step(mut state: State, msg: Msg) -> (State, Vec<Command>) {
             at_ms,
             token,
         } => server_info_failed(state, detail, at_ms, token),
+        Msg::ClusterInfoLoaded {
+            nodes,
+            health,
+            at_ms,
+            token,
+        } => cluster_info_loaded(state, nodes, health, at_ms, token),
         Msg::DashboardPollTick => dashboard_poll_tick(state),
         Msg::FilterRebuildDue => keys::filter_rebuild_due(state),
         Msg::FeedOpened { token } => feed_opened(state, token),
@@ -832,12 +838,22 @@ fn cancel(mut state: State) -> (State, Vec<Command>) {
     // (`dashboard_poll_tick`) is what actually stops issuing
     // `Command::FetchServerInfo` on the shell's very next tick (decision 1).
     if state.screen == View::Dashboard {
-        if state.dashboard.expanded_tile.is_some() {
-            state.dashboard.close_overlay();
+        if state.dashboard.active().expanded_tile.is_some() {
+            state.dashboard.active_mut().close_overlay();
             return (state, Vec::new());
         }
+        // Inside a node view on a Cluster, `Esc` returns to the overview
+        // (M5 task 7); only a second one leaves the view.
+        if state.dashboard.drilled() {
+            if let Some(c) = state.dashboard.cluster.as_mut() {
+                c.undrill();
+            }
+            return (state, Vec::new());
+        }
+        // On a Cluster leaving also stops the per-node poll.
+        let commands = leave_dashboard(&mut state);
         state.screen = View::Keys;
-        return (state, Vec::new());
+        return (state, commands);
     }
     // The "pop" half of stack navigation: back to the list you were
     // just looking at, before an unrelated background scan. Also
@@ -1752,18 +1768,14 @@ mod cluster_server_view_tests {
     }
 
     #[test]
-    fn g_s_g_m_and_g_d_open_their_views_and_emit_no_fetch_and_no_feed() {
+    fn g_s_and_g_m_open_their_views_and_emit_no_fetch_and_no_feed() {
         for env in [
             Environment::Local,
             Environment::Staging,
             Environment::Prod,
             Environment::Unknown,
         ] {
-            for (second, view) in [
-                ('s', View::Slowlog),
-                ('m', View::Monitor),
-                ('d', View::Dashboard),
-            ] {
+            for (second, view) in [('s', View::Slowlog), ('m', View::Monitor)] {
                 let (state, commands) = chord(cluster(env), second);
                 assert_eq!(state.screen, view, "{env:?} g {second}");
                 assert!(commands.is_empty(), "{env:?} g {second}: {commands:?}");
@@ -1775,7 +1787,7 @@ mod cluster_server_view_tests {
 
     #[test]
     fn nothing_in_the_views_issues_anything_on_a_cluster() {
-        for second in ['s', 'm', 'd'] {
+        for second in ['s', 'm'] {
             let (state, _) = chord(cluster(Environment::Staging), second);
             for c in ['r', 'd', 'c', '/', 'p', 'j', 'k'] {
                 let (after, commands) = key(state.clone(), c);
@@ -1785,6 +1797,25 @@ mod cluster_server_view_tests {
             }
             let (_, commands) = update(state, Msg::DashboardPollTick);
             assert!(commands.is_empty());
+        }
+    }
+
+    #[test]
+    fn g_d_on_a_cluster_fetches_every_node_in_every_environment() {
+        for env in [
+            Environment::Local,
+            Environment::Staging,
+            Environment::Prod,
+            Environment::Unknown,
+        ] {
+            let (state, commands) = chord(cluster(env), 'd');
+            assert_eq!(state.screen, View::Dashboard);
+            assert!(state.dashboard.loading);
+            assert!(
+                matches!(commands.as_slice(), [Command::FetchServerInfo { .. }]),
+                "{env:?}: {commands:?}"
+            );
+            assert!(state.pending_feed.is_none());
         }
     }
 

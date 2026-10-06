@@ -41,12 +41,10 @@ pub(super) fn open_dashboard(mut state: State) -> (State, Vec<Command>) {
     let mut commands = leave_monitor(&mut state);
     commands.extend(leave_pubsub(&mut state));
     state.screen = View::Dashboard;
-    // On a Cluster `INFO` would answer from an arbitrary node and show its
-    // figures as the whole Cluster's (ADR-0022): a notice, and no fetch,
-    // until M5 task 8.
-    if state.on_cluster() {
-        state.dashboard.loading = false;
-        return (state, commands);
+    // On a Cluster the shell reads every node (M5 task 7); the cluster
+    // overview is where the view always opens.
+    if let Some(c) = state.dashboard.cluster.as_mut() {
+        c.undrill();
     }
     state.dashboard.loading = true;
     let token = issue_info_token(&mut state);
@@ -64,7 +62,7 @@ pub(super) fn open_dashboard(mut state: State) -> (State, Vec<Command>) {
 /// (`state.dashboard.loading` — a slow reply must not get a second request
 /// stacked behind it).
 pub(super) fn dashboard_poll_tick(mut state: State) -> (State, Vec<Command>) {
-    if state.screen != View::Dashboard || state.on_cluster() {
+    if state.screen != View::Dashboard {
         return (state, Vec::new());
     }
     if !matches!(state.link, crate::state::Link::Up { .. }) {
@@ -97,6 +95,56 @@ pub(super) fn server_info_loaded(
     }
     state.dashboard.record_poll(info, at_ms);
     (state, Vec::new())
+}
+
+/// `Msg::ClusterInfoLoaded`: fold every node's reading in. Each node that
+/// newly failed gets its own R7.4 notification naming the command and the node
+/// (one per failure, not one per poll); the rest of the Cluster still renders.
+pub(super) fn cluster_info_loaded(
+    mut state: State,
+    nodes: Vec<crate::state::NodeReading>,
+    health: Result<String, String>,
+    at_ms: u64,
+    token: InfoToken,
+) -> (State, Vec<Command>) {
+    if token != state.dashboard.poll_token {
+        return (state, Vec::new());
+    }
+    let cluster = state.dashboard.cluster.get_or_insert_with(Default::default);
+    let failed = cluster.record(nodes, health, at_ms);
+    state.dashboard.loading = false;
+    state.dashboard.error = None;
+    state.dashboard.last_updated_ms = Some(at_ms);
+    if let Some((addr, detail)) = failed.first() {
+        let more = if failed.len() > 1 {
+            format!(" (+{} more)", failed.len() - 1)
+        } else {
+            String::new()
+        };
+        state.error = Some((format!("INFO on {addr}: {detail}{more}"), at_ms));
+    }
+    (state, Vec::new())
+}
+
+/// Leaving the Dashboard (any route out): the poll stops with it. On a
+/// Cluster that is a command, because the shell holds a connection per node
+/// that must not outlive the view; a reply still on its way is dropped by
+/// bumping the token, and the next `g d` starts from the cluster overview.
+/// A no-op unless the Dashboard is what is showing.
+pub(super) fn leave_dashboard(state: &mut State) -> Vec<Command> {
+    if state.screen != View::Dashboard {
+        return Vec::new();
+    }
+    if !state.on_cluster() {
+        return Vec::new();
+    }
+    state.dashboard.loading = false;
+    state.dashboard.active_mut().close_overlay();
+    state.dashboard.poll_token = state.dashboard.poll_token.next();
+    if let Some(c) = state.dashboard.cluster.as_mut() {
+        c.undrill();
+    }
+    vec![Command::CancelServerInfo]
 }
 
 /// `Msg::ServerInfoFailed`: the R7.4 notification naming the failing
@@ -133,18 +181,23 @@ pub(super) fn server_info_failed(
 /// handled in `cancel()` (`update/mod.rs`), the same "nearest thing first"
 /// place every other overlay's `Esc` is decided.
 pub(super) fn dashboard_dispatch(mut state: State, action: Action) -> (State, Vec<Command>) {
-    // No tiles, no overlay and no fetch on a Cluster (`open_dashboard`).
-    if state.on_cluster() {
-        return (state, Vec::new());
+    // On a Cluster the overview is a node table: `j`/`k` move its cursor,
+    // `Enter` drills into the node under it. Inside a node view (below) every
+    // key is the single-node Dashboard's, acting on that node's own state.
+    if state.on_cluster() && !state.dashboard.drilled() {
+        return cluster_overview_dispatch(state, action);
     }
-    if state.dashboard.expanded_tile.is_some() {
+    let cols = state.cols;
+    if state.dashboard.active().expanded_tile.is_some() {
         return match action {
             Action::MoveUp => {
-                state.dashboard.overlay_scroll = state.dashboard.overlay_scroll.saturating_sub(1);
+                let d = state.dashboard.active_mut();
+                d.overlay_scroll = d.overlay_scroll.saturating_sub(1);
                 (state, Vec::new())
             }
             Action::MoveDown => {
-                state.dashboard.overlay_scroll = state.dashboard.overlay_scroll.saturating_add(1);
+                let d = state.dashboard.active_mut();
+                d.overlay_scroll = d.overlay_scroll.saturating_add(1);
                 (state, Vec::new())
             }
             Action::Copy => dashboard_copy(state),
@@ -154,26 +207,54 @@ pub(super) fn dashboard_dispatch(mut state: State, action: Action) -> (State, Ve
     }
     match action {
         Action::MoveUp => {
-            state.dashboard.focus_up(tiles_per_row(state.cols));
+            state.dashboard.active_mut().focus_up(tiles_per_row(cols));
             (state, Vec::new())
         }
         Action::MoveDown => {
-            state.dashboard.focus_down(tiles_per_row(state.cols));
+            state.dashboard.active_mut().focus_down(tiles_per_row(cols));
             (state, Vec::new())
         }
         Action::Open => {
-            state.dashboard.focus_right();
+            state.dashboard.active_mut().focus_right();
             (state, Vec::new())
         }
         Action::CollapseGroup => {
-            state.dashboard.focus_left();
+            state.dashboard.active_mut().focus_left();
             (state, Vec::new())
         }
         Action::EnterValueCursor => {
-            state.dashboard.open_overlay();
+            state.dashboard.active_mut().open_overlay();
             (state, Vec::new())
         }
         Action::Copy => dashboard_copy(state),
+        Action::Refetch => dashboard_refetch(state),
+        _ => (state, Vec::new()),
+    }
+}
+
+/// The Cluster overview's keys (M5 task 7, decision 4): the same actions the
+/// single-node grid uses for movement, here moving the node cursor, so no new
+/// binding exists. `Enter` drills into the node; `r` polls now.
+fn cluster_overview_dispatch(mut state: State, action: Action) -> (State, Vec<Command>) {
+    match action {
+        Action::MoveUp => {
+            if let Some(c) = state.dashboard.cluster.as_mut() {
+                c.cursor_up();
+            }
+            (state, Vec::new())
+        }
+        Action::MoveDown => {
+            if let Some(c) = state.dashboard.cluster.as_mut() {
+                c.cursor_down();
+            }
+            (state, Vec::new())
+        }
+        Action::EnterValueCursor => {
+            if let Some(c) = state.dashboard.cluster.as_mut() {
+                c.drill();
+            }
+            (state, Vec::new())
+        }
         Action::Refetch => dashboard_refetch(state),
         _ => (state, Vec::new()),
     }
@@ -192,11 +273,9 @@ fn dashboard_refetch(mut state: State) -> (State, Vec<Command>) {
 /// "copies the raw section." A no-op before the first successful poll:
 /// there is no raw `INFO` yet to copy a section of.
 fn dashboard_copy(state: State) -> (State, Vec<Command>) {
-    let tile = state
-        .dashboard
-        .expanded_tile
-        .unwrap_or(state.dashboard.focused_tile);
-    let Some(raw) = state.dashboard.raw() else {
+    let node = state.dashboard.active();
+    let tile = node.expanded_tile.unwrap_or(node.focused_tile);
+    let Some(raw) = node.raw() else {
         return (state, Vec::new());
     };
     let Some(fields) = raw.section(tile.section_name()) else {
@@ -589,5 +668,259 @@ mod tests {
             }
             other => panic!("expected one CopyToClipboard command, got {other:?}"),
         }
+    }
+}
+
+/// M5 task 7: the Dashboard on a Cluster (`docs/plans/m5-dashboard.md`).
+#[cfg(test)]
+mod cluster_tests {
+    use super::*;
+    use crate::msg::KeyCode;
+    use crate::state::{Environment, NodeReading, NodeRole, Topology};
+
+    fn cluster() -> State {
+        let mut state = State::default();
+        state.connection.environment = Environment::Staging;
+        state.connection.topology = Some(Topology {
+            primaries: 3,
+            nodes: 6,
+        });
+        state.link = crate::state::Link::Up {
+            version: "8.4.0".into(),
+            tracking: crate::state::Tracking::Armed,
+        };
+        state
+    }
+
+    fn key(state: State, code: KeyCode) -> (State, Vec<Command>) {
+        update(state, Msg::Key(KeyPress::plain(code)))
+    }
+
+    fn ch(state: State, c: char) -> (State, Vec<Command>) {
+        key(state, KeyCode::Char(c))
+    }
+
+    fn info() -> RawInfo {
+        RawInfo::new(vec![(
+            "Memory".to_string(),
+            vec![("used_memory".to_string(), "10".to_string())],
+        )])
+    }
+
+    fn reading(addr: &str, role: NodeRole, ok: bool) -> NodeReading {
+        NodeReading {
+            addr: addr.into(),
+            role,
+            slots: 0,
+            info: if ok { Ok(info()) } else { Err("boom".into()) },
+        }
+    }
+
+    fn health() -> Result<String, String> {
+        Ok("cluster_state:ok\r\ncluster_slots_assigned:16384\r\n".into())
+    }
+
+    fn open(state: State) -> State {
+        let (state, _) = ch(state, 'g');
+        ch(state, 'd').0
+    }
+
+    fn loaded(state: State, nodes: Vec<NodeReading>) -> State {
+        let token = state.dashboard.poll_token;
+        update(
+            state,
+            Msg::ClusterInfoLoaded {
+                nodes,
+                health: health(),
+                at_ms: 7_000,
+                token,
+            },
+        )
+        .0
+    }
+
+    fn three() -> Vec<NodeReading> {
+        vec![
+            reading("a:1", NodeRole::Primary, true),
+            reading("b:2", NodeRole::Primary, true),
+            reading("c:3", NodeRole::Replica, true),
+        ]
+    }
+
+    #[test]
+    fn a_poll_tick_on_a_cluster_fetches_once_and_not_while_one_is_in_flight() {
+        let state = open(cluster());
+        let (state, commands) = update(state, Msg::DashboardPollTick);
+        assert!(commands.is_empty(), "the opening fetch is still in flight");
+        let state = loaded(state, three());
+        let (state, commands) = update(state, Msg::DashboardPollTick);
+        assert!(matches!(
+            commands.as_slice(),
+            [Command::FetchServerInfo { .. }]
+        ));
+        assert!(state.dashboard.loading);
+    }
+
+    #[test]
+    fn a_cluster_reply_records_every_node_and_clears_loading() {
+        let state = loaded(open(cluster()), three());
+        assert!(!state.dashboard.loading);
+        assert_eq!(state.dashboard.last_updated_ms, Some(7_000));
+        let c = state.dashboard.cluster.as_ref().unwrap();
+        assert_eq!(c.nodes().len(), 3);
+    }
+
+    #[test]
+    fn a_stale_cluster_reply_is_dropped() {
+        let state = open(cluster());
+        let stale = state.dashboard.poll_token;
+        let (state, _) = ch(state, 'r');
+        let (state, _) = update(
+            state,
+            Msg::ClusterInfoLoaded {
+                nodes: three(),
+                health: health(),
+                at_ms: 1,
+                token: stale,
+            },
+        );
+        assert!(state.dashboard.cluster.is_none());
+        assert!(state.dashboard.loading, "the newer fetch is still owed");
+    }
+
+    #[test]
+    fn a_failed_node_raises_one_notification_naming_the_command_and_the_node() {
+        let state = loaded(open(cluster()), three());
+        let mut nodes = three();
+        nodes[1] = reading("b:2", NodeRole::Primary, false);
+        let state = loaded(state, nodes.clone());
+        let (text, at) = state.error.clone().expect("a notification");
+        assert_eq!(text, "INFO on b:2: boom");
+        assert_eq!(at, 7_000);
+        // The same failure on the next poll does not toast again.
+        let mut state = state;
+        state.error = None;
+        let state = loaded(state, nodes);
+        assert!(state.error.is_none());
+    }
+
+    #[test]
+    fn j_k_move_the_node_cursor_and_enter_drills_in() {
+        let state = loaded(open(cluster()), three());
+        let (state, _) = ch(state, 'j');
+        let (state, commands) = key(state, KeyCode::Enter);
+        assert!(commands.is_empty());
+        assert!(state.dashboard.drilled());
+        let c = state.dashboard.cluster.as_ref().unwrap();
+        assert_eq!(c.drilled_node().unwrap().addr, "b:2");
+        // The cursor is a node cursor: `k` in the overview goes back up.
+    }
+
+    #[test]
+    fn inside_a_node_the_single_node_keys_and_raw_info_overlay_work() {
+        let state = loaded(open(cluster()), three());
+        let (state, _) = key(state, KeyCode::Enter);
+        // Tile focus moves in the node's own state.
+        let (state, _) = ch(state, 'l');
+        assert_eq!(
+            state.dashboard.active().focused_tile,
+            crate::state::TileId::HitRatio
+        );
+        let (state, _) = ch(state, 'h');
+        // Enter expands the focused tile's raw INFO section.
+        let (state, _) = key(state, KeyCode::Enter);
+        assert_eq!(
+            state.dashboard.active().expanded_tile,
+            Some(crate::state::TileId::Memory)
+        );
+        // `c` copies that section, from the node's own reading.
+        let (_, commands) = ch(state.clone(), 'c');
+        assert!(matches!(
+            commands.as_slice(),
+            [Command::CopyToClipboard { text, .. }] if text == "used_memory:10"
+        ));
+        // Esc closes the overlay, then returns to the overview, then leaves.
+        let (state, _) = key(state, KeyCode::Esc);
+        assert!(state.dashboard.drilled());
+        assert!(state.dashboard.active().expanded_tile.is_none());
+        let (state, commands) = key(state, KeyCode::Esc);
+        assert!(!state.dashboard.drilled());
+        assert_eq!(state.screen, View::Dashboard);
+        assert!(commands.is_empty(), "the poll goes on in the overview");
+        let (state, commands) = key(state, KeyCode::Esc);
+        assert_eq!(state.screen, View::Keys);
+        assert_eq!(commands, vec![Command::CancelServerInfo]);
+    }
+
+    #[test]
+    fn leaving_the_view_by_any_route_cancels_the_poll_and_drops_a_late_reply() {
+        for leave in ['k', 's', 'p'] {
+            let state = open(cluster());
+            let token = state.dashboard.poll_token;
+            let (state, _) = ch(state, 'g');
+            let (state, commands) = ch(state, leave);
+            assert!(
+                commands.contains(&Command::CancelServerInfo),
+                "g {leave}: {commands:?}"
+            );
+            assert!(!state.dashboard.loading);
+            let (state, _) = update(
+                state,
+                Msg::ClusterInfoLoaded {
+                    nodes: three(),
+                    health: health(),
+                    at_ms: 1,
+                    token,
+                },
+            );
+            assert!(state.dashboard.cluster.is_none(), "g {leave}: late reply");
+        }
+    }
+
+    #[test]
+    fn a_poll_tick_after_leaving_issues_nothing() {
+        let state = open(cluster());
+        let (state, _) = key(state, KeyCode::Esc);
+        let (_, commands) = update(state, Msg::DashboardPollTick);
+        assert!(commands.is_empty());
+    }
+
+    #[test]
+    fn a_single_node_dashboard_leaves_without_a_cancel() {
+        let (state, _) = update(
+            State::default(),
+            Msg::Key(KeyPress::plain(KeyCode::Char('g'))),
+        );
+        let (state, _) = ch(state, 'd');
+        let (state, commands) = key(state, KeyCode::Esc);
+        assert_eq!(state.screen, View::Keys);
+        assert!(commands.is_empty());
+    }
+
+    #[test]
+    fn reopening_starts_on_the_overview() {
+        let state = loaded(open(cluster()), three());
+        let (state, _) = key(state, KeyCode::Enter);
+        let (state, _) = ch(state, 'g');
+        let (state, _) = ch(state, 'k');
+        let state = open(state);
+        assert!(!state.dashboard.drilled());
+    }
+
+    #[test]
+    fn a_whole_poll_failure_keeps_the_last_good_nodes() {
+        let state = loaded(open(cluster()), three());
+        let (state, _) = ch(state, 'r');
+        let token = state.dashboard.poll_token;
+        let (state, _) = update(
+            state,
+            Msg::ServerInfoFailed {
+                detail: "CLUSTER NODES failed on every node".into(),
+                at_ms: 9_000,
+                token,
+            },
+        );
+        assert!(state.dashboard.error.is_some());
+        assert_eq!(state.dashboard.cluster.as_ref().unwrap().nodes().len(), 3);
     }
 }

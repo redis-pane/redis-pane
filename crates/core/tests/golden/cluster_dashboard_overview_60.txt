@@ -1,0 +1,24 @@
+─ redis-pane ─ ● staging · from profile staging ─── ● live ─
+
+ DASHBOARD · updated 8s ago
+ cluster_state ok · 16384/16384 slots · 0 failing
+┌─  MEMORY─────────────────────────────────────────────────┐
+│760.0 MB / 1.5 GB (49%)                                   │
+│[██████████░░░░░░░░░░] peak 880.0 MB                      │
+└──────────────────────────────────────────────────────────┘
+
+┌─  HIT RATIO──────────────────────────────────────────────┐
+│90.0% hit rate                                            │
+│540,000 hits / 60,000 misses                              │
+└──────────────────────────────────────────────────────────┘
+
+  NODE             ROLE
+> 127.0.0.1:7100   primary
+  127.0.0.1:7101   primary
+  127.0.0.1:7102   primary
+  127.0.0.1:7103   replica
+  127.0.0.1:7104   replica
+  127.0.0.1:7105   replica
+
+
+ ↑↓ jk move node   ⏎ open node   r refetch   ? F1 help

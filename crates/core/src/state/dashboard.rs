@@ -285,6 +285,10 @@ pub struct EvictionTile {
 /// The `g d` view's whole state.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct DashboardState {
+    /// The Cluster Dashboard (M5 task 7): every node's own `DashboardState` and
+    /// the health line. `None` on a standalone server, where nothing below it
+    /// changes.
+    pub cluster: Option<Box<super::cluster_dash::ClusterDash>>,
     /// The most recent successful `INFO` parse. `None` before the first
     /// reply lands — the "no blank frame" requirement (decision 1) is met by
     /// issuing the fetch immediately on `g d`, not by this ever being
@@ -337,6 +341,37 @@ pub struct DashboardState {
 }
 
 impl DashboardState {
+    /// The state the tile grid reads and moves in: the drilled-in node's own on
+    /// a Cluster, otherwise this one. Every tile accessor, the focus movement
+    /// and the raw-`INFO` overlay go through it, so a node view is the
+    /// single-node Dashboard unchanged (M5 task 7).
+    pub fn active(&self) -> &DashboardState {
+        match self.cluster.as_ref().and_then(|c| c.drilled_node()) {
+            Some(node) => &node.dash,
+            None => self,
+        }
+    }
+
+    /// Whether a node's own tiles are showing instead of the Cluster overview.
+    pub fn drilled(&self) -> bool {
+        self.cluster
+            .as_ref()
+            .is_some_and(|c| c.drilled_node().is_some())
+    }
+
+    /// [`Self::active`], mutably.
+    pub fn active_mut(&mut self) -> &mut DashboardState {
+        let drilled = self.cluster.as_ref().and_then(|c| c.drilled_index());
+        match drilled {
+            Some(i) => self
+                .cluster
+                .as_mut()
+                .expect("a drilled node implies a cluster")
+                .node_dash_mut(i),
+            None => self,
+        }
+    }
+
     /// The raw parse behind every tile, and behind the raw-`INFO` overlay
     /// (phase B) — `None` before the first successful poll.
     pub fn raw(&self) -> Option<&RawInfo> {

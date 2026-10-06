@@ -127,6 +127,10 @@ redis-pane --profile mine --probe
     published. Nothing stays subscribed after you leave.
   - **`g d`** — the Dashboard: memory against `maxmemory`, hit ratio, ops/sec, clients,
     replication and evictions, refreshed every 2s; `Enter` shows the raw `INFO` behind a tile.
+    On a Cluster, `g d` shows a health line (`cluster_state ok · 16384/16384 slots · 0 failing`),
+    tiles summed across the nodes and a table with one row per node (primaries and replicas):
+    `j`/`k` move, `Enter` opens that node's own tiles, `Esc` returns. Stop a replica and its row
+    says it failed while the rest keep updating.
 - **Themes.** `redis-pane --theme light` (or `high-contrast`; `dark` is the default). Set it for
   good with `"theme": "light"` in the config file. `light` and `high-contrast` paint their own
   background, so they stay readable on any terminal. Your own theme goes under `"themes"` in the
@@ -142,8 +146,9 @@ redis-pane --profile mine --probe
   to any one node of a cluster-enabled server). The title bar shows its shape (`cluster · 3
   primaries · 6 nodes`), the key list covers every primary, and an open key is live: change it from
   another terminal and it updates, even when it lives on a different node from the one you dialled.
-  The Dashboard, Slowlog and Monitor show a notice for now ("per node on a Cluster") instead of
-  one node's figures; Pub/Sub works. If the title bar says a node is gone or a redial happens
+  The Dashboard shows the whole Cluster (a node table, `Enter` to drill into a node). The Slowlog
+  and Monitor show a notice for now ("per node on a Cluster") instead of one node's figures;
+  Pub/Sub works. If the title bar says a node is gone or a redial happens
   mid-session, that is worth reporting with the steps that led to it.
 - **A very large keyspace.** Scrolling and typing into the filter stay quick at a million keys.
   Toggling the tree, changing the sort or fully rebuilding the filter takes about half a second
@@ -175,8 +180,8 @@ redis-pane --profile mine --probe
 - No embedded Redis console — `redis-cli` is one keystroke away in the terminal you're already
   in. No command palette either: it shipped briefly and was withdrawn, since every action it
   listed already had a key.
-- On a Cluster, the Dashboard, Slowlog and Monitor are not there yet (they are per node and come
-  later in M5, ADR-0022).
+- On a Cluster, the Slowlog and Monitor are not there yet (they are per node and come later in M5,
+  ADR-0022).
 - Nothing older than Redis 6.0 / no RESP2 — you'll get a clear message naming the version, not a
   crash.
 - A handful of known UI gaps are already tracked in `docs/UI_TASKS.md` if you want to check

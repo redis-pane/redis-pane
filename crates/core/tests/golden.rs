@@ -4934,11 +4934,7 @@ fn cluster_view(view: redis_pane_core::state::View, w: u16) -> State {
 #[test]
 fn golden_server_views_on_a_cluster() {
     use redis_pane_core::state::View;
-    for (name, view) in [
-        ("slowlog", View::Slowlog),
-        ("monitor", View::Monitor),
-        ("dashboard", View::Dashboard),
-    ] {
+    for (name, view) in [("slowlog", View::Slowlog), ("monitor", View::Monitor)] {
         for w in [140u16, 80] {
             assert_golden(
                 &format!("cluster_{name}_{w}"),
@@ -4966,4 +4962,208 @@ fn golden_help_in_slowlog_on_a_cluster_dims_every_row_with_the_reason() {
     let rows = help::here(&state, help::context(&state));
     assert!(!rows.is_empty());
     assert!(rows.iter().all(|r| r.refused.is_some()));
+}
+
+// ── M5 task 7 — the Cluster Dashboard ───────────────────────────────────────
+
+/// One node's `INFO`, in the shape the Dashboard reads. `role` is `master` or
+/// `slave`; a replica carries its link and lag, a primary its replica count.
+fn cluster_node_info(
+    role: &str,
+    used_mb: u64,
+    max_mb: u64,
+    ops: u64,
+    lag_secs: u64,
+) -> redis_pane_core::state::RawInfo {
+    let mb = |n: u64| (n * 1024 * 1024).to_string();
+    let replication = if role == "master" {
+        vec![
+            ("role".to_string(), "master".to_string()),
+            ("connected_slaves".to_string(), "1".to_string()),
+            (
+                "slave0".to_string(),
+                format!("ip=127.0.0.1,port=7103,state=online,offset=196,lag={lag_secs}"),
+            ),
+        ]
+    } else {
+        vec![
+            ("role".to_string(), "slave".to_string()),
+            (
+                "master_last_io_seconds_ago".to_string(),
+                lag_secs.to_string(),
+            ),
+            ("master_link_status".to_string(), "up".to_string()),
+        ]
+    };
+    redis_pane_core::state::RawInfo::new(vec![
+        (
+            "Clients".to_string(),
+            vec![
+                ("connected_clients".to_string(), "12".to_string()),
+                ("blocked_clients".to_string(), "0".to_string()),
+            ],
+        ),
+        (
+            "Memory".to_string(),
+            vec![
+                ("used_memory".to_string(), mb(used_mb)),
+                ("used_memory_peak".to_string(), mb(used_mb + 40)),
+                ("maxmemory".to_string(), mb(max_mb)),
+            ],
+        ),
+        (
+            "Stats".to_string(),
+            vec![
+                ("instantaneous_ops_per_sec".to_string(), ops.to_string()),
+                ("keyspace_hits".to_string(), "90000".to_string()),
+                ("keyspace_misses".to_string(), "10000".to_string()),
+                ("evicted_keys".to_string(), "0".to_string()),
+                ("expired_keys".to_string(), "128".to_string()),
+                ("rejected_connections".to_string(), "0".to_string()),
+            ],
+        ),
+        ("Replication".to_string(), replication),
+    ])
+}
+
+fn cluster_readings(failed_replica: bool) -> Vec<redis_pane_core::state::NodeReading> {
+    use redis_pane_core::state::{NodeReading, NodeRole};
+    let primary = |port: u16, used: u64, ops: u64| NodeReading {
+        addr: format!("127.0.0.1:{port}"),
+        role: NodeRole::Primary,
+        slots: if port == 7102 { 5462 } else { 5461 },
+        info: Ok(cluster_node_info("master", used, 512, ops, 0)),
+    };
+    let replica = |port: u16, used: u64, lag: u64| NodeReading {
+        addr: format!("127.0.0.1:{port}"),
+        role: NodeRole::Replica,
+        slots: 0,
+        info: Ok(cluster_node_info("slave", used, 512, 3, lag)),
+    };
+    let mut nodes = vec![
+        primary(7100, 200, 120),
+        primary(7101, 410, 340),
+        primary(7102, 150, 90),
+        replica(7103, 200, 0),
+        replica(7104, 410, 2),
+        replica(7105, 150, 1),
+    ];
+    if failed_replica {
+        nodes[4].info = Err("no answer to INFO within 4s".to_string());
+    }
+    nodes
+}
+
+fn cluster_health_text(state: &str, assigned: u32) -> Result<String, String> {
+    Ok(format!(
+        "cluster_state:{state}\r\ncluster_slots_assigned:{assigned}\r\ncluster_slots_ok:{assigned}\r\ncluster_slots_pfail:0\r\ncluster_slots_fail:0\r\ncluster_known_nodes:6\r\ncluster_size:3\r\n"
+    ))
+}
+
+fn cluster_dashboard(failed_replica: bool, health: &str, assigned: u32) -> State {
+    let mut state = cluster_state("redis-cluster://127.0.0.1:7100/0");
+    state.screen = redis_pane_core::state::View::Dashboard;
+    let mut cluster = redis_pane_core::state::ClusterDash::default();
+    // A first poll, then the one on screen, so the rising-counter alarms have
+    // something to compare against.
+    cluster.record(
+        cluster_readings(false),
+        cluster_health_text("ok", 16384),
+        DASHBOARD_NOW_MS - 12_000,
+    );
+    cluster.record(
+        cluster_readings(failed_replica),
+        cluster_health_text(health, assigned),
+        DASHBOARD_NOW_MS - 8_000,
+    );
+    state.dashboard.cluster = Some(Box::new(cluster));
+    state.dashboard.last_updated_ms = Some(DASHBOARD_NOW_MS - 8_000);
+    state
+}
+
+fn cluster_dashboard_at(state: &mut State, w: u16, h: u16) -> String {
+    state.cols = w;
+    state.rows = h;
+    draw_dashboard_at(state, w, h)
+}
+
+#[test]
+fn golden_cluster_dashboard_140() {
+    let mut state = cluster_dashboard(false, "ok", 16384);
+    assert_golden(
+        "cluster_dashboard_overview_140",
+        &cluster_dashboard_at(&mut state, 140, 30),
+    );
+}
+
+#[test]
+fn golden_cluster_dashboard_80() {
+    let mut state = cluster_dashboard(false, "ok", 16384);
+    assert_golden(
+        "cluster_dashboard_overview_80",
+        &cluster_dashboard_at(&mut state, 80, 24),
+    );
+}
+
+#[test]
+fn golden_cluster_dashboard_60() {
+    let mut state = cluster_dashboard(false, "ok", 16384);
+    assert_golden(
+        "cluster_dashboard_overview_60",
+        &cluster_dashboard_at(&mut state, 60, 24),
+    );
+}
+
+#[test]
+fn golden_cluster_dashboard_ascii() {
+    let mut state = cluster_dashboard(false, "ok", 16384);
+    state.cols = 100;
+    state.rows = 30;
+    assert_golden(
+        "cluster_dashboard_overview_ascii",
+        &ascii_frame(&state, 100, 30, &FixedClock(DASHBOARD_NOW_MS)),
+    );
+}
+
+#[test]
+fn golden_cluster_dashboard_a_node_view() {
+    let mut state = cluster_dashboard(false, "ok", 16384);
+    // The real keys: `j` to the second row, `Enter` to open it.
+    let (s, _) = update(state, Msg::Key(KeyPress::plain(KeyCode::Char('j'))));
+    let (s, _) = update(s, Msg::Key(KeyPress::plain(KeyCode::Enter)));
+    state = s;
+    assert!(state.dashboard.drilled());
+    assert_golden(
+        "cluster_dashboard_node_100",
+        &cluster_dashboard_at(&mut state, 100, 26),
+    );
+}
+
+#[test]
+fn golden_cluster_dashboard_a_failed_node_row() {
+    let mut state = cluster_dashboard(true, "ok", 16384);
+    assert_golden(
+        "cluster_dashboard_failed_node_100",
+        &cluster_dashboard_at(&mut state, 100, 30),
+    );
+}
+
+#[test]
+fn golden_cluster_dashboard_cluster_state_fail() {
+    let mut state = cluster_dashboard(false, "fail", 16000);
+    assert_golden(
+        "cluster_dashboard_state_fail_100",
+        &cluster_dashboard_at(&mut state, 100, 30),
+    );
+}
+
+#[test]
+fn golden_cluster_dashboard_before_the_first_poll() {
+    let mut state = cluster_state("redis-cluster://127.0.0.1:7100/0");
+    state.screen = redis_pane_core::state::View::Dashboard;
+    state.dashboard.loading = true;
+    assert_golden(
+        "cluster_dashboard_loading_80",
+        &cluster_dashboard_at(&mut state, 80, 24),
+    );
 }

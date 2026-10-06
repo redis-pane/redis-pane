@@ -1,0 +1,24 @@
+─ redis-pane ─ ● staging · …er://127.0.0.1:7100 · from profile staging  ● live ─
+
+ DASHBOARD                                                          ⟳ fetching…
+ ⟳ fetching…
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ ↑↓ jk move node   ⏎ open node   r refetch   ⌃R read-only   ? F1 help

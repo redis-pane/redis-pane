@@ -1,0 +1,30 @@
+─ redis-pane ─ ● staging · redis-cluster://127.0.0.1:7100 · from profile staging ────────── ● live ─
+
+ DASHBOARD · updated 8s ago
+ cluster_state ok · 16384/16384 slots · 0 failing · 1 of 6 nodes not answering
+┌─  MEMORY──────────────────────────────────────┐ ┌─  HIT RATIO───────────────────────────────────┐
+│760.0 MB / 1.5 GB (49%)                        │ │90.0% hit rate                                 │
+│[██████████░░░░░░░░░░] peak 880.0 MB           │ │450,000 hits / 50,000 misses                   │
+└───────────────────────────────────────────────┘ └───────────────────────────────────────────────┘
+
+┌─  OPS/SEC─────────────────────────────────────┐ ┌─  CLIENTS─────────────────────────────────────┐
+│550 ops/sec                                    │ │60 connected                                   │
+│██                                             │ │0 blocked                                      │
+└───────────────────────────────────────────────┘ └───────────────────────────────────────────────┘
+
+┌─  REPLICATION─────────────────────────────────┐ ┌─  EVICTIONS───────────────────────────────────┐
+│3 replicas                                     │ │evicted 0                                      │
+│worst lag 1s                                   │ │expired 640                                    │
+└───────────────────────────────────────────────┘ └───────────────────────────────────────────────┘
+
+  NODE             ROLE          SLOTS   MEMORY                   OPS/SEC        LAG
+> 127.0.0.1:7100   primary        5461   [███░░░░░]  39%              120          —
+  127.0.0.1:7101   primary        5461   [██████░░]  80%              340          —
+  127.0.0.1:7102   primary        5462   [██░░░░░░]  29%               90          —
+  127.0.0.1:7103   replica           —   [███░░░░░]  39%                3         0s
+  127.0.0.1:7104   replica     ✕ INFO failed: no answer to INFO within 4s
+  127.0.0.1:7105   replica           —   [██░░░░░░]  29%                3         1s
+
+
+
+ ↑↓ jk move node   ⏎ open node   r refetch   ⌃R read-only   g s slowlog   g m monitor   ? F1 help

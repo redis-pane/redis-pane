@@ -30,6 +30,7 @@ pub(super) const PUBSUB_PAGE_ROWS: usize = 10;
 pub(super) fn open_pubsub(mut state: State) -> (State, Vec<Command>) {
     let mut commands = leave_monitor(&mut state);
     commands.extend(leave_pubsub(&mut state));
+    commands.extend(leave_dashboard(&mut state));
     state.screen = View::PubSub;
     state.pubsub.open_fresh();
     if state.pubsub.subscriptions.is_empty() {

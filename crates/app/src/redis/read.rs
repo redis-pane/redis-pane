@@ -483,7 +483,7 @@ pub async fn fetch_server_info(client: &Client) -> Result<RawInfo, Error> {
 /// The parser [`fetch_server_info`] uses, split out so it can be exercised
 /// against odd/truncated text directly rather than only through a live
 /// server (see this module's own tests below).
-fn parse_info(text: &str) -> RawInfo {
+pub(super) fn parse_info(text: &str) -> RawInfo {
     let mut sections: Vec<(String, Vec<(String, String)>)> = Vec::new();
     for line in text.lines() {
         let line = line.trim_end_matches('\r');

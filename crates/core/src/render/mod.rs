@@ -1064,6 +1064,7 @@ fn context_title(ctx: help::HelpContext) -> String {
             focus: crate::state::PubSubFocus::Tail,
         } => "pub/sub · tail".to_string(),
         HelpContext::Dashboard => "dashboard".to_string(),
+        HelpContext::DashboardCluster => "dashboard · cluster".to_string(),
         HelpContext::DashboardOverlay => "dashboard · info".to_string(),
     }
 }
