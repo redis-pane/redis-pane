@@ -785,9 +785,8 @@ impl Shell {
     fn mutate(&self, mutation: Mutation, index: Option<usize>) {
         let (client, tx, clock) = (self.client.clone(), self.tx.clone(), self.clock.clone());
         tokio::spawn(async move {
-            let result = crate::redis::mutate::execute(&client, &mutation)
-                .await
-                .map_err(|e| e.details().to_string());
+            let crate::redis::mutate::Settled { result, link_lost } =
+                crate::redis::mutate::execute_settled(&client, &mutation).await;
             let at_ms = clock.now_epoch_ms();
             let _ = tx
                 .send(Msg::MutationSettled {
@@ -797,6 +796,11 @@ impl Shell {
                     at_ms,
                 })
                 .await;
+            // A wedged Cluster client (ADR-0022): the failure above is the
+            // notification; this makes the redial replace the client.
+            if link_lost {
+                let _ = tx.send(Msg::ConnectionLost).await;
+            }
         });
     }
 

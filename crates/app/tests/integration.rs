@@ -1196,10 +1196,18 @@ async fn a_freshly_added_entry_reads_as_just_added() {
     let redis_pane_core::state::Value::Stream(stream) = value else {
         panic!("expected a stream value");
     };
-    let now_ms = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_millis() as u64;
+    // The server's own clock, not the host's: the entry's ID carries the
+    // *container's* wall clock, and on Docker Desktop the VM's clock drifts
+    // from the host's (minutes after a sleep, seen as "15m ago"). Comparing the
+    // two clocks tests the VM, not the formatter.
+    let time: Vec<String> = writer
+        .custom(
+            CustomCommand::new_static("TIME", None, false),
+            Vec::<String>::new(),
+        )
+        .await
+        .unwrap();
+    let now_ms = time[0].parse::<u64>().unwrap() * 1000 + time[1].parse::<u64>().unwrap() / 1000;
     // The ID Redis actually assigned, run through the real formatter, must
     // read as "just now" — proving the ID's timestamp component genuinely is
     // real wall-clock epoch millis, not a guess about Redis's ID format.
@@ -6136,5 +6144,746 @@ mod cluster_liveness {
         let _ = v.client().quit().await;
         let _ = writer.quit().await;
         let _ = writer2.quit().await;
+    }
+}
+
+/// M5 task 6: every shipped mutation against a real cluster (R4.x, R1.11,
+/// ADR-0022). Each goes through `mutate::execute_settled`, the function the
+/// shell's mutation path runs, on a client from `connect_with`, never a raw
+/// `fred` call, with one key in each primary's slot range.
+mod cluster_mutations {
+    use super::Credentials;
+    use super::support::cluster::{Cluster, start_cluster};
+    use fred::prelude::*;
+    use redis_pane::redis::mutate::execute_settled;
+    use redis_pane_core::mutation::{Mutation, MutationOutcome, NotWritten};
+    use redis_pane_core::state::ReadOnlyReason;
+    use redis_pane_core::state::value::ListEnd;
+
+    const DONE: MutationOutcome = MutationOutcome::Done;
+    const NOTHING: MutationOutcome = MutationOutcome::NothingToRemove;
+    fn refused(n: NotWritten) -> MutationOutcome {
+        MutationOutcome::NotWritten(n)
+    }
+
+    async fn connect(cluster: &Cluster) -> Client {
+        redis_pane::redis::connect_with(&cluster.seed_url(), &Credentials::default())
+            .await
+            .expect("cluster client")
+            .0
+    }
+
+    /// A key named `rp:<tag>:<n>` whose slot is owned by `primary`.
+    async fn key_for(cluster: &Cluster, primary: u16, tag: &str) -> String {
+        let node = cluster
+            .primaries()
+            .await
+            .into_iter()
+            .find(|n| n.port == primary)
+            .expect("a primary");
+        (0u32..)
+            .map(|i| format!("rp:{tag}:{i}"))
+            .find(|k| node.owns(fred::util::redis_keyslot(k.as_bytes())))
+            .unwrap()
+    }
+
+    /// Run one mutation through the shell's write path; it must not fail.
+    async fn run(client: &Client, m: Mutation) -> MutationOutcome {
+        let settled = execute_settled(client, &m).await;
+        assert!(!settled.link_lost, "{m:?} wedged the client");
+        settled
+            .result
+            .unwrap_or_else(|e| panic!("{m:?} failed on a healthy cluster: {e}"))
+    }
+
+    async fn ttl(client: &Client, key: &str) -> i64 {
+        client.ttl(key).await.unwrap()
+    }
+
+    #[tokio::test]
+    #[ignore = "needs docker"]
+    async fn every_shipped_mutation_lands_on_the_owner_of_each_primarys_slots() {
+        let cluster = start_cluster().await;
+        let client = connect(&cluster).await;
+        let primaries = cluster.primaries().await;
+        assert_eq!(primaries.len(), 3);
+        for p in primaries.iter().map(|n| n.port) {
+            let k = |tag: &'static str| {
+                let cluster = &cluster;
+                async move { key_for(cluster, p, tag).await }
+            };
+            let who = format!("primary {p}");
+
+            // String edit keeps the TTL; delete.
+            let s = k("str").await;
+            let _: () = client.set(&s, "old", None, None, false).await.unwrap();
+            let _: bool = client.expire(&s, 1000, None).await.unwrap();
+            assert_eq!(
+                run(
+                    &client,
+                    Mutation::SetString {
+                        key: s.as_str().into(),
+                        value: b"new".to_vec()
+                    }
+                )
+                .await,
+                DONE,
+                "{who}"
+            );
+            assert_eq!(client.get::<String, _>(&s).await.unwrap(), "new");
+            assert!(ttl(&client, &s).await > 0, "{who}: KEEPTTL");
+            assert_eq!(
+                run(
+                    &client,
+                    Mutation::DeleteKey {
+                        key: s.as_str().into()
+                    }
+                )
+                .await,
+                DONE
+            );
+            assert_eq!(client.exists::<i64, _>(&s).await.unwrap(), 0, "{who}");
+
+            // Hash: edit, add, remove (last removal removes the key).
+            let h = k("hash").await;
+            let _: i64 = client.hset(&h, ("a", "1")).await.unwrap();
+            assert_eq!(
+                run(
+                    &client,
+                    Mutation::SetHashField {
+                        key: h.as_str().into(),
+                        field: b"a".to_vec(),
+                        value: b"2".to_vec()
+                    }
+                )
+                .await,
+                DONE
+            );
+            assert_eq!(
+                run(
+                    &client,
+                    Mutation::AddHashField {
+                        key: h.as_str().into(),
+                        field: b"b".to_vec(),
+                        value: b"3".to_vec()
+                    }
+                )
+                .await,
+                DONE
+            );
+            let got: std::collections::BTreeMap<String, String> = client.hgetall(&h).await.unwrap();
+            assert_eq!(got.get("a").map(String::as_str), Some("2"), "{who}");
+            assert_eq!(got.get("b").map(String::as_str), Some("3"), "{who}");
+            for f in [b"a", b"b"] {
+                assert_eq!(
+                    run(
+                        &client,
+                        Mutation::DeleteHashField {
+                            key: h.as_str().into(),
+                            field: f.to_vec()
+                        }
+                    )
+                    .await,
+                    DONE
+                );
+            }
+            assert_eq!(client.exists::<i64, _>(&h).await.unwrap(), 0, "{who}");
+
+            // Set: add, remove.
+            let st = k("set").await;
+            let _: i64 = client.sadd(&st, "x").await.unwrap();
+            assert_eq!(
+                run(
+                    &client,
+                    Mutation::AddSetMember {
+                        key: st.as_str().into(),
+                        member: b"y".to_vec()
+                    }
+                )
+                .await,
+                DONE
+            );
+            assert_eq!(client.scard::<i64, _>(&st).await.unwrap(), 2, "{who}");
+            assert_eq!(
+                run(
+                    &client,
+                    Mutation::DeleteSetMember {
+                        key: st.as_str().into(),
+                        member: b"x".to_vec()
+                    }
+                )
+                .await,
+                DONE
+            );
+            assert!(client.sismember::<bool, _, _>(&st, "y").await.unwrap());
+            assert!(!client.sismember::<bool, _, _>(&st, "x").await.unwrap());
+
+            // List: edit, add at both ends, remove by index.
+            let l = k("list").await;
+            let _: i64 = client.rpush(&l, vec!["a", "b", "c"]).await.unwrap();
+            assert_eq!(
+                run(
+                    &client,
+                    Mutation::SetListElement {
+                        key: l.as_str().into(),
+                        index: 1,
+                        expected: b"b".to_vec(),
+                        value: b"B".to_vec()
+                    }
+                )
+                .await,
+                DONE
+            );
+            assert_eq!(
+                run(
+                    &client,
+                    Mutation::AddListElement {
+                        key: l.as_str().into(),
+                        end: ListEnd::Head,
+                        value: b"h".to_vec()
+                    }
+                )
+                .await,
+                DONE
+            );
+            assert_eq!(
+                run(
+                    &client,
+                    Mutation::AddListElement {
+                        key: l.as_str().into(),
+                        end: ListEnd::Tail,
+                        value: b"t".to_vec()
+                    }
+                )
+                .await,
+                DONE
+            );
+            // [h a B c t]; remove index 2 (B).
+            assert_eq!(
+                run(
+                    &client,
+                    Mutation::DeleteListElement {
+                        key: l.as_str().into(),
+                        index: 2,
+                        expected: b"B".to_vec()
+                    }
+                )
+                .await,
+                DONE
+            );
+            let got: Vec<String> = client.lrange(&l, 0, -1).await.unwrap();
+            assert_eq!(got, ["h", "a", "c", "t"], "{who}");
+
+            // ZSet: score edit, add, remove.
+            let z = k("zset").await;
+            let _: i64 = client
+                .zadd(&z, None, None, false, false, (1.0, "m"))
+                .await
+                .unwrap();
+            assert_eq!(
+                run(
+                    &client,
+                    Mutation::SetZSetScore {
+                        key: z.as_str().into(),
+                        member: b"m".to_vec(),
+                        score: 5.5
+                    }
+                )
+                .await,
+                DONE
+            );
+            assert_eq!(
+                run(
+                    &client,
+                    Mutation::AddZSetMember {
+                        key: z.as_str().into(),
+                        member: b"n".to_vec(),
+                        score: 2.0
+                    }
+                )
+                .await,
+                DONE
+            );
+            let sc: f64 = client.zscore(&z, "m").await.unwrap();
+            assert_eq!(sc, 5.5, "{who}");
+            assert_eq!(
+                run(
+                    &client,
+                    Mutation::DeleteZSetMember {
+                        key: z.as_str().into(),
+                        member: b"m".to_vec()
+                    }
+                )
+                .await,
+                DONE
+            );
+            assert_eq!(client.zcard::<i64, _>(&z).await.unwrap(), 1, "{who}");
+
+            // TTL: set, shift, clear.
+            let t = k("ttl").await;
+            let _: () = client.set(&t, "v", None, None, false).await.unwrap();
+            assert_eq!(
+                run(
+                    &client,
+                    Mutation::SetTtl {
+                        key: t.as_str().into(),
+                        seconds: 500
+                    }
+                )
+                .await,
+                DONE
+            );
+            let now = ttl(&client, &t).await;
+            assert!((490..=500).contains(&now), "{who}: ttl {now}");
+            assert_eq!(
+                run(
+                    &client,
+                    Mutation::ShiftTtl {
+                        key: t.as_str().into(),
+                        delta_seconds: 100
+                    }
+                )
+                .await,
+                DONE
+            );
+            let now = ttl(&client, &t).await;
+            assert!((590..=600).contains(&now), "{who}: ttl {now}");
+            assert_eq!(
+                run(
+                    &client,
+                    Mutation::PersistTtl {
+                        key: t.as_str().into()
+                    }
+                )
+                .await,
+                DONE
+            );
+            assert_eq!(ttl(&client, &t).await, -1, "{who}");
+        }
+        let _ = client.quit().await;
+    }
+
+    #[tokio::test]
+    #[ignore = "needs docker"]
+    async fn every_guarded_refusal_holds_on_each_primary() {
+        let cluster = start_cluster().await;
+        let client = connect(&cluster).await;
+        for p in cluster.primaries().await.iter().map(|n| n.port) {
+            let who = format!("primary {p}");
+            // A key that does not exist, in this primary's range: every
+            // guarded write must answer "key gone" and never create it.
+            let gone = key_for(&cluster, p, "gone").await;
+            let g = || gone.as_str().into();
+            let cases: Vec<(&str, Mutation)> = vec![
+                (
+                    "set string",
+                    Mutation::SetString {
+                        key: g(),
+                        value: b"v".to_vec(),
+                    },
+                ),
+                (
+                    "set field",
+                    Mutation::SetHashField {
+                        key: g(),
+                        field: b"f".to_vec(),
+                        value: b"v".to_vec(),
+                    },
+                ),
+                (
+                    "add field",
+                    Mutation::AddHashField {
+                        key: g(),
+                        field: b"f".to_vec(),
+                        value: b"v".to_vec(),
+                    },
+                ),
+                (
+                    "add member",
+                    Mutation::AddSetMember {
+                        key: g(),
+                        member: b"m".to_vec(),
+                    },
+                ),
+                (
+                    "set element",
+                    Mutation::SetListElement {
+                        key: g(),
+                        index: 0,
+                        expected: b"e".to_vec(),
+                        value: b"v".to_vec(),
+                    },
+                ),
+                (
+                    "push head",
+                    Mutation::AddListElement {
+                        key: g(),
+                        end: ListEnd::Head,
+                        value: b"v".to_vec(),
+                    },
+                ),
+                (
+                    "push tail",
+                    Mutation::AddListElement {
+                        key: g(),
+                        end: ListEnd::Tail,
+                        value: b"v".to_vec(),
+                    },
+                ),
+                (
+                    "delete element",
+                    Mutation::DeleteListElement {
+                        key: g(),
+                        index: 0,
+                        expected: b"e".to_vec(),
+                    },
+                ),
+                (
+                    "set score",
+                    Mutation::SetZSetScore {
+                        key: g(),
+                        member: b"m".to_vec(),
+                        score: 1.0,
+                    },
+                ),
+                (
+                    "add zset member",
+                    Mutation::AddZSetMember {
+                        key: g(),
+                        member: b"m".to_vec(),
+                        score: 1.0,
+                    },
+                ),
+                (
+                    "set ttl",
+                    Mutation::SetTtl {
+                        key: g(),
+                        seconds: 60,
+                    },
+                ),
+                ("persist", Mutation::PersistTtl { key: g() }),
+                (
+                    "shift ttl",
+                    Mutation::ShiftTtl {
+                        key: g(),
+                        delta_seconds: 10,
+                    },
+                ),
+            ];
+            for (what, m) in cases {
+                assert_eq!(
+                    run(&client, m).await,
+                    refused(NotWritten::KeyGone),
+                    "{who}: {what}"
+                );
+            }
+            assert_eq!(
+                client.exists::<i64, _>(&gone).await.unwrap(),
+                0,
+                "{who}: nothing recreated"
+            );
+            // Removals from a key that is gone are "nothing to remove"; DEL is Done.
+            for (what, m) in [
+                (
+                    "hdel",
+                    Mutation::DeleteHashField {
+                        key: g(),
+                        field: b"f".to_vec(),
+                    },
+                ),
+                (
+                    "srem",
+                    Mutation::DeleteSetMember {
+                        key: g(),
+                        member: b"m".to_vec(),
+                    },
+                ),
+                (
+                    "zrem",
+                    Mutation::DeleteZSetMember {
+                        key: g(),
+                        member: b"m".to_vec(),
+                    },
+                ),
+            ] {
+                assert_eq!(run(&client, m).await, NOTHING, "{who}: {what}");
+            }
+            assert_eq!(
+                run(&client, Mutation::DeleteKey { key: g() }).await,
+                DONE,
+                "{who}"
+            );
+
+            // Hash: field gone / field taken, existing value untouched.
+            let h = key_for(&cluster, p, "h").await;
+            let _: i64 = client.hset(&h, ("f", "1")).await.unwrap();
+            assert_eq!(
+                run(
+                    &client,
+                    Mutation::SetHashField {
+                        key: h.as_str().into(),
+                        field: b"nope".to_vec(),
+                        value: b"x".to_vec()
+                    }
+                )
+                .await,
+                refused(NotWritten::FieldGone),
+                "{who}"
+            );
+            assert_eq!(
+                run(
+                    &client,
+                    Mutation::AddHashField {
+                        key: h.as_str().into(),
+                        field: b"f".to_vec(),
+                        value: b"x".to_vec()
+                    }
+                )
+                .await,
+                refused(NotWritten::FieldExists),
+                "{who}"
+            );
+            assert_eq!(
+                client.hget::<String, _, _>(&h, "f").await.unwrap(),
+                "1",
+                "{who}"
+            );
+            assert_eq!(
+                run(
+                    &client,
+                    Mutation::DeleteHashField {
+                        key: h.as_str().into(),
+                        field: b"nope".to_vec()
+                    }
+                )
+                .await,
+                NOTHING,
+                "{who}"
+            );
+
+            // Set: member taken / nothing to remove.
+            let st = key_for(&cluster, p, "s").await;
+            let _: i64 = client.sadd(&st, "m").await.unwrap();
+            assert_eq!(
+                run(
+                    &client,
+                    Mutation::AddSetMember {
+                        key: st.as_str().into(),
+                        member: b"m".to_vec()
+                    }
+                )
+                .await,
+                refused(NotWritten::MemberExists),
+                "{who}"
+            );
+            assert_eq!(
+                run(
+                    &client,
+                    Mutation::DeleteSetMember {
+                        key: st.as_str().into(),
+                        member: b"nope".to_vec()
+                    }
+                )
+                .await,
+                NOTHING,
+                "{who}"
+            );
+
+            // List: the element moved (a stale index), for edit and delete.
+            let l = key_for(&cluster, p, "l").await;
+            let _: i64 = client.rpush(&l, vec!["a", "b"]).await.unwrap();
+            assert_eq!(
+                run(
+                    &client,
+                    Mutation::SetListElement {
+                        key: l.as_str().into(),
+                        index: 0,
+                        expected: b"b".to_vec(),
+                        value: b"x".to_vec()
+                    }
+                )
+                .await,
+                refused(NotWritten::ElementMoved),
+                "{who}"
+            );
+            assert_eq!(
+                run(
+                    &client,
+                    Mutation::DeleteListElement {
+                        key: l.as_str().into(),
+                        index: 1,
+                        expected: b"a".to_vec()
+                    }
+                )
+                .await,
+                refused(NotWritten::ElementMoved),
+                "{who}"
+            );
+            let got: Vec<String> = client.lrange(&l, 0, -1).await.unwrap();
+            assert_eq!(got, ["a", "b"], "{who}: nothing written, no sentinel left");
+
+            // ZSet: member gone / member taken (score unchanged) / nothing to remove.
+            let z = key_for(&cluster, p, "z").await;
+            let _: i64 = client
+                .zadd(&z, None, None, false, false, (1.0, "m"))
+                .await
+                .unwrap();
+            assert_eq!(
+                run(
+                    &client,
+                    Mutation::SetZSetScore {
+                        key: z.as_str().into(),
+                        member: b"nope".to_vec(),
+                        score: 9.0
+                    }
+                )
+                .await,
+                refused(NotWritten::MemberGone),
+                "{who}"
+            );
+            assert_eq!(
+                run(
+                    &client,
+                    Mutation::AddZSetMember {
+                        key: z.as_str().into(),
+                        member: b"m".to_vec(),
+                        score: 9.0
+                    }
+                )
+                .await,
+                refused(NotWritten::MemberExists),
+                "{who}"
+            );
+            assert_eq!(
+                client.zscore::<f64, _, _>(&z, "m").await.unwrap(),
+                1.0,
+                "{who}"
+            );
+            assert_eq!(
+                run(
+                    &client,
+                    Mutation::DeleteZSetMember {
+                        key: z.as_str().into(),
+                        member: b"nope".to_vec()
+                    }
+                )
+                .await,
+                NOTHING,
+                "{who}"
+            );
+
+            // TTL: no expiry to persist or shift; a shift that would expire now.
+            let t = key_for(&cluster, p, "t").await;
+            let _: () = client.set(&t, "v", None, None, false).await.unwrap();
+            assert_eq!(
+                run(
+                    &client,
+                    Mutation::PersistTtl {
+                        key: t.as_str().into()
+                    }
+                )
+                .await,
+                NOTHING,
+                "{who}"
+            );
+            assert_eq!(
+                run(
+                    &client,
+                    Mutation::ShiftTtl {
+                        key: t.as_str().into(),
+                        delta_seconds: 10
+                    }
+                )
+                .await,
+                refused(NotWritten::NoExpiry),
+                "{who}"
+            );
+            let _: bool = client.expire(&t, 100, None).await.unwrap();
+            assert_eq!(
+                run(
+                    &client,
+                    Mutation::ShiftTtl {
+                        key: t.as_str().into(),
+                        delta_seconds: -500
+                    }
+                )
+                .await,
+                refused(NotWritten::WouldExpireNow),
+                "{who}"
+            );
+            assert!(ttl(&client, &t).await > 0, "{who}: TTL untouched");
+        }
+        let _ = client.quit().await;
+    }
+
+    /// A write to a key whose slot is mid-migration: `fred` answers `ASK`
+    /// with a `Routing` failure and the client is wedged for good (ADR-0022).
+    /// The write is reported as failed with its detail, and as a lost link.
+    #[tokio::test]
+    #[ignore = "needs docker"]
+    async fn a_write_to_a_slot_mid_migration_fails_visibly_and_asks_for_the_redial() {
+        let cluster = start_cluster().await;
+        let client = connect(&cluster).await;
+        let primaries = cluster.primaries().await;
+        let (from, to) = (primaries[0].port, primaries[1].port);
+        let key = key_for(&cluster, from, "mig").await;
+        let _: () = client.set(&key, "v0", None, None, false).await.unwrap();
+        let slot = fred::util::redis_keyslot(key.as_bytes());
+
+        // Every key has moved to `to`, but `from` still owns the slot: `ASK`.
+        cluster.begin_migration(slot, from, to).await;
+        let m = Mutation::SetString {
+            key: key.as_str().into(),
+            value: b"v1".to_vec(),
+        };
+        let settled = execute_settled(&client, &m).await;
+        let detail = settled
+            .result
+            .as_ref()
+            .expect_err("a write that hit ASK must not look like it worked");
+        assert!(
+            !detail.is_empty(),
+            "the failure carries the server's detail"
+        );
+        assert!(
+            settled.link_lost,
+            "a wedged client asks for the redial: {detail}"
+        );
+
+        // Ownership settles; the redial (what `Msg::ConnectionLost` triggers)
+        // gives a client that works, on the key's new owner.
+        cluster.finish_migration(slot, to).await;
+        let _ = client.quit().await;
+        let fresh = connect(&cluster).await;
+        assert_eq!(run(&fresh, m).await, DONE);
+        assert_eq!(fresh.get::<String, _>(&key).await.unwrap(), "v1");
+        let _ = fresh.quit().await;
+    }
+
+    /// A cluster is not locked as a replica because the seed node is one
+    /// (task 6): writes go to primaries.
+    #[tokio::test]
+    #[ignore = "needs docker"]
+    async fn a_cluster_seeded_through_a_replica_is_not_read_only() {
+        let cluster = start_cluster().await;
+        let replica = cluster.replicas().await.remove(0).port;
+        for url in [
+            format!("redis-cluster://127.0.0.1:{replica}"),
+            format!("redis://127.0.0.1:{replica}"),
+            cluster.seed_url(),
+        ] {
+            let (client, est) = redis_pane::redis::connect_with(&url, &Credentials::default())
+                .await
+                .unwrap_or_else(|e| panic!("{url}: {e}"));
+            assert!(client.is_clustered(), "{url}");
+            assert_eq!(est.read_only, None::<ReadOnlyReason>, "{url}");
+            // And it writes: that is the claim being made.
+            let key = key_for(&cluster, cluster.primaries().await[0].port, "seed").await;
+            let m = Mutation::DeleteKey {
+                key: key.as_str().into(),
+            };
+            assert_eq!(run(&client, m).await, DONE, "{url}");
+            let _ = client.quit().await;
+        }
     }
 }

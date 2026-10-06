@@ -351,11 +351,16 @@ async fn fetch_conditions(
 
     // A cluster client sends a keyless `INFO` to whichever node it picks, so
     // one replica answering would make a healthy Cluster read as a replica.
-    // Whether a Cluster is read-only is task 6's question, not this probe's.
-    let read_only = match field("role:").as_deref() {
-        Some("slave") | Some("replica") if !client.is_clustered() => Some(ReadOnlyReason::Replica),
-        _ => None,
+    // On a Cluster the reason is a property of the whole Cluster instead
+    // (`cluster_is_all_replica`, M5 task 6): writes go to primaries, so it is
+    // locked as `replica` only when no reachable node is one.
+    let replica = if client.is_clustered() {
+        let nodes: String = client.cluster_nodes().await?;
+        cluster_is_all_replica(&nodes)
+    } else {
+        matches!(field("role:").as_deref(), Some("slave") | Some("replica"))
     };
+    let read_only = replica.then_some(ReadOnlyReason::Replica);
 
     // A failing background save makes Redis refuse writes with -MISCONF, and it
     // stays broken until someone intervenes — worth a banner, not a surprise.
@@ -387,6 +392,42 @@ async fn fetch_conditions(
     let clustered = field("cluster_enabled:").as_deref() == Some("1");
 
     Ok((read_only, condition, clustered))
+}
+
+/// Whether a Cluster is replica-only: every *reachable* node in `CLUSTER NODES`
+/// is a replica, so there is nowhere for a write to land (M5 task 6, ADR-0022).
+///
+/// `CLUSTER NODES` rather than the client's routing table: that table is built
+/// from `CLUSTER SLOTS`, whose entries are primaries by construction, so it can
+/// never say "no primary". Nodes flagged `fail`, `fail?`, `handshake` or
+/// `noaddr`, or whose link is down, are not reachable and do not count; the
+/// answering node (`myself`) always does. No reachable node at all is not "all
+/// replicas": that is an outage, which the connection reports by failing, not by
+/// a Read-only Mode reason that could never lift.
+pub fn cluster_is_all_replica(cluster_nodes: &str) -> bool {
+    let mut primaries = 0usize;
+    let mut replicas = 0usize;
+    for line in cluster_nodes.lines() {
+        let f: Vec<&str> = line.split_whitespace().collect();
+        if f.len() < 8 {
+            continue;
+        }
+        let flags: Vec<&str> = f[2].split(',').collect();
+        let has = |x: &str| flags.contains(&x);
+        let myself = has("myself");
+        if has("fail") || has("fail?") || has("handshake") || has("noaddr") {
+            continue;
+        }
+        if !myself && f[7] != "connected" {
+            continue;
+        }
+        if has("master") {
+            primaries += 1;
+        } else if has("slave") {
+            replicas += 1;
+        }
+    }
+    primaries == 0 && replicas > 0
 }
 
 async fn server_version(client: &Client) -> Result<Version, ConnectError> {
@@ -496,6 +537,63 @@ pub async fn fetch_metadata(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn row(id: &str, flags: &str, link: &str) -> String {
+        format!("{id} 127.0.0.1:7000@17000 {flags} - 0 0 1 {link}")
+    }
+
+    #[test]
+    fn a_cluster_with_a_primary_is_not_replica_only_even_if_the_seed_is_a_replica() {
+        let nodes = [
+            row("a", "myself,slave", "connected"),
+            row("b", "master", "connected"),
+        ]
+        .join("\n");
+        assert!(!cluster_is_all_replica(&nodes));
+    }
+
+    #[test]
+    fn a_cluster_of_only_replicas_is_replica_only() {
+        let nodes = [
+            row("a", "myself,slave", "connected"),
+            row("b", "slave", "connected"),
+        ]
+        .join("\n");
+        assert!(cluster_is_all_replica(&nodes));
+    }
+
+    #[test]
+    fn an_unreachable_primary_does_not_count() {
+        for (flags, link) in [
+            ("master,fail", "connected"),
+            ("master,fail?", "connected"),
+            ("master,handshake", "connected"),
+            ("master,noaddr", "connected"),
+            ("master", "disconnected"),
+        ] {
+            let nodes = [row("a", "myself,slave", "connected"), row("b", flags, link)].join("\n");
+            assert!(cluster_is_all_replica(&nodes), "{flags} {link}");
+        }
+    }
+
+    #[test]
+    fn an_empty_or_unparseable_reply_is_not_replica_only() {
+        assert!(!cluster_is_all_replica(""));
+        assert!(!cluster_is_all_replica("garbage"));
+        let only_dead = row("a", "master,fail", "disconnected");
+        assert!(!cluster_is_all_replica(&only_dead));
+    }
+
+    #[test]
+    fn a_normal_cluster_is_not_replica_only() {
+        let nodes = [
+            row("a", "myself,master", "connected"),
+            row("b", "slave", "connected"),
+            row("c", "master", "connected"),
+        ]
+        .join("\n");
+        assert!(!cluster_is_all_replica(&nodes));
+    }
 
     #[test]
     fn backoff_grows_then_settles_at_a_ceiling() {

@@ -284,9 +284,20 @@ impl Cluster {
 
     /// Promote `replica` with `CLUSTER FAILOVER` and wait until it is a primary
     /// and every node agrees the cluster is ok again.
+    ///
+    /// Under heavy host load a plain `CLUSTER FAILOVER` (which waits for the
+    /// replica to catch up and for a manual-failover handshake with the primary)
+    /// has been seen not to complete in 60s. So the command is re-sent if the
+    /// replica is still not promoted after `ATTEMPT`, and from the second
+    /// attempt on as `FORCE` (no primary handshake). The overall deadline is
+    /// longer. A replica that never promotes still fails the test, naming the
+    /// attempts made.
     pub async fn failover(&self, replica: u16) {
-        self.cli(replica, &["cluster", "failover"]).await;
+        const ATTEMPT: Duration = Duration::from_secs(20);
+        const OVERALL: Duration = Duration::from_secs(120);
         let start = Instant::now();
+        let mut attempts = 0u32;
+        let mut last_sent: Option<Instant> = None;
         loop {
             let me = self
                 .nodes_from(replica)
@@ -297,9 +308,19 @@ impl Cluster {
             if me.is_primary {
                 break;
             }
+            if last_sent.is_none_or(|t| t.elapsed() >= ATTEMPT) {
+                attempts += 1;
+                let args: &[&str] = if attempts == 1 {
+                    &["cluster", "failover"]
+                } else {
+                    &["cluster", "failover", "force"]
+                };
+                self.cli(replica, args).await;
+                last_sent = Some(Instant::now());
+            }
             assert!(
-                start.elapsed() < DEADLINE,
-                "replica {replica} was not promoted within {DEADLINE:?}"
+                start.elapsed() < OVERALL,
+                "replica {replica} was not promoted within {OVERALL:?} ({attempts} CLUSTER FAILOVER attempts)"
             );
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
@@ -309,7 +330,7 @@ impl Cluster {
             if self.agree_on_slots().await {
                 return;
             }
-            assert!(start.elapsed() < DEADLINE, "nodes never agreed on slots");
+            assert!(start.elapsed() < OVERALL, "nodes never agreed on slots");
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
     }
@@ -317,6 +338,14 @@ impl Cluster {
     /// Move one slot, with its keys, from primary `from` to primary `to`
     /// (ports). Standard `IMPORTING` / `MIGRATING` / `MIGRATE` / `SETSLOT NODE`.
     pub async fn migrate_slot(&self, slot: u16, from: u16, to: u16) {
+        self.begin_migration(slot, from, to).await;
+        self.finish_migration(slot, to).await;
+    }
+
+    /// The first half of [`Cluster::migrate_slot`]: `IMPORTING` / `MIGRATING`
+    /// and every key moved, but ownership not yet handed over. The slot is
+    /// *mid-migration*: a key that has moved answers `ASK` from `from`.
+    pub async fn begin_migration(&self, slot: u16, from: u16, to: u16) {
         let nodes = self.nodes().await;
         let id_of = |port: u16| {
             nodes
@@ -345,6 +374,19 @@ impl Cluster {
             args.extend(keys.iter().copied());
             self.cli(from, &args).await;
         }
+    }
+
+    /// The second half of [`Cluster::migrate_slot`]: hand `slot` to `to` and
+    /// wait until every node agrees.
+    pub async fn finish_migration(&self, slot: u16, to: u16) {
+        let nodes = self.nodes().await;
+        let to_id = nodes
+            .iter()
+            .find(|n| n.port == to)
+            .unwrap_or_else(|| panic!("no node on {to}"))
+            .id
+            .clone();
+        let s = slot.to_string();
         // Tell the importer first, then everyone else, so ownership converges.
         self.cli(to, &["cluster", "setslot", &s, "node", &to_id])
             .await;

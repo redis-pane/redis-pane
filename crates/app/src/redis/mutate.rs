@@ -13,6 +13,37 @@ use fred::prelude::*;
 use redis_pane_core::mutation::{Mutation, MutationOutcome, NotWritten};
 use redis_pane_core::state::value::ListEnd;
 
+/// What the shell sends back for one confirmed write: the outcome (or the
+/// failing command's detail, R7.4) and whether the failure means the client
+/// itself is wedged and must be redialled.
+#[derive(Debug)]
+pub struct Settled {
+    pub result: Result<MutationOutcome, String>,
+    /// True when the failure is the `fred` Cluster wedge
+    /// ([`crate::liveness::is_wedged`]): the shell reports it as a failed write
+    /// *and* as a lost link, so the redial replaces the client (ADR-0022).
+    pub link_lost: bool,
+}
+
+/// [`execute`] plus the wedge check: the whole write path the shell runs.
+///
+/// A write through the main client inherits the read path's problem: a key
+/// whose slot is mid-migration answers `ASK`, `fred` 10.1.0 gives up with a
+/// `Routing` error and then every command on that client times out. The write
+/// is reported as failed (never swallowed), and `link_lost` asks for the redial.
+pub async fn execute_settled(client: &Client, mutation: &Mutation) -> Settled {
+    match execute(client, mutation).await {
+        Ok(outcome) => Settled {
+            result: Ok(outcome),
+            link_lost: false,
+        },
+        Err(e) => Settled {
+            link_lost: crate::liveness::is_wedged(client, &e),
+            result: Err(e.details().to_string()),
+        },
+    }
+}
+
 /// Execute a confirmed write.
 ///
 /// The caller must not treat success as the value now on screen: the core
