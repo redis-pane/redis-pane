@@ -1,6 +1,6 @@
 # M5 task 6: Mutations on a Cluster
 
-Status: **planned.**
+Status: **done.**
 
 ## Context
 
@@ -56,3 +56,43 @@ client is whatever node answered.
 ## Out of scope
 
 Rename, copy, bulk and hash-field rename themselves (M2 tasks 11–14).
+
+## Outcome
+
+Done. Every shipped mutation is proven on a real Cluster, and the `replica` reason is decided per
+Cluster. Implements R1.11, R4.x (the mutation chokepoint) and ADR-0022.
+
+- **Audit of `mutate.rs`: clean, no change needed.** Every guarded script (hash field edit and add,
+  set member add, list element edit, add and delete, zset score edit and add, TTL persist and shift)
+  reads and writes only `KEYS[1]`; no key name is built in Lua or passed in `ARGV`. The one
+  non-data `ARGV` entry is the literal `LPUSH`/`RPUSH` command name in the list-add script. The
+  plain commands (`SET`, `DEL`, `HDEL`, `SREM`, `ZREM`, `EXPIRE`) are single-key. The one keyless
+  mutation, `SLOWLOG RESET`, is unreachable on a Cluster (task 5 makes the Slowlog view inert).
+- **Tests** (`cluster_mutations` in `integration.rs`, `#[ignore]`d): every mutation succeeds on a
+  key in each of the three primaries' ranges; every refusal path (key gone for all 13 guarded
+  writes, field taken or gone, member taken or gone, element moved, no expiry, would expire now,
+  nothing to remove) holds on each primary and never recreates a key; a write to a slot
+  mid-migration fails with the server's detail and `link_lost`, and a fresh client works once
+  ownership settles; a Cluster seeded through a replica (by `redis-cluster://` and by `redis://`)
+  is not locked and can write. The existing single-node replica test still locks as `replica`.
+  Five unit tests cover `cluster_is_all_replica` (all-replica, seed-replica with a
+  primary, each unreachable-primary flag, empty or garbage reply, a normal cluster).
+- **Wedge on the write path.** `mutate::execute_settled` wraps `execute` and sets `link_lost` with
+  `liveness::is_wedged`; `Shell::mutate` sends `Msg::ConnectionLost` after `MutationSettled`, as the
+  read path does. No reconnect policy was added.
+- **Harness.** `Cluster::failover` retries `CLUSTER FAILOVER` (as `FORCE` from the second attempt)
+  every 20s under a 120s deadline, after the 60s deadline timed out twice under host load.
+  `migrate_slot` is split into `begin_migration` and `finish_migration` so a test can stand in a
+  mid-migration slot.
+- **Stream test.** `a_freshly_added_entry_reads_as_just_added` compared the stream ID's timestamp
+  (the container's clock) with the host's; Docker Desktop's VM clock drifts from the host's. It now
+  takes "now" from the server's `TIME`.
+
+### Deviations
+
+- **The replica rule reads `CLUSTER NODES`, not `cached_cluster_state()`.** The routing table lists
+  only primaries, so it can never report "no primary". A failing `CLUSTER NODES` fails the
+  conditions probe as a failing `INFO` does (surfaced, never defaulted).
+- All-replica is covered by the pure function only: a real cluster with no primary is not reachable
+  through the harness.
+- PLAN §5 rows 11 to 13 carry the Cluster rules (rename, copy, bulk delete, move-across-db hidden).

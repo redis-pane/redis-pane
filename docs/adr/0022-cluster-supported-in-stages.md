@@ -103,6 +103,20 @@ slot migration. One residual, accepted: when the arming was spent on a stale own
 connection keeps a pending opt-in until its next command, which can track one unrelated key and
 cause a single spurious refetch.
 
+### Mutations and the `replica` reason on a Cluster
+
+Every shipped mutation is single-key and every guarded script touches only `KEYS[1]`, so `fred`
+routes each to the slot's owner and none can raise `CROSSSLOT` (audited in task 6, and proven per
+primary by the integration suite). A write through the main client inherits the `ASK` wedge above:
+the mutation path (`mutate::execute_settled`) reports it as the failed command *and* as a lost
+link, so the shell redials.
+
+`Replica` read-only is a property of the whole Cluster, not of whichever node answered `INFO`. It
+applies only when every reachable node in `CLUSTER NODES` is a replica (`cluster_is_all_replica`);
+a Cluster seeded through a replica is not locked. The routing table (`cached_cluster_state`) cannot
+express "no primary", since its entries are primaries by construction, so `CLUSTER NODES` is the
+source. Nodes flagged `fail`, `fail?`, `handshake` or `noaddr`, or with a down link, do not count.
+
 ### The test harness uses identity port mapping
 
 A Cluster node announces an address that the client then dials (`MOVED`, `CLUSTER SLOTS`), so every
