@@ -329,6 +329,18 @@ pub enum Msg {
         at_ms: u64,
         token: crate::command::InfoToken,
     },
+    /// `Command::FetchServerInfo` answered on a Cluster (R6.3, R1.11, M5 task
+    /// 7, `docs/plans/m5-dashboard.md`): one reading per node, with its role,
+    /// plus `CLUSTER INFO`'s text (or why it could not be read). A node whose
+    /// `INFO` failed is still in `nodes`, carrying the error; the poll as a
+    /// whole failing is [`Msg::ServerInfoFailed`]. Guarded by `token` exactly
+    /// like [`Msg::ServerInfoLoaded`].
+    ClusterInfoLoaded {
+        nodes: Vec<crate::state::NodeReading>,
+        health: Result<String, String>,
+        at_ms: u64,
+        token: crate::command::InfoToken,
+    },
     /// One tick of the Dashboard's poll interval (decision 1,
     /// `docs/plans/m3-dashboard.md`): the shell's `tokio::time::interval`
     /// always ticks (so it never accrues missed-tick catch-up bursts — see

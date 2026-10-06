@@ -6887,3 +6887,336 @@ mod cluster_mutations {
         }
     }
 }
+
+/// M5 task 7: the Cluster Dashboard's poll against a real cluster (R6.3,
+/// R1.11, ADR-0022, `docs/plans/m5-dashboard.md`).
+mod cluster_dashboard {
+    use super::Credentials;
+    use super::support::cluster::{Cluster, start_cluster};
+    use fred::prelude::*;
+    use redis_pane::redis::cluster_info::{NODE_TIMEOUT, NodePool, Poller, poll};
+    use redis_pane_core::clock::FixedClock;
+    use redis_pane_core::command::InfoToken;
+    use redis_pane_core::state::{ClusterDash, NodeRole};
+    use redis_pane_core::{Msg, State, update};
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
+
+    async fn connect(cluster: &Cluster) -> Client {
+        let (client, _) =
+            redis_pane::redis::connect_with(&cluster.seed_url(), &Credentials::default())
+                .await
+                .expect("cluster client");
+        client
+    }
+
+    async fn kill(cluster: &Cluster, port: u16) {
+        cluster
+            .exec(vec![
+                "sh".into(),
+                "-c".into(),
+                format!("redis-cli -p {port} shutdown nosave; true"),
+            ])
+            .await;
+    }
+
+    fn field(info: &redis_pane_core::state::RawInfo, key: &str) -> u64 {
+        info.field(key)
+            .and_then(|v| v.parse().ok())
+            .unwrap_or_else(|| panic!("{key} missing"))
+    }
+
+    /// Connections the server at `port` reports, from inside the container.
+    async fn clients_on(cluster: &Cluster, port: u16) -> u64 {
+        let out = cluster.cli(port, &["info", "clients"]).await;
+        out.lines()
+            .find_map(|l| l.trim().strip_prefix("connected_clients:"))
+            .and_then(|v| v.trim().parse().ok())
+            .expect("connected_clients")
+    }
+
+    #[tokio::test]
+    #[ignore = "needs docker"]
+    async fn six_rows_a_healthy_cluster_and_aggregates_that_match_the_nodes() {
+        let cluster = start_cluster().await;
+        let client = connect(&cluster).await;
+        // Some traffic, so hits and misses are not both zero.
+        for i in 0..200 {
+            client
+                .set::<(), _, _>(format!("dash:{i}"), "v", None, None, false)
+                .await
+                .unwrap();
+        }
+        for i in 0..250 {
+            let _: Option<String> = client.get(format!("dash:{i}")).await.unwrap();
+        }
+        let mut pool = NodePool::default();
+        let polled = poll(&client, &mut pool, NODE_TIMEOUT).await.expect("poll");
+        assert_eq!(polled.nodes.len(), 6, "every node, replicas included");
+        assert_eq!(
+            polled
+                .nodes
+                .iter()
+                .filter(|n| n.role == NodeRole::Primary)
+                .count(),
+            3
+        );
+        assert_eq!(
+            polled.nodes.iter().map(|n| n.slots).sum::<u32>(),
+            16_384,
+            "slot counts come from CLUSTER NODES"
+        );
+        assert!(polled.nodes.iter().all(|n| n.info.is_ok()), "{polled:?}");
+        // The roles agree with the cluster's own view.
+        let primaries: Vec<String> = cluster
+            .primaries()
+            .await
+            .iter()
+            .map(|n| format!("127.0.0.1:{}", n.port))
+            .collect();
+        for n in &polled.nodes {
+            assert_eq!(
+                n.role == NodeRole::Primary,
+                primaries.contains(&n.addr),
+                "{}",
+                n.addr
+            );
+        }
+
+        let mut dash = ClusterDash::default();
+        dash.record(polled.nodes.clone(), polled.health.clone(), 1_000);
+        let health = dash.health().unwrap().as_ref().expect("CLUSTER INFO");
+        assert_eq!(health.level(), redis_pane_core::state::AlarmLevel::Ok);
+        assert_eq!(
+            health.line("·"),
+            "cluster_state ok · 16384/16384 slots · 0 failing"
+        );
+
+        // Every aggregate equals the sum of the very readings it was made from.
+        let infos = |role: Option<NodeRole>| {
+            polled
+                .nodes
+                .iter()
+                .filter(move |n| role.is_none_or(|r| n.role == r))
+                .map(|n| n.info.as_ref().unwrap())
+                .collect::<Vec<_>>()
+        };
+        let t = dash.tiles();
+        let sum = |role: Option<NodeRole>, key: &str| -> u64 {
+            infos(role).iter().map(|i| field(i, key)).sum()
+        };
+        assert_eq!(
+            t.memory.used_bytes,
+            sum(Some(NodeRole::Primary), "used_memory")
+        );
+        assert_eq!(
+            t.ops_per_sec,
+            sum(Some(NodeRole::Primary), "instantaneous_ops_per_sec")
+        );
+        assert_eq!(t.clients.connected, sum(None, "connected_clients"));
+        assert_eq!(t.hit_ratio.hits, sum(None, "keyspace_hits"));
+        assert_eq!(t.hit_ratio.misses, sum(None, "keyspace_misses"));
+        assert!(
+            t.hit_ratio.hits >= 200,
+            "the 200 GETs that hit were counted"
+        );
+        assert!(t.hit_ratio.misses >= 50, "the 50 that missed were counted");
+        assert_eq!(t.eviction.expired_keys, sum(None, "expired_keys"));
+        assert_eq!(t.unreachable, 0);
+        assert_eq!(
+            t.memory.no_limit_nodes, 3,
+            "a fresh cluster has no maxmemory anywhere"
+        );
+        assert_eq!(t.memory.max_bytes, None);
+
+        // With a limit on every primary, the tile sums them.
+        for p in cluster.primaries().await {
+            cluster
+                .cli(p.port, &["config", "set", "maxmemory", "100mb"])
+                .await;
+        }
+        let polled = poll(&client, &mut pool, NODE_TIMEOUT).await.expect("poll");
+        let mut dash = ClusterDash::default();
+        dash.record(polled.nodes, polled.health, 2_000);
+        let m = dash.tiles().memory;
+        assert_eq!(m.max_bytes, Some(300 * 1024 * 1024));
+        assert_eq!(m.no_limit_nodes, 0);
+        pool.close().await;
+    }
+
+    #[tokio::test]
+    #[ignore = "needs docker"]
+    async fn a_dead_replica_is_one_failed_row_and_the_others_render() {
+        let cluster = start_cluster().await;
+        let client = connect(&cluster).await;
+        let mut pool = NodePool::default();
+        // Connections are warm, as in a Dashboard that has been open a while.
+        let first = poll(&client, &mut pool, NODE_TIMEOUT).await.expect("poll");
+        assert!(first.nodes.iter().all(|n| n.info.is_ok()));
+
+        let dead = cluster.replicas().await[0].port;
+        kill(&cluster, dead).await;
+        let dead_addr = format!("127.0.0.1:{dead}");
+
+        // Twice: once over the connection that just died, once reconnecting.
+        for round in 0..2 {
+            let started = Instant::now();
+            let polled = poll(&client, &mut pool, NODE_TIMEOUT)
+                .await
+                .unwrap_or_else(|e| panic!("round {round}: the poll failed as a whole: {e}"));
+            let took = started.elapsed();
+            assert!(
+                took < NODE_TIMEOUT * 2 + Duration::from_secs(2),
+                "round {round}: stalled for {took:?}"
+            );
+            assert_eq!(polled.nodes.len(), 6, "round {round}: the row is kept");
+            for n in &polled.nodes {
+                if n.addr == dead_addr {
+                    let why = n.info.as_ref().expect_err("the dead node answered?");
+                    assert!(!why.is_empty());
+                    assert_eq!(n.role, NodeRole::Replica, "its role is still known");
+                } else {
+                    assert!(n.info.is_ok(), "round {round}: {} failed", n.addr);
+                }
+            }
+            assert!(polled.health.is_ok(), "CLUSTER INFO still answers");
+
+            // Through the core: one failed row, one notification naming it.
+            let mut state = State::default();
+            state.connection.topology = Some(redis_pane_core::state::Topology {
+                primaries: 3,
+                nodes: 6,
+            });
+            state.screen = redis_pane_core::state::View::Dashboard;
+            let token = state.dashboard.poll_token;
+            let (state, _) = update(
+                state,
+                Msg::ClusterInfoLoaded {
+                    nodes: polled.nodes,
+                    health: polled.health,
+                    at_ms: 5_000,
+                    token,
+                },
+            );
+            let cluster_dash = state.dashboard.cluster.as_ref().unwrap();
+            assert_eq!(
+                cluster_dash
+                    .nodes()
+                    .iter()
+                    .filter(|n| n.failed().is_some())
+                    .count(),
+                1
+            );
+            let (toast, _) = state.error.expect("a notification");
+            assert!(
+                toast.starts_with(&format!("INFO on {dead_addr}:")),
+                "names the command and the node: {toast}"
+            );
+            assert_eq!(cluster_dash.tiles().unreachable, 1);
+        }
+        pool.close().await;
+    }
+
+    #[tokio::test]
+    #[ignore = "needs docker"]
+    async fn a_dead_primary_does_not_stall_the_dashboard() {
+        let cluster = start_cluster().await;
+        let client = connect(&cluster).await;
+        let mut pool = NodePool::default();
+        poll(&client, &mut pool, NODE_TIMEOUT).await.expect("poll");
+
+        let dead = cluster.primaries().await[1].port;
+        kill(&cluster, dead).await;
+        let dead_addr = format!("127.0.0.1:{dead}");
+
+        let started = Instant::now();
+        let polled = poll(&client, &mut pool, NODE_TIMEOUT).await.expect("poll");
+        assert!(
+            started.elapsed() < NODE_TIMEOUT * 2 + Duration::from_secs(2),
+            "stalled for {:?}",
+            started.elapsed()
+        );
+        let failed: Vec<&str> = polled
+            .nodes
+            .iter()
+            .filter(|n| n.info.is_err())
+            .map(|n| n.addr.as_str())
+            .collect();
+        assert_eq!(failed, [dead_addr.as_str()], "only the dead node fails");
+        pool.close().await;
+    }
+
+    #[tokio::test]
+    #[ignore = "needs docker"]
+    async fn leaving_the_view_stops_the_poll_and_closes_the_node_connections() {
+        let cluster = start_cluster().await;
+        let client = connect(&cluster).await;
+        let port = cluster.ports[0];
+        let baseline = clients_on(&cluster, port).await;
+
+        let poller = Poller::default();
+        let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+        let clock = Arc::new(FixedClock(1_000));
+        poller.start(
+            client.clone(),
+            tx.clone(),
+            clock.clone(),
+            InfoToken::default(),
+        );
+        let msg = tokio::time::timeout(Duration::from_secs(30), rx.recv())
+            .await
+            .expect("a reply")
+            .expect("open");
+        let Msg::ClusterInfoLoaded { nodes, .. } = msg else {
+            panic!("expected ClusterInfoLoaded, got {msg:?}");
+        };
+        assert_eq!(nodes.len(), 6);
+        assert!(
+            clients_on(&cluster, port).await > baseline,
+            "the poll holds a connection per node"
+        );
+
+        // The view is left: the connections go, and nothing more is sent.
+        poller.cancel();
+        let deadline = Instant::now() + Duration::from_secs(15);
+        loop {
+            if clients_on(&cluster, port).await <= baseline {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "per-node connections still open after the view was left"
+            );
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+        assert!(
+            tokio::time::timeout(Duration::from_secs(1), rx.recv())
+                .await
+                .is_err(),
+            "a message arrived after the poll was cancelled"
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "needs docker"]
+    async fn a_poll_cancelled_mid_flight_never_answers() {
+        let cluster = start_cluster().await;
+        let client = connect(&cluster).await;
+        let poller = Poller::default();
+        let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+        poller.start(
+            client,
+            tx,
+            Arc::new(FixedClock(1_000)),
+            InfoToken::default(),
+        );
+        poller.cancel();
+        assert!(
+            tokio::time::timeout(Duration::from_secs(3), rx.recv())
+                .await
+                .map(|m| m.is_none())
+                .unwrap_or(true),
+            "a cancelled poll answered"
+        );
+    }
+}

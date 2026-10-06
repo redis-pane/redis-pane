@@ -172,10 +172,13 @@ they are expensive to retrofit:
 - **A Cluster is browsable; the server views say so rather than read one node** (ADR-0022, which
   superseded the ADR-0021 refusal in M5 task 5). `connect_with` dials a `redis-cluster://` URL as a
   cluster client and redials a plain URL to any node as one. There is no refusal switch any more.
-  `State::on_cluster()` (core: `Connection::topology.is_some()`) makes Slowlog, Monitor and Dashboard
-  render an in-view notice and emit no `FetchSlowlog`, `FetchServerInfo` or `OpenFeed`, because a
+  `State::on_cluster()` (core: `Connection::topology.is_some()`) makes Slowlog and Monitor
+  render an in-view notice and emit no `FetchSlowlog` or `OpenFeed`, because a
   keyless command on a cluster client lands on an arbitrary node; help dims their rows with the
   reason. Pub/Sub stays open. Any new server-view fetch must check `on_cluster()` until M5 task 8.
+  The Dashboard (M5 task 7) reads every node instead: `redis/cluster_info.rs` polls `INFO` on one
+  connection per node (never the main client, whose single router a dead node stalls), takes the
+  node list and roles from `CLUSTER NODES`, and the core aggregates (`state/cluster_dash.rs`).
 - **On a Cluster the arming is pinned to the key's owner** (ADR-0022). `read.rs` builds the arming
   pipeline from a slot-pinned wrapper, and `crates/app/src/liveness.rs` records the owner `Server`
   (`OpenOwner::armed`, called wherever a read arms) and filters reconnects and topology changes by

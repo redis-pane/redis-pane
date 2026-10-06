@@ -32,7 +32,8 @@ makes browsing safe, and is lifted exactly there.**
    Cluster. Dashboard, Slowlog and Monitor say plainly, inside the view, that they are per-node on
    a Cluster and not yet available, instead of showing one node's figures. Pub/Sub stays open,
    since classic `PUBLISH` is cluster-wide. This is the change that accepts this ADR.
-3. **Tasks 7-9 open the server views.** The Dashboard (cluster-wide tiles plus a node table),
+3. **Tasks 7-9 open the server views** (task 7, the Dashboard, is done; it reads every node on a
+   connection of its own, see `docs/plans/m5-dashboard.md`). The Dashboard (cluster-wide tiles plus a node table),
    Slowlog and Monitor (merged, with a NODE column) and sharded Pub/Sub each replace their
    "per-node" notice with the real view. Task 6 proves every shipped mutation on a Cluster.
 

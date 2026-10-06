@@ -338,7 +338,7 @@ Palette, Console, dashboard, monitor, pub/sub, slowlog (M3) — Console cut, Pal
 withdrawn (ADR-0020), see §6 above. Cluster is milestone M5, after the beta — designed in
 [`m5-cluster.md`](plans/m5-cluster.md) and split into ten tasks in [`m5-planning.md`](plans/m5-planning.md). Rebuild cost at real `SCAN` order is milestone M6, also
 after the beta — [`m6-perf-rebuild.md`](plans/m6-perf-rebuild.md); a Cluster target
-is browsable from M5 task 5 and the server views show a notice until task 8
+is browsable from M5 task 5, the Dashboard shows the whole Cluster from task 7, and Slowlog and Monitor show a notice until task 8
 (§7, [ADR-0022](adr/0022-cluster-supported-in-stages.md), which superseded the M4 refusal in
 [ADR-0021](adr/0021-cluster-refused-until-supported.md)). Themes beyond the two M0 defaults, the ASCII glyph
 fallback, session restore, and the million-key performance work are M4 (§7). Packaging and

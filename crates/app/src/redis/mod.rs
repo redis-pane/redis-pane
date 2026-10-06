@@ -15,6 +15,7 @@
 //! cannot return `Live` without an arming having been reported. This module is
 //! responsible for the other half: actually doing it.
 
+pub mod cluster_info;
 pub mod feed;
 pub mod mutate;
 pub mod read;

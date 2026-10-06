@@ -5,6 +5,7 @@
 //! sorting permutes an index vector rather than moving data — see
 //! [`loaded::LoadedSet`].
 
+pub mod cluster_dash;
 pub mod copy;
 pub mod dashboard;
 pub mod editor;
@@ -21,6 +22,9 @@ pub mod ttl;
 pub mod value;
 pub mod view;
 
+pub use cluster_dash::{
+    ClusterDash, ClusterHealth, ClusterNode, ClusterTiles, NodeReading, NodeRole,
+};
 pub use copy::CopyWhat;
 pub use dashboard::{
     AlarmLevel, ClientsTile, DashboardState, EvictionTile, HitRatioTile, MemoryTile, RawInfo,

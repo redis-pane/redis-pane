@@ -119,6 +119,8 @@ pub enum Glyph {
     VerticalDashed,
     /// `┈` — the dashed rule of a detached Viewer.
     HorizontalDashed,
+    /// `›` — a breadcrumb separator (`cluster › 10.0.0.3:7001`).
+    Crumb,
     /// `█` — a filled bar cell.
     BarFull,
     /// `░` — an empty bar cell.
@@ -128,7 +130,7 @@ pub enum Glyph {
 impl Glyph {
     /// Every role. Order matters only to [`Glyphs::text`]: where two roles share
     /// a Unicode character, the earlier one is what the character means in prose.
-    pub const ALL: [Glyph; 44] = [
+    pub const ALL: [Glyph; 45] = [
         Glyph::Deleted,
         Glyph::CheckFail,
         Glyph::CheckOk,
@@ -171,6 +173,7 @@ impl Glyph {
         Glyph::TeeRight,
         Glyph::VerticalDashed,
         Glyph::HorizontalDashed,
+        Glyph::Crumb,
         Glyph::BarFull,
         Glyph::BarEmpty,
     ];
@@ -219,6 +222,7 @@ impl Glyph {
             Glyph::TeeRight => "├",
             Glyph::VerticalDashed => "┊",
             Glyph::HorizontalDashed => "┈",
+            Glyph::Crumb => "›",
             Glyph::BarFull => "█",
             Glyph::BarEmpty => "░",
         }
@@ -236,7 +240,7 @@ impl Glyph {
             Glyph::Fetching => "@",
             Glyph::Warn => "!",
             Glyph::Cursor | Glyph::ActiveHalf | Glyph::Vertical => "|",
-            Glyph::StripFocused | Glyph::Collapsed | Glyph::Right => ">",
+            Glyph::StripFocused | Glyph::Collapsed | Glyph::Right | Glyph::Crumb => ">",
             Glyph::Expanded | Glyph::OffBelow | Glyph::Down => "v",
             Glyph::OffAbove | Glyph::Up | Glyph::Ctrl => "^",
             Glyph::Ellipsis | Glyph::Infinity => "~",

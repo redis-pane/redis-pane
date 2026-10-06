@@ -82,6 +82,10 @@ pub enum HelpContext {
     /// are the same four actions (move, expand, refetch, copy) regardless
     /// of which tile focus happens to be on.
     Dashboard,
+    /// The Dashboard on a Cluster, before any node is opened (M5 task 7,
+    /// `docs/plans/m5-dashboard.md`): the node table, whose rows move and
+    /// open, not the tile grid's. A node view is [`HelpContext::Dashboard`].
+    DashboardCluster,
     /// The Dashboard's raw-`INFO` overlay, open over the grid (decision 6's
     /// `Enter`). A separate context, not [`HelpContext::Dashboard`] with a
     /// flag: the overlay's own keys (scroll, copy, `Esc` to close) are a
@@ -330,8 +334,10 @@ pub fn context(state: &State) -> HelpContext {
                 // The raw-`INFO` overlay outranks the grid underneath it —
                 // the same "nearest thing first" precedence `cancel()`
                 // (`update/mod.rs`) uses to decide what a bare `Esc` closes.
-                return if state.dashboard.expanded_tile.is_some() {
+                return if state.dashboard.active().expanded_tile.is_some() {
                     HelpContext::DashboardOverlay
+                } else if state.on_cluster() && !state.dashboard.drilled() {
+                    HelpContext::DashboardCluster
                 } else {
                     HelpContext::Dashboard
                 };
@@ -471,8 +477,9 @@ pub fn here(state: &State, ctx: HelpContext) -> Vec<HelpRow> {
             HelpRow::new(keys_for(state, Action::Cancel), "cancel"),
         ],
         HelpContext::PubSub { focus } => pubsub_rows(state, focus),
-        HelpContext::Dashboard => dim_on_cluster(state, dashboard_rows(state)),
-        HelpContext::DashboardOverlay => dim_on_cluster(state, dashboard_overlay_rows(state)),
+        HelpContext::Dashboard => dashboard_rows(state),
+        HelpContext::DashboardCluster => dashboard_cluster_rows(state),
+        HelpContext::DashboardOverlay => dashboard_overlay_rows(state),
     }
 }
 
@@ -623,6 +630,17 @@ fn dashboard_rows(state: &State) -> Vec<HelpRow> {
         HelpRow::new(keys_for(state, Action::EnterValueCursor), "expand tile"),
         HelpRow::new(refetch_keys(state), refetch_label(state, false)),
         HelpRow::new(keys_for(state, Action::Copy), "copy section"),
+    ]
+}
+
+/// The Cluster Dashboard's node table (M5 task 7, decision 4): the cursor,
+/// opening a node, and polling now. Scoped to the view, no new top-level key
+/// (DESIGN §4, ADR-0020).
+fn dashboard_cluster_rows(state: &State) -> Vec<HelpRow> {
+    vec![
+        HelpRow::new("↑↓ jk", "move node"),
+        HelpRow::new(keys_for(state, Action::EnterValueCursor), "open node"),
+        HelpRow::new(refetch_keys(state), refetch_label(state, false)),
     ]
 }
 
@@ -979,7 +997,7 @@ pub fn everywhere(state: &State) -> Vec<HelpRow> {
         // set, not a mode `key_press`'s own precedence needs to know about).
         Mode::Normal
             if state.screen == crate::state::View::Dashboard
-                && state.dashboard.expanded_tile.is_some() =>
+                && state.dashboard.active().expanded_tile.is_some() =>
         {
             vec![HelpRow::new(f1_help_keys(state), "help")]
         }
@@ -1461,8 +1479,34 @@ mod tests {
         ctxs.push(HelpContext::ChordPending);
         ctxs.push(HelpContext::Slowlog);
         ctxs.push(HelpContext::Dashboard);
+        ctxs.push(HelpContext::DashboardCluster);
         ctxs.push(HelpContext::DashboardOverlay);
         ctxs
+    }
+
+    #[test]
+    fn the_dashboard_on_a_cluster_is_not_dimmed_and_has_its_own_rows() {
+        use crate::state::{Topology, View};
+        let mut state = State {
+            screen: View::Dashboard,
+            ..State::default()
+        };
+        state.connection.topology = Some(Topology {
+            primaries: 3,
+            nodes: 6,
+        });
+        assert_eq!(context(&state), HelpContext::DashboardCluster);
+        let rows = here(&state, HelpContext::DashboardCluster);
+        let labels: Vec<_> = rows.iter().map(|r| &*r.label).collect();
+        assert_eq!(labels, ["move node", "open node", "refetch"]);
+        assert!(rows.iter().all(|r| r.refused.is_none()));
+        // Slowlog and Monitor stay dimmed until task 8.
+        state.screen = View::Slowlog;
+        assert!(
+            here(&state, HelpContext::Slowlog)
+                .iter()
+                .all(|r| r.refused.is_some())
+        );
     }
 
     #[test]
@@ -1471,8 +1515,8 @@ mod tests {
         // should fail loudly here rather than silently under-testing a new
         // variant — 4 (Keys) + 1 (Filter) + 1 (Value(None)) + 16 (8 types ×
         // cursor) + 9 (5 plain Editor + 2 zset × 2 AddForm) + 1 (Confirm) +
-        // 1 (ChordPending) + 1 (Slowlog) + 1 (Dashboard) + 1 (DashboardOverlay).
-        assert_eq!(every_context().len(), 36);
+        // 1 (ChordPending) + 1 (Slowlog) + 1 (Dashboard) + 1 (DashboardCluster) + 1 (DashboardOverlay).
+        assert_eq!(every_context().len(), 37);
     }
 
     #[test]

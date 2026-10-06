@@ -48,6 +48,7 @@ pub(super) fn open_monitor(mut state: State) -> (State, Vec<Command>) {
 pub(super) fn open_monitor_view(mut state: State) -> (State, Vec<Command>) {
     let mut commands = leave_monitor(&mut state);
     commands.extend(leave_pubsub(&mut state));
+    commands.extend(leave_dashboard(&mut state));
     state.screen = View::Monitor;
     state.monitor.reset();
     if state.on_cluster() {

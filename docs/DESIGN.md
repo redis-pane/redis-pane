@@ -177,6 +177,7 @@ recomputed each frame from which tile is focused, never a persisted scroll posit
 | `d` / `←→` | Unsubscribe the selected chip / pick a chip | Pub/Sub strip |
 | `←→↑↓` / `hjkl` | Move tile focus | Dashboard view |
 | `Enter` | Expand the focused tile's raw `INFO` section into a scrollable overlay | Dashboard view |
+| `↑↓` / `jk`, `Enter` | On a Cluster: move the node cursor, open that node's own tiles (`Esc` returns) | Dashboard view, Cluster overview |
 | `Ctrl-R` | Toggle read-only mode | global |
 
 Bindings are user-overridable in config; the hint bar and the help overlay (`?`) both render the
@@ -548,9 +549,56 @@ every tile can be expanded (`Enter`) into the raw `INFO` section behind it as a 
 overlay (`Esc` closes it, `Esc` again leaves the view — nearest thing first).
 
 `INFO`, like `SLOWLOG`, is per-server. On a Cluster (ADR-0022) a keyless `INFO` would answer from
-an arbitrary node and present its figures as the whole Cluster's, so until M5 task 8 the Dashboard
-shows an in-view notice ("INFO is per node on a Cluster") and issues no `INFO` at all. Navigation
-in and out works as usual, and help dims the view's keys with the reason.
+an arbitrary node, so the Dashboard reads every node instead (M5 task 7, below).
+
+**On a Cluster (M5 task 7, R6.3, R1.11, `docs/plans/m5-dashboard.md`).** The view is a drill-down
+inside the Dashboard, not a connection switch, so ADR-0005 holds: still one Connection, no node
+selector in the chrome, no new top-level key.
+
+```
+ DASHBOARD · updated 2s ago
+ cluster_state ok · 16384/16384 slots · 0 failing
+┌─  MEMORY ───────────────┐ ┌─  HIT RATIO ────────────┐ ┌─  OPS/SEC ─────────────┐
+│ 760 MB / 1.5 GB (49%)   │ │ 90.0% hit rate          │ │ 550 ops/sec            │
+│ [██████████░░░░] peak … │ │ 540,000 hits / 60,000 … │ │ ▂▃▅▇█                  │
+└─────────────────────────┘ └─────────────────────────┘ └────────────────────────┘
+  (CLIENTS, REPLICATION, EVICTIONS)
+  NODE             ROLE      SLOTS  MEMORY            OPS/SEC     LAG
+> 127.0.0.1:7100   primary    5461  [███░░░░░]  39%      120       —
+  127.0.0.1:7103   replica       —  [███░░░░░]  39%        3      0s
+  127.0.0.1:7104   replica     ✕ INFO failed: no answer within 4s
+```
+
+- **Tiles aggregate, in the core, as pure functions of the per-node readings.** Memory is summed
+  over primaries against the summed `maxmemory` (any answering primary without one makes the tile
+  read "no limit on N nodes"), and the tile is at least as alarming as its worst primary, since a
+  sum hides one full node among empty ones. Ops/sec is summed over primaries (a replica's figure
+  is its replication stream), clients and evictions over every node, replication is the worst lag
+  across the nodes (a down link is danger), and the hit ratio is computed from the summed hits and
+  misses, never by averaging ratios. A node that did not answer is left out of every figure and
+  counted in the health line (`1 of 6 nodes not answering`).
+- **The health line** is `CLUSTER INFO`: `cluster_state`, assigned slots over 16384 and the
+  failing count. It takes the alarm colour on `cluster_state` other than `ok`, any unassigned slot,
+  or any failing slot; a `CLUSTER INFO` that cannot be read says so in the same place.
+- **The node table** has a row per node, primaries first and then replicas, each sorted by
+  address so rows never reshuffle between polls. Roles and slot counts come from `CLUSTER NODES`
+  (the routing table lists primaries only). Memory % and lag use the tile thresholds. A node whose
+  `INFO` failed keeps its row and says so, naming the command (`INFO failed: …`); the same
+  failure raises one notification (`INFO on 127.0.0.1:7104: …`), once, not on every poll.
+- **Keys** are scoped to the view and reuse the grid's own: `j`/`k` (or the arrows) move the node
+  cursor, `Enter` opens the node under it, `r` polls now. Inside a node the view is the
+  single-node Dashboard unchanged (tile focus, `Enter` for the raw `INFO` section, `c` to copy it),
+  under a breadcrumb `DASHBOARD · cluster › 127.0.0.1:7101`. `Esc` closes an overlay first, then
+  returns to the overview, then leaves the view.
+- **Layout budget.** The tiles keep the grid breakpoints and never shrink; the table is what
+  gives. Columns drop as the width runs out, in this order: LAG, then OPS/SEC, then MEMORY (so 80
+  columns with long addresses shows address, role, slots and memory); below 70 columns the table is
+  address and role only. Height-limited, the lowest whole tile rows are left off so the table keeps
+  its header and three nodes, and the table scrolls to keep the cursor on screen.
+- **Polling.** One `INFO default` per node on a connection of its own, concurrently, plus one
+  `CLUSTER INFO`, every 2s, each wait bounded (4s) and naming its node, so one dead node is one
+  failed row rather than a stalled Dashboard. The connections live only while the view is open:
+  leaving it cancels the poll in flight and closes them. See ADR-0022.
 
 Data source is `INFO`, request/response on the main connection, not a feed — unlike Monitor and
 Pub/Sub there is no `CLIENT TRACKING` equivalent to arm. `g d` fetches once immediately (no blank
@@ -791,6 +839,7 @@ placeholder standing in for all of them.
 [ADR-0022](adr/0022-cluster-supported-in-stages.md)). On a Cluster the view shows an in-view
 notice ("Slowlog is per node on a Cluster — coming in M5 (task 8)") and fetches nothing, so one
 node's log is never shown as the Cluster's; `d` (reset) is inert there too. Monitor does the same.
+The Dashboard no longer does: it reads every node (§6.6).
 Pub/Sub stays open, because classic `PUBLISH` is cluster-wide.
 
 ## 7. Interaction details that carry the product

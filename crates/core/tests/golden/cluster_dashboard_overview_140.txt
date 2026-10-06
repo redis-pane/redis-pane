@@ -1,0 +1,30 @@
+─ redis-pane ─ ● staging · redis-cluster://127.0.0.1:7100 · cluster · 3 primaries · 6 nodes · from profile staging ──────────────── ● live ─
+
+ DASHBOARD · updated 8s ago
+ cluster_state ok · 16384/16384 slots · 0 failing
+┌─  MEMORY───────────────────────────────────┐ ┌─  HIT RATIO────────────────────────────────┐ ┌─  OPS/SEC──────────────────────────────────┐
+│760.0 MB / 1.5 GB (49%)                     │ │90.0% hit rate                              │ │550 ops/sec                                 │
+│[██████████░░░░░░░░░░] peak 880.0 MB        │ │540,000 hits / 60,000 misses                │ │██                                          │
+└────────────────────────────────────────────┘ └────────────────────────────────────────────┘ └────────────────────────────────────────────┘
+
+┌─  CLIENTS──────────────────────────────────┐ ┌─  REPLICATION──────────────────────────────┐ ┌─  EVICTIONS────────────────────────────────┐
+│72 connected                                │ │3 replicas                                  │ │evicted 0                                   │
+│0 blocked                                   │ │worst lag 2s                                │ │expired 768                                 │
+└────────────────────────────────────────────┘ └────────────────────────────────────────────┘ └────────────────────────────────────────────┘
+
+  NODE             ROLE          SLOTS   MEMORY                   OPS/SEC        LAG
+> 127.0.0.1:7100   primary        5461   [███░░░░░]  39%              120          —
+  127.0.0.1:7101   primary        5461   [██████░░]  80%              340          —
+  127.0.0.1:7102   primary        5462   [██░░░░░░]  29%               90          —
+  127.0.0.1:7103   replica           —   [███░░░░░]  39%                3         0s
+  127.0.0.1:7104   replica           —   [██████░░]  80%                3         2s
+  127.0.0.1:7105   replica           —   [██░░░░░░]  29%                3         1s
+
+
+
+
+
+
+
+
+ ↑↓ jk move node   ⏎ open node   r refetch   ⌃R read-only   g s slowlog   g m monitor   g p pub/sub   g d dashboard   g k keys   ? F1 help

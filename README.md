@@ -27,8 +27,8 @@ fallback for terminals without Unicode, and restores your pane split, filter, so
 when you relaunch against the same server.
 
 Known limits: a Redis Cluster can be browsed (point it at a `redis-cluster://` URL or any node),
-but the Dashboard, Slowlog and Monitor show a notice on a Cluster until they are made per node
-later in M5. At a million keys, scrolling, typing into the filter and drawing are fast, but toggling
+and so can the Dashboard (a health line, Cluster-wide tiles and a node table), but the Slowlog and
+Monitor show a notice on a Cluster until they are made per node later in M5. At a million keys, scrolling, typing into the filter and drawing are fast, but toggling
 the tree, changing the sort or rebuilding the whole filter takes roughly half a second when keys
 arrive in a real `SCAN` order. Rename, copy, and bulk operations across several keys are not built
 yet and are still coming next.
@@ -108,7 +108,9 @@ Beyond the keyspace, four views show what the server itself is doing:
   time or duration
 - `g d` opens the **Dashboard**: memory against `maxmemory`, hit ratio, an ops/sec sparkline,
   clients, replication lag and eviction counters, polling `INFO` every couple of seconds. Anything
-  alarming is colored, and `Enter` on a tile expands the raw `INFO` section behind it
+  alarming is colored, and `Enter` on a tile expands the raw `INFO` section behind it. On a
+  Cluster it adds a `cluster_state` health line, tiles summed across the nodes and a node table;
+  `j`/`k` move along it and `Enter` opens one node's own tiles (`Esc` goes back)
 
 ![The Monitor view: a live tail of commands streaming in under a warning banner, paused while the skipped count climbs, then filtered down to HSET commands](monitor-demo.gif)
 
