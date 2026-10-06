@@ -1,0 +1,24 @@
+─ redis-pane ─ ● staging · from profile staging ─── ● live ─
+
+ SLOWLOG · 4 entries · 6 nodes · sort: recent
+ DURATION NODE            COMMAND
+ 185.0ms  10.0.0.1:7000   HGETALL user:8812:session
+ 2.4ms    10.0.0.2:7001   ZRANGE leaderboard 0 -1
+ 12.3ms   10.0.0.1:7000   SMEMBERS tags
+ 1.25s    10.0.0.3:7002   KEYS user:*
+
+
+
+
+
+
+
+
+
+
+
+────────────────────────────────────────────────────────────
+ cmd    HGETALL user:8812:session
+ node 10.0.0.1:7000  ·  at 2023-11-14 22:14:29 UTC  ·  cli…
+
+ s sort   r refetch   c copy command   ? F1 help

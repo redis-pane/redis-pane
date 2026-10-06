@@ -529,7 +529,7 @@ impl Shell {
             }
             Command::FetchSlowlog { count } => self.fetch_slowlog(count),
             Command::FetchServerInfo { token } => self.fetch_server_info(token),
-            Command::CancelServerInfo => self.dash.cancel(),
+            Command::CloseNodeConnections => self.dash.cancel(),
             Command::ReadKey {
                 key,
                 index,
@@ -631,9 +631,20 @@ impl Shell {
     /// plain request/response, unlike [`Shell::read_key`].
     fn fetch_slowlog(&self, count: i64) {
         let (client, tx, clock) = (self.client.clone(), self.tx.clone(), self.clock.clone());
+        // On a Cluster every node is asked on a connection of its own and the
+        // answers are merged (`redis::cluster_info`, M5 task 8); the main
+        // client is never sent the command.
+        if client.is_clustered() {
+            self.dash.fetch_slowlog(client, tx, clock, count);
+            return;
+        }
         tokio::spawn(async move {
             let msg = match crate::redis::read::fetch_slowlog(&client, count).await {
-                Ok(entries) => Msg::SlowlogLoaded { entries },
+                Ok(entries) => Msg::SlowlogLoaded {
+                    entries,
+                    failed: Vec::new(),
+                    at_ms: clock.now_epoch_ms(),
+                },
                 Err(e) => Msg::SlowlogFailed {
                     detail: e.details().to_string(),
                     at_ms: clock.now_epoch_ms(),
@@ -795,6 +806,14 @@ impl Shell {
     /// back, with the mutation it answers.
     fn mutate(&self, mutation: Mutation, index: Option<usize>) {
         let (client, tx, clock) = (self.client.clone(), self.tx.clone(), self.clock.clone());
+        // The one keyless write is per node: on a Cluster it runs on every
+        // node, each on its own connection (`redis::cluster_info`, M5 task 8).
+        // Still only reached from here, after the core's confirm and
+        // Read-only checks.
+        if matches!(mutation, Mutation::ResetSlowlog) && client.is_clustered() {
+            self.dash.reset_slowlog(client, tx, clock, mutation, index);
+            return;
+        }
         tokio::spawn(async move {
             let crate::redis::mutate::Settled { result, link_lost } =
                 crate::redis::mutate::execute_settled(&client, &mutation).await;

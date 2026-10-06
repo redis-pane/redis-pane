@@ -1,0 +1,24 @@
+─ redis-pane ─ ● staging · redis-cluster://cache-01:7000 · from profile staging ─────────── ● live ─
+
+ ⚠ MONITOR on 2 of 3 primaries — costs each of them while open
+ ● live                                                                                     3 lines
+ ✕ 10.0.0.2:7001 stopped: the feed connection closed
+ TIME         NODE                  COMMAND                                  CLIENT
+ 16:21:23.107 10.0.0.1:7000         "GET" "user:8812:session"                10.0.0.4:51820
+ 16:21:23.409 10.0.0.2:7001         "HSET" "order:77" "state" "paid"         10.0.0.4:51822
+ 16:21:24.002 10.0.0.3:7002         "EXPIRE" "cart:1" "600"                  10.0.0.9:40112
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ p pause   / filter   c copy command   ↑↓ jk move   PgUp/PgDn page   ? F1 help

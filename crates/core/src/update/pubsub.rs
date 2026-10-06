@@ -28,7 +28,8 @@ pub(super) const PUBSUB_PAGE_ROWS: usize = 10;
 /// thing happens" rule `open_monitor_view` follows, except the list itself
 /// (decision 3) is not reset the way Monitor's tail is.
 pub(super) fn open_pubsub(mut state: State) -> (State, Vec<Command>) {
-    let mut commands = leave_monitor(&mut state);
+    let mut commands = leave_slowlog(&mut state);
+    commands.extend(leave_monitor(&mut state));
     commands.extend(leave_pubsub(&mut state));
     commands.extend(leave_dashboard(&mut state));
     state.screen = View::PubSub;

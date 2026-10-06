@@ -1,16 +1,16 @@
 ─ redis-pane ─ ● staging · redis-cluster://cache-01:7000 · from profile staging ─────────── ● live ─
 
- SLOWLOG · 0 entries · 6 nodes · sort: recent
- no slow commands — nothing has crossed the server's threshold since the last reset
+ ⚠ MONITOR on 3 primaries — costs each of them while open
+ connecting… · following off · End to resume                                                0 lines
+ connecting…
 
-┌─ help · slowlog ─────────────────────────────────────────────────────────────────────────────────┐
-│ s         sort                                                                                   │
-│ r         refetch                                                                                │
+┌─ help · monitor ─────────────────────────────────────────────────────────────────────────────────┐
+│ /         filter                                                                                 │
+│ r         reopen                                                                                 │
 │ c         copy command                                                                           │
-│ d         reset slowlog (every node)                                                             │
 │ ↑↓ jk     move                                                                                   │
 │ PgUp/PgDn page                                                                                   │
-│ Home/End  top/bottom                                                                             │
+│ Home/End  top/bottom (End resumes follow)                                                        │
 │                                                                                                  │
 │ ⌃R read-only   g s slowlog   g m monitor   g p pub/sub   g d dashboard   g k keys   Esc back   q q
 │                                                                                                  │
@@ -21,4 +21,4 @@
 
 
 
- s sort   r refetch   c copy command   d reset slowlog (every node)   ↑↓ jk move   ? F1 help
+ / filter   r reopen   c copy command   ↑↓ jk move   PgUp/PgDn page   ? F1 help

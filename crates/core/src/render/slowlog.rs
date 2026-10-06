@@ -36,6 +36,8 @@ const WARN_DURATION_US: i64 = 100_000;
 struct Columns {
     age: Option<(u16, u16)>,
     duration: (u16, u16),
+    /// Which node the entry came from — a Cluster's merged list only.
+    node: Option<(u16, u16)>,
     command: (u16, u16),
     client: Option<(u16, u16)>,
 }
@@ -43,18 +45,54 @@ struct Columns {
 const AGE_W: u16 = 10;
 const DURATION_W: u16 = 9;
 const CLIENT_W: u16 = 22;
+/// Wide enough for `255.255.255.255:65535`; below 70 columns it narrows to
+/// [`NODE_NARROW_W`] and truncates.
+const NODE_W: u16 = 22;
+const NODE_NARROW_W: u16 = 16;
 
 /// CLIENT sheds first (below 80 columns), AGE second (below 70) —
 /// DURATION and COMMAND are the reason this screen exists, so they are
 /// never shed (the same "TTL is the last to go" idea `keys::Columns`
 /// follows, applied to what this screen's own reader is hunting for).
-fn columns_for(width: u16) -> Columns {
+///
+/// On a Cluster NODE is the one fact the merged list adds, so it is never
+/// shed either: CLIENT goes first (below 100), then AGE (below 70), and below
+/// 70 the NODE column itself narrows rather than yielding to COMMAND.
+fn columns_for(width: u16, cluster: bool) -> Columns {
     let inner = width.saturating_sub(2);
+    if cluster {
+        let (node_w, with_age, with_client) = if width >= 100 {
+            (NODE_W, true, true)
+        } else if width >= 70 {
+            (NODE_W, true, false)
+        } else {
+            (NODE_NARROW_W, false, false)
+        };
+        let age_w = if with_age { AGE_W } else { 0 };
+        let client_w = if with_client { CLIENT_W } else { 0 };
+        let duration_x = 1 + age_w;
+        let node_x = duration_x + DURATION_W;
+        let command_x = node_x + node_w;
+        let command_w = inner.saturating_sub(age_w + DURATION_W + node_w + client_w);
+        let age = with_age.then_some((1, AGE_W));
+        let duration = (duration_x, DURATION_W);
+        let node = (node_x, node_w);
+        let command = (command_x, command_w);
+        let client = with_client.then_some((command_x + command_w, CLIENT_W));
+        return Columns {
+            age,
+            duration,
+            node: Some(node),
+            command,
+            client,
+        };
+    }
     if width >= 80 {
         let command_w = inner.saturating_sub(AGE_W + DURATION_W + CLIENT_W);
         Columns {
             age: Some((1, AGE_W)),
             duration: (1 + AGE_W, DURATION_W),
+            node: None,
             command: (1 + AGE_W + DURATION_W, command_w),
             client: Some((1 + AGE_W + DURATION_W + command_w, CLIENT_W)),
         }
@@ -63,6 +101,7 @@ fn columns_for(width: u16) -> Columns {
         Columns {
             age: Some((1, AGE_W)),
             duration: (1 + AGE_W, DURATION_W),
+            node: None,
             command: (1 + AGE_W + DURATION_W, command_w),
             client: None,
         }
@@ -71,6 +110,7 @@ fn columns_for(width: u16) -> Columns {
         Columns {
             age: None,
             duration: (1, DURATION_W),
+            node: None,
             command: (1 + DURATION_W, command_w),
             client: None,
         }
@@ -83,27 +123,18 @@ pub fn render(state: &State, theme: &Theme, clock: &dyn Clock, area: Rect, buf: 
     if area.width < 8 || area.height < 3 {
         return;
     }
-    if state.on_cluster() {
-        super::cluster_notice(
-            theme,
-            area,
-            "SLOWLOG",
-            "⚠ Slowlog is per node on a Cluster — coming in M5 (task 8)",
-            buf,
-        );
-        return;
-    }
     let now_ms = clock.now_epoch_ms();
     let mut y = area.y;
     summary_line(state, theme, area, y, buf);
     y += 1;
+    y += failure_lines(state, theme, area, y, buf);
 
     if state.slowlog.is_empty() {
         empty_state(state, theme, area, y, buf);
         return;
     }
 
-    let cols = columns_for(area.width);
+    let cols = columns_for(area.width, state.on_cluster());
     column_header(theme, area, cols, y, buf);
     y += 1;
 
@@ -157,8 +188,12 @@ fn summary_line(state: &State, theme: &Theme, area: Rect, y: u16, buf: &mut Buff
     let count = state.slowlog.len();
     let noun = if count == 1 { "entry" } else { "entries" };
     let sep = theme.glyphs.get(Glyph::Separator);
+    let nodes = match state.connection.topology {
+        Some(t) => format!(" {sep} {} nodes", t.nodes),
+        None => String::new(),
+    };
     let text = format!(
-        "SLOWLOG {sep} {count} {noun} {sep} sort: {}",
+        "SLOWLOG {sep} {count} {noun}{nodes} {sep} sort: {}",
         state.slowlog.sort.label()
     );
     put(buf, area.x + 1, y, &text, theme.style(Token::Text));
@@ -172,6 +207,42 @@ fn summary_line(state: &State, theme: &Theme, area: Rect, y: u16, buf: &mut Buff
             theme.style(Token::Muted),
         );
     }
+}
+
+/// The nodes that did not answer, one line each under the summary (at most
+/// two, then `+N more`), in the failure's own words: node, command, reason
+/// (R7.4). The other nodes' entries still render below. Returns the rows used.
+fn failure_lines(state: &State, theme: &Theme, area: Rect, y: u16, buf: &mut Buffer) -> u16 {
+    const SHOWN: usize = 2;
+    let failed = &state.slowlog.failed;
+    let room = area.y + area.height;
+    let mut used = 0u16;
+    for (i, f) in failed.iter().enumerate() {
+        if y + used >= room.saturating_sub(2) {
+            break;
+        }
+        let text = if i == SHOWN - 1 && failed.len() > SHOWN {
+            format!("+{} more nodes failed", failed.len() - i)
+        } else if i >= SHOWN {
+            break;
+        } else {
+            format!(
+                "{} SLOWLOG GET on {} failed: {}",
+                theme.glyphs.get(Glyph::Deleted),
+                f.node,
+                f.detail
+            )
+        };
+        put(
+            buf,
+            area.x + 1,
+            y + used,
+            &truncate(&text, area.width.saturating_sub(2) as usize, theme.glyphs),
+            theme.style(Token::Danger),
+        );
+        used += 1;
+    }
+    used
 }
 
 /// Nothing to show: still fetching, a failed fetch (R7.4's in-view half —
@@ -217,6 +288,9 @@ fn column_header(theme: &Theme, area: Rect, cols: Columns, y: u16, buf: &mut Buf
         put(buf, area.x + x, y, "AGE", style);
     }
     put(buf, area.x + cols.duration.0, y, "DURATION", style);
+    if let Some((x, _)) = cols.node {
+        put(buf, area.x + x, y, "NODE", style);
+    }
     put(buf, area.x + cols.command.0, y, "COMMAND", style);
     if let Some((x, _)) = cols.client {
         put(buf, area.x + x, y, "CLIENT", style);
@@ -288,6 +362,15 @@ fn entry_row(ctx: RowCtx<'_>, y: u16, entry: &SlowlogEntry, selected: bool, buf:
         &theme.glyphs.text(&format_duration_us(entry.duration_us)),
         duration_style,
     );
+    if let Some((x, w)) = cols.node {
+        put(
+            buf,
+            area.x + x,
+            y,
+            &truncate(&entry.node, w.saturating_sub(1) as usize, theme.glyphs),
+            muted_style,
+        );
+    }
     let command = cell_text(&entry.command);
     put(
         buf,
@@ -333,8 +416,17 @@ fn detail_strip(theme: &Theme, area: Rect, y: u16, entry: &SlowlogEntry, buf: &m
     // so the one place a reader needs the precise instant is here, where
     // there is room to spell it out in full (Decision 5,
     // `docs/plans/m3-slowlog.md`).
+    let node = if entry.node.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "node {}  {}  ",
+            entry.node,
+            theme.glyphs.get(Glyph::Separator)
+        )
+    };
     let when_and_client = format!(
-        "at {}  {}  client {}",
+        "{node}at {}  {}  client {}",
         format_timestamp_utc(entry.timestamp),
         theme.glyphs.get(Glyph::Separator),
         client_label(entry)
@@ -486,11 +578,37 @@ mod tests {
 
     #[test]
     fn columns_shed_client_first_then_age() {
-        let full = columns_for(100);
+        let full = columns_for(100, false);
         assert!(full.client.is_some() && full.age.is_some());
-        let no_client = columns_for(75);
+        let no_client = columns_for(75, false);
         assert!(no_client.client.is_none() && no_client.age.is_some());
-        let narrow = columns_for(50);
+        let narrow = columns_for(50, false);
         assert!(narrow.client.is_none() && narrow.age.is_none());
+        assert!(narrow.node.is_none(), "no NODE column off a Cluster");
+    }
+
+    #[test]
+    fn on_a_cluster_node_and_command_are_never_shed() {
+        for w in [140u16, 100, 99, 80, 70, 69, 60] {
+            let c = columns_for(w, true);
+            assert!(c.node.is_some(), "{w}");
+            assert!(c.command.1 >= 20, "{w}: command width {}", c.command.1);
+            // Columns never overlap and never run past the pane.
+            let mut spans: Vec<(u16, u16)> =
+                [c.age, Some(c.duration), c.node, Some(c.command), c.client]
+                    .into_iter()
+                    .flatten()
+                    .collect();
+            spans.sort();
+            for pair in spans.windows(2) {
+                assert!(pair[0].0 + pair[0].1 <= pair[1].0, "{w}: {spans:?}");
+            }
+            let last = spans.last().unwrap();
+            assert!(last.0 + last.1 < w, "{w}: {spans:?}");
+        }
+        assert!(columns_for(140, true).client.is_some());
+        assert!(columns_for(80, true).client.is_none());
+        assert!(columns_for(80, true).age.is_some());
+        assert!(columns_for(60, true).age.is_none());
     }
 }

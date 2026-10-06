@@ -32,8 +32,9 @@ makes browsing safe, and is lifted exactly there.**
    Cluster. Dashboard, Slowlog and Monitor say plainly, inside the view, that they are per-node on
    a Cluster and not yet available, instead of showing one node's figures. Pub/Sub stays open,
    since classic `PUBLISH` is cluster-wide. This is the change that accepts this ADR.
-3. **Tasks 7-9 open the server views** (task 7, the Dashboard, is done; it reads every node on a
-   connection of its own, see `docs/plans/m5-dashboard.md`). The Dashboard (cluster-wide tiles plus a node table),
+3. **Tasks 7-9 open the server views** (tasks 7 and 8, the Dashboard, Slowlog and Monitor, are
+   done; each reads every node on a connection of its own, see `docs/plans/m5-dashboard.md` and
+   `docs/plans/m5-slowlog-monitor.md`). The Dashboard (cluster-wide tiles plus a node table),
    Slowlog and Monitor (merged, with a NODE column) and sharded Pub/Sub each replace their
    "per-node" notice with the real view. Task 6 proves every shipped mutation on a Cluster.
 
@@ -164,6 +165,15 @@ host on Docker Desktop for macOS. The harness
 - The Docker integration suite gains a cluster that takes several seconds to form. Tests that need
   one start their own, as the suite already does for every container.
 - Task 4's spike proved contiguous pinned pipelines, so the arming section stands as decided.
+- **Server views (tasks 7 and 8).** The three views that read one node's own figures ask every
+  node over `crates/app/src/redis/cluster_info.rs`: one connection per node built from the main
+  client's config, never the main client (whose one router a dead node stalls), each wait bounded
+  and naming its node, and the pool closed on leaving the view and on a reconnect. Slowlog asks
+  every node (primaries and replicas) and merges with a NODE column; its reset runs on every node
+  through the mutation chokepoint. Monitor opens one `MONITOR` feed per primary: `fred::monitor::run`
+  takes `ServerConfig::Centralized` only, so each feed is the `build_config` result with its server
+  replaced by one primary (same credentials and TLS). One feed failing stops that node's feed, never
+  the view. The in-view "per node on a Cluster" notice and its dimmed help rows are gone.
 
 ## Amends
 

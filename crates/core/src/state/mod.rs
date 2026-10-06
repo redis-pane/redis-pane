@@ -34,6 +34,7 @@ pub use editor::{EditBuffer, EditTarget, FieldPart, is_valid_zset_score};
 pub use loaded::{KeyKind, LoadedSet};
 pub use monitor::{
     FeedStatus, MONITOR_CAP, MONITOR_LINE_MAX, MonitorColumns, MonitorLine, MonitorState,
+    StoppedNode,
 };
 pub use open::{Attachment, EditPhase, OpenKey, PendingRead, ReadOutcome};
 pub use pubsub::{
@@ -42,7 +43,7 @@ pub use pubsub::{
 };
 pub use scan::{InterruptReason, ScanState};
 pub use session::{SessionFile, SessionFileError, SessionState};
-pub use slowlog::{SlowlogEntry, SlowlogSort, SlowlogState};
+pub use slowlog::{NodeFailure, SlowlogEntry, SlowlogSort, SlowlogState};
 pub use tail::LiveTail;
 pub use tree::Tree;
 pub use ttl::{
@@ -1027,10 +1028,11 @@ impl State {
     /// Whether the Connection is a Cluster (M5 task 5, ADR-0022).
     ///
     /// The server views that read one node's own figures (Slowlog, Monitor,
-    /// Dashboard) ask this before issuing anything: on a Cluster a keyless
-    /// command lands on an arbitrary node, which would present one node's
-    /// numbers as the whole Cluster's. They render a notice instead until
-    /// M5 task 8 makes them per node.
+    /// Dashboard) ask this to word themselves for many nodes: a keyless command
+    /// sent through the main client lands on an arbitrary node, which would
+    /// present one node's numbers as the whole Cluster's, so on a Cluster the
+    /// shell reads each node on a connection of its own (M5 tasks 7 and 8) and
+    /// the view says which node each row came from.
     pub fn on_cluster(&self) -> bool {
         self.connection.topology.is_some()
     }

@@ -21,6 +21,10 @@
 /// pulled back out from the rest.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SlowlogEntry {
+    /// The node this entry came from (`host:port`) on a Cluster, empty
+    /// otherwise. Entry ids are unique only per node, so a row's identity is
+    /// `(node, id)` (M5 task 8, ADR-0022).
+    pub node: String,
     pub id: i64,
     /// Unix seconds, as the server reports it.
     pub timestamp: i64,
@@ -30,11 +34,28 @@ pub struct SlowlogEntry {
     pub client_name: Vec<u8>,
 }
 
+impl SlowlogEntry {
+    /// What names this row across a refetch: ids restart per node.
+    pub fn identity(&self) -> (&str, i64) {
+        (&self.node, self.id)
+    }
+}
+
+/// One node whose `SLOWLOG GET` failed (M5 task 8): the view still shows every
+/// other node's entries and names this one, with the server's own words.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NodeFailure {
+    pub node: String,
+    pub detail: String,
+}
+
 /// Which column orders the list (the same idiom `state::view::SortBy` uses
 /// for the keys pane, one type over).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SlowlogSort {
-    /// As `SLOWLOG GET` returns it: most recent first.
+    /// Most recent first: by timestamp, and entries from one second keep the
+    /// order they arrived in (`SLOWLOG GET`'s own newest-first order, node by
+    /// node on a Cluster).
     #[default]
     Recent,
     /// Slowest first — the column this screen exists to let someone sort by.
@@ -74,6 +95,8 @@ pub struct SlowlogState {
     /// in-view empty state's own words, alongside the R7.4 notification
     /// `State::error` separately carries.
     pub error: Option<String>,
+    /// Nodes that did not answer the last fetch (Cluster only, M5 task 8).
+    pub failed: Vec<NodeFailure>,
 }
 
 impl SlowlogState {
@@ -90,32 +113,41 @@ impl SlowlogState {
     }
 
     /// Replace the whole set after a fetch, and rebuild the sort order over
-    /// it. The selection clamps to the new length rather than trying to
-    /// follow one particular entry across a fetch — this set is small and
-    /// short-lived enough that it is not the keys pane's re-resolve-by-name
-    /// problem (there is no stable identity to resolve by in the first
-    /// place: `SLOWLOG RESET` — phase B — and the ring buffer's own eviction
-    /// both retire an id for good).
+    /// it. The selection follows the entry it was on, by `(node, id)`, when
+    /// that entry is still in the set; otherwise it clamps to the new length
+    /// (`SLOWLOG RESET` and the ring buffer's own eviction both retire an id
+    /// for good).
     pub fn set_entries(&mut self, entries: Vec<SlowlogEntry>) {
+        let followed = self.selected_entry().map(|e| (e.node.clone(), e.id));
         self.entries = entries;
         self.rebuild_order();
         self.selected = self.selected.min(self.order.len().saturating_sub(1));
+        if let Some((node, id)) = followed
+            && let Some(pos) = self
+                .order
+                .iter()
+                .position(|&i| self.entries[i as usize].identity() == (node.as_str(), id))
+        {
+            self.selected = pos;
+        }
     }
 
     fn rebuild_order(&mut self) {
         let mut order: Vec<u32> = (0..self.entries.len() as u32).collect();
+        let entries = &self.entries;
         match self.sort {
-            // Already in that order — `SLOWLOG GET`'s own reply is
-            // newest-first.
-            SlowlogSort::Recent => {}
-            SlowlogSort::Duration => {
-                let entries = &self.entries;
-                order.sort_by(|a, b| {
-                    entries[*b as usize]
-                        .duration_us
-                        .cmp(&entries[*a as usize].duration_us)
-                });
-            }
+            // A stable sort: on one node this is `SLOWLOG GET`'s own order
+            // (newest first), and across nodes it interleaves them by time.
+            SlowlogSort::Recent => order.sort_by(|a, b| {
+                entries[*b as usize]
+                    .timestamp
+                    .cmp(&entries[*a as usize].timestamp)
+            }),
+            SlowlogSort::Duration => order.sort_by(|a, b| {
+                entries[*b as usize]
+                    .duration_us
+                    .cmp(&entries[*a as usize].duration_us)
+            }),
         }
         self.order = order;
     }
@@ -160,6 +192,7 @@ mod tests {
 
     fn entry(id: i64, duration_us: i64) -> SlowlogEntry {
         SlowlogEntry {
+            node: String::new(),
             id,
             timestamp: 1_700_000_000 + id,
             duration_us,

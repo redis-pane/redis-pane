@@ -9,7 +9,7 @@
 //! own invariant).
 
 use super::*;
-use crate::state::{SlowlogEntry, View};
+use crate::state::{NodeFailure, SlowlogEntry, View};
 
 /// How many entries `SLOWLOG GET` is asked for. `slowlog-max-len` defaults to
 /// 128; comfortably above that so a fetch is normally the server's whole
@@ -35,13 +35,8 @@ pub(super) fn open_slowlog(mut state: State) -> (State, Vec<Command>) {
     commands.extend(leave_pubsub(&mut state));
     commands.extend(leave_dashboard(&mut state));
     state.screen = View::Slowlog;
-    // On a Cluster `SLOWLOG GET` would answer from an arbitrary node and show
-    // it as the whole Cluster's (ADR-0022); the view renders a notice instead
-    // and nothing is fetched until M5 task 8.
-    if state.on_cluster() {
-        state.slowlog.loading = false;
-        return (state, commands);
-    }
+    // On a Cluster the shell asks every node on a connection of its own and
+    // merges the answers (M5 task 8, ADR-0022); the command is the same.
     state.slowlog.loading = true;
     commands.push(Command::FetchSlowlog {
         count: SLOWLOG_FETCH_COUNT,
@@ -53,21 +48,49 @@ pub(super) fn open_slowlog(mut state: State) -> (State, Vec<Command>) {
 /// depends on which view was showing, except a Monitor or Pub/Sub feed left
 /// open (closed here too).
 pub(super) fn open_keys_view(mut state: State) -> (State, Vec<Command>) {
-    let mut commands = leave_monitor(&mut state);
+    let mut commands = leave_slowlog(&mut state);
+    commands.extend(leave_monitor(&mut state));
     commands.extend(leave_pubsub(&mut state));
     commands.extend(leave_dashboard(&mut state));
     state.screen = View::Keys;
     (state, commands)
 }
 
-/// `Msg::SlowlogLoaded`.
+/// Leaving the Slowlog view on a Cluster: the shell aborts a fetch in flight
+/// and closes the per-node connections it opened. A no-op off a Cluster, and
+/// when the view is not what is showing.
+pub(super) fn leave_slowlog(state: &mut State) -> Vec<Command> {
+    if state.screen != View::Slowlog || !state.on_cluster() {
+        return Vec::new();
+    }
+    state.slowlog.loading = false;
+    vec![Command::CloseNodeConnections]
+}
+
+/// `Msg::SlowlogLoaded`. On a Cluster some nodes may have failed while the
+/// rest answered: each failure is named in the view, and one R7.4
+/// notification carries the failing command (the first node, and how many
+/// more).
 pub(super) fn slowlog_loaded(
     mut state: State,
     entries: Vec<SlowlogEntry>,
+    failed: Vec<NodeFailure>,
+    at_ms: u64,
 ) -> (State, Vec<Command>) {
     state.slowlog.loading = false;
     state.slowlog.error = None;
     state.slowlog.set_entries(entries);
+    if let Some(first) = failed.first() {
+        let more = match failed.len() - 1 {
+            0 => String::new(),
+            n => format!(" (and {n} more)"),
+        };
+        state.error = Some((
+            format!("SLOWLOG GET on {}: {}{more}", first.node, first.detail),
+            at_ms,
+        ));
+    }
+    state.slowlog.failed = failed;
     (state, Vec::new())
 }
 
@@ -91,7 +114,11 @@ pub(super) fn slowlog_failed(
 /// (D8, `docs/plans/m3-slowlog.md`). Reuses `open_slowlog` for the refetch
 /// half rather than a second `Command::FetchSlowlog` site.
 pub(super) fn reset_slowlog_landed(mut state: State, at_ms: u64) -> (State, Vec<Command>) {
-    state.notice = Some(("slowlog reset".to_string(), at_ms));
+    let text = match state.connection.topology {
+        Some(t) => format!("slowlog reset on {} nodes", t.nodes),
+        None => "slowlog reset".to_string(),
+    };
+    state.notice = Some((text, at_ms));
     open_slowlog(state)
 }
 
@@ -100,12 +127,6 @@ pub(super) fn reset_slowlog_landed(mut state: State, at_ms: u64) -> (State, Vec<
 /// actions this view gives a meaning to; everything else is a no-op while
 /// it is showing.
 pub(super) fn slowlog_dispatch(mut state: State, action: Action) -> (State, Vec<Command>) {
-    // Nothing here has a meaning on a Cluster (`open_slowlog`): not `r`, and
-    // above all not `d`, which would stage `SLOWLOG RESET` against whichever
-    // node answered.
-    if state.on_cluster() {
-        return (state, Vec::new());
-    }
     match action {
         Action::MoveDown => {
             state.slowlog.move_selection(1);
@@ -179,6 +200,7 @@ mod tests {
 
     fn entry(id: i64, duration_us: i64) -> SlowlogEntry {
         SlowlogEntry {
+            node: String::new(),
             id,
             timestamp: 1_700_000_000,
             duration_us,
@@ -294,6 +316,8 @@ mod tests {
             state,
             Msg::SlowlogLoaded {
                 entries: vec![entry(1, 100), entry(2, 500)],
+                failed: Vec::new(),
+                at_ms: 1_000,
             },
         );
         assert!(!state.slowlog.loading);

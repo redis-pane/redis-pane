@@ -25,12 +25,6 @@ pub(super) const MONITOR_PAGE_ROWS: usize = 10;
 /// Monitor view itself — pressing `g m` again always restarts fresh
 /// (decision 2), same as every other entry.
 pub(super) fn open_monitor(mut state: State) -> (State, Vec<Command>) {
-    // On a Cluster there is no feed to dial, so there is no cost to confirm
-    // either: the view opens straight onto its notice (ADR-0022; MONITOR is
-    // per node until M5 task 8).
-    if state.on_cluster() {
-        return open_monitor_view(state);
-    }
     match state.connection.environment {
         crate::state::Environment::Prod | crate::state::Environment::Unknown => {
             state.pending_feed = Some(FeedKindMsg::Monitor);
@@ -46,15 +40,12 @@ pub(super) fn open_monitor(mut state: State) -> (State, Vec<Command>) {
 /// — every `g m` starts fresh, even a `g m` pressed again from inside the
 /// view), reset the tail, mint a token, and ask the shell to dial.
 pub(super) fn open_monitor_view(mut state: State) -> (State, Vec<Command>) {
-    let mut commands = leave_monitor(&mut state);
+    let mut commands = leave_slowlog(&mut state);
+    commands.extend(leave_monitor(&mut state));
     commands.extend(leave_pubsub(&mut state));
     commands.extend(leave_dashboard(&mut state));
     state.screen = View::Monitor;
     state.monitor.reset();
-    if state.on_cluster() {
-        // The shell's own `monitor_config` refusal stays as a second guard.
-        return (state, commands);
-    }
     state.monitor.feed_token = issue_feed_token(&mut state);
     state.monitor.status = FeedStatus::Connecting;
     commands.push(Command::OpenFeed {
@@ -98,6 +89,7 @@ pub(super) fn reopen_monitor_feed(mut state: State) -> (State, Vec<Command>) {
     }
     state.monitor.feed_token = issue_feed_token(&mut state);
     state.monitor.status = FeedStatus::Connecting;
+    state.monitor.stopped.clear();
     let token = state.monitor.feed_token;
     (
         state,
@@ -144,11 +136,6 @@ pub(super) fn feed_confirm_key(
 /// `dispatch_action`'s own guard routes here for exactly the actions this
 /// view gives a meaning to; everything else is a no-op while it is showing.
 pub(super) fn monitor_dispatch(mut state: State, action: Action) -> (State, Vec<Command>) {
-    // Nothing to move through, pause, filter or reopen on a Cluster
-    // (`open_monitor_view`).
-    if state.on_cluster() {
-        return (state, Vec::new());
-    }
     match action {
         Action::MoveDown => {
             state.monitor.move_selection(1);
@@ -260,10 +247,37 @@ pub(super) fn monitor_line(
     token: crate::command::FeedToken,
     at_ms: u64,
     raw: String,
+    node: Option<String>,
 ) -> (State, Vec<Command>) {
     if token == state.monitor.feed_token && state.screen == View::Monitor {
-        state.monitor.push_monitor_line(at_ms, raw);
+        state.monitor.push_monitor_line_from(at_ms, raw, node);
     }
+    (state, Vec::new())
+}
+
+/// `Msg::MonitorNodeStopped`: one primary's feed ended (it could not be
+/// dialed, or its connection closed) while the others keep streaming. The view
+/// names the node and why, and the R7.4 notification carries the failing
+/// command. Guarded like [`monitor_line`]: a stopped feed of a view the reader
+/// has left, or of an older `g m`, says nothing.
+pub(super) fn monitor_node_stopped(
+    mut state: State,
+    token: crate::command::FeedToken,
+    node: String,
+    reason: String,
+    at_ms: u64,
+) -> (State, Vec<Command>) {
+    if token != state.monitor.feed_token
+        || state.screen != View::Monitor
+        || state.monitor.status == FeedStatus::Idle
+    {
+        return (state, Vec::new());
+    }
+    state.error = Some((format!("MONITOR on {node}: {reason}"), at_ms));
+    state
+        .monitor
+        .stopped
+        .push(crate::state::StoppedNode { node, reason });
     (state, Vec::new())
 }
 
@@ -436,6 +450,7 @@ mod tests {
                 token,
                 at_ms: 1,
                 raw: "line one".into(),
+                node: None,
             },
         );
         assert_eq!(state.monitor.len(), 1);
@@ -453,6 +468,7 @@ mod tests {
                 token: stale,
                 at_ms: 1,
                 raw: "stale line".into(),
+                node: None,
             },
         );
         assert!(state.monitor.is_empty());
@@ -470,6 +486,7 @@ mod tests {
                 token,
                 at_ms: 1,
                 raw: "arrived too late".into(),
+                node: None,
             },
         );
         assert!(state.monitor.is_empty());
@@ -544,6 +561,7 @@ mod tests {
                 token,
                 at_ms: 1,
                 raw: r#"1.0 [0 127.0.0.1:1] "set" "k" "v""#.to_string(),
+                node: None,
             },
         );
         let (_, cmds) = press(state, 'c');
@@ -567,6 +585,7 @@ mod tests {
                 token,
                 at_ms: 1,
                 raw: "one".into(),
+                node: None,
             },
         );
         for c in ['x', 'y', 'z'] {

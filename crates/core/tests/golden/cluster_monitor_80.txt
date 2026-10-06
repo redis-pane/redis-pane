@@ -1,13 +1,11 @@
 ─ redis-pane ─ ● staging · …ter://cache-01:7000 · from profile staging  ● live ─
 
- MONITOR
-
- ⚠ Monitor is per node on a Cluster — coming in M5 (task 8)
- Keys, the Viewer and Pub/Sub work on a Cluster as usual.
-
-
-
-
+ ⚠ MONITOR on 3 primaries — costs each of them while open
+ ● live                                                                 3 lines
+ TIME         NODE                  COMMAND
+ 16:21:23.107 10.0.0.1:7000         "GET" "user:8812:session"
+ 16:21:23.409 10.0.0.2:7001         "HSET" "order:77" "state" "paid"
+ 16:21:24.002 10.0.0.3:7002         "EXPIRE" "cart:1" "600"
 
 
 
@@ -21,4 +19,6 @@
 
 
 
- ⌃R read-only   g s slowlog   g m monitor   g p pub/sub   ? F1 help
+
+
+ p pause   / filter   c copy command   ↑↓ jk move   PgUp/PgDn page   ? F1 help

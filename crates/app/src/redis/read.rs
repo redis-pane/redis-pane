@@ -436,6 +436,7 @@ pub async fn fetch_slowlog(client: &Client, count: i64) -> Result<Vec<SlowlogEnt
                     command.extend_from_slice(arg);
                 }
                 SlowlogEntry {
+                    node: String::new(),
                     id,
                     timestamp,
                     duration_us,

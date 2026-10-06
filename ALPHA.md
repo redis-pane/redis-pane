@@ -120,7 +120,8 @@ redis-pane --profile mine --probe
 - **`?`** or **`F1`** — help for exactly where you are: the keys that work here, with anything
   Read-only Mode would refuse dimmed and the reason shown. `F1` works even while typing.
 - **`g` then a letter** — jump to a view over the server itself (`Esc` or `g k` comes back):
-  - **`g s`** — the Slowlog: commands that ran too long, sortable; `d` resets it.
+  - **`g s`** — the Slowlog: commands that ran too long, sortable; `d` resets it (on a Cluster,
+    every node's, with a NODE column).
   - **`g m`** — Monitor: every command the server runs, live. `p` pauses, `/` filters. It costs
     the server while it runs, so it asks first on `prod`/`unknown` and closes when you leave.
   - **`g p`** — Pub/Sub: `a` to subscribe to a channel or a pattern (`user:*`), then watch what's
@@ -146,8 +147,10 @@ redis-pane --profile mine --probe
   to any one node of a cluster-enabled server). The title bar shows its shape (`cluster · 3
   primaries · 6 nodes`), the key list covers every primary, and an open key is live: change it from
   another terminal and it updates, even when it lives on a different node from the one you dialled.
-  The Dashboard shows the whole Cluster (a node table, `Enter` to drill into a node). The Slowlog
-  and Monitor show a notice for now ("per node on a Cluster") instead of one node's figures;
+  The Dashboard shows the whole Cluster (a node table, `Enter` to drill into a node). `g s` merges
+  every node's Slowlog with a NODE column (`d` asks to reset all N nodes), and `g m` streams one
+  `MONITOR` feed per primary, merged and tagged by node; its banner says how many primaries it is
+  costing. Kill a primary and watch the stopped-node line appear while the others keep going.
   Pub/Sub works. If the title bar says a node is gone or a redial happens
   mid-session, that is worth reporting with the steps that led to it.
 - **A very large keyspace.** Scrolling and typing into the filter stay quick at a million keys.

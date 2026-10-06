@@ -7220,3 +7220,423 @@ mod cluster_dashboard {
         );
     }
 }
+
+// ── M5 task 8 — Slowlog and Monitor on a Cluster ────────────────────────────
+//
+// `docs/plans/m5-slowlog-monitor.md`: SLOWLOG GET and RESET on every node, one
+// MONITOR feed per primary, each over connections of their own.
+
+mod cluster_slowlog_monitor {
+    use super::Credentials;
+    use super::support::cluster::{Cluster, start_cluster};
+    use fred::prelude::*;
+    use redis_pane::redis::cluster_info::{NODE_TIMEOUT, NodePool, Poller, slowlog_all};
+    use redis_pane::redis::feed::{FeedKind, open_feed};
+    use redis_pane_core::clock::Clock;
+    use redis_pane_core::command::FeedToken;
+    use redis_pane_core::mutation::{Mutation, MutationOutcome};
+    use redis_pane_core::{Msg, State, update};
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
+    use tokio::sync::mpsc::Receiver;
+
+    async fn connect(cluster: &Cluster) -> Client {
+        let (client, _) =
+            redis_pane::redis::connect_with(&cluster.seed_url(), &Credentials::default())
+                .await
+                .expect("cluster client");
+        client
+    }
+
+    fn addr(port: u16) -> String {
+        format!("127.0.0.1:{port}")
+    }
+
+    async fn log_everything(cluster: &Cluster) {
+        for &p in &cluster.ports {
+            cluster
+                .cli(p, &["config", "set", "slowlog-log-slower-than", "0"])
+                .await;
+            cluster.cli(p, &["slowlog", "reset"]).await;
+        }
+    }
+
+    async fn kill(cluster: &Cluster, port: u16) {
+        cluster
+            .exec(vec![
+                "sh".into(),
+                "-c".into(),
+                format!("redis-cli -p {port} shutdown nosave; true"),
+            ])
+            .await;
+    }
+
+    /// `SLOWLOG GET` as the server's own text, from inside the container.
+    async fn slowlog_text(cluster: &Cluster, port: u16) -> String {
+        cluster.cli(port, &["slowlog", "get", "128"]).await
+    }
+
+    #[tokio::test]
+    #[ignore = "needs docker"]
+    async fn slow_commands_on_two_primaries_both_appear_with_the_right_node() {
+        let cluster = start_cluster().await;
+        let primaries = cluster.primaries().await;
+        let (a, b) = (primaries[0].port, primaries[1].port);
+        let (key_a, key_b) = (
+            cluster.key_in_slot_of(a).await,
+            cluster.key_in_slot_of(b).await,
+        );
+        log_everything(&cluster).await;
+        let client = connect(&cluster).await;
+        client
+            .set::<(), _, _>(&key_a, "one", None, None, false)
+            .await
+            .unwrap();
+        client
+            .set::<(), _, _>(&key_b, "two", None, None, false)
+            .await
+            .unwrap();
+
+        let mut pool = NodePool::default();
+        let round = slowlog_all(&client, &mut pool, 128, NODE_TIMEOUT)
+            .await
+            .expect("slowlog_all");
+        assert!(round.failed.is_empty(), "{:?}", round.failed);
+        let find = |key: &str| -> Vec<String> {
+            round
+                .entries
+                .iter()
+                .filter(|e| String::from_utf8_lossy(&e.command).contains(key))
+                .map(|e| e.node.clone())
+                .collect()
+        };
+        let a_nodes = find(&key_a);
+        let b_nodes = find(&key_b);
+        assert!(
+            a_nodes.contains(&addr(a)),
+            "{key_a} not on {a}: {a_nodes:?}"
+        );
+        assert!(
+            b_nodes.contains(&addr(b)),
+            "{key_b} not on {b}: {b_nodes:?}"
+        );
+        assert!(
+            !a_nodes.contains(&addr(b)) && !b_nodes.contains(&addr(a)),
+            "an entry carries the wrong node: {a_nodes:?} {b_nodes:?}"
+        );
+        // Every node is asked, not only primaries: the nodes seen include
+        // more than the two that took the writes (CONFIG SET et al are logged
+        // on all six).
+        let nodes: std::collections::BTreeSet<_> =
+            round.entries.iter().map(|e| e.node.clone()).collect();
+        assert_eq!(nodes.len(), 6, "{nodes:?}");
+
+        // Through the core: the merged list keeps both, and a row's identity is
+        // (node, id), so equal ids on two nodes are two rows.
+        let (state, _) = update(
+            State::default(),
+            Msg::SlowlogLoaded {
+                entries: round.entries.clone(),
+                failed: Vec::new(),
+                at_ms: 1,
+            },
+        );
+        assert_eq!(state.slowlog.len(), round.entries.len());
+        let ids: std::collections::BTreeSet<_> = state
+            .slowlog
+            .entries()
+            .iter()
+            .map(|e| (e.node.clone(), e.id))
+            .collect();
+        assert_eq!(ids.len(), round.entries.len(), "(node, id) is unique");
+        pool.close().await;
+        let _ = client.quit().await;
+    }
+
+    #[tokio::test]
+    #[ignore = "needs docker"]
+    async fn reset_through_the_poller_clears_every_node() {
+        let cluster = start_cluster().await;
+        log_everything(&cluster).await;
+        let client = connect(&cluster).await;
+        for p in cluster.primaries().await {
+            let key = cluster.key_in_slot_of(p.port).await;
+            client
+                .set::<(), _, _>(format!("{{{key}}}:reset"), "v", None, None, false)
+                .await
+                .unwrap();
+        }
+        for p in cluster.primaries().await {
+            assert!(
+                slowlog_text(&cluster, p.port).await.contains(":reset"),
+                "{} should have logged the write to reset",
+                p.port
+            );
+        }
+
+        let (tx, mut rx) = tokio::sync::mpsc::channel(4);
+        let clock: Arc<dyn Clock> = Arc::new(redis_pane::SystemClock);
+        let poller = Poller::default();
+        poller.reset_slowlog(client.clone(), tx, clock, Mutation::ResetSlowlog, None);
+        let msg = tokio::time::timeout(Duration::from_secs(30), rx.recv())
+            .await
+            .expect("a reply")
+            .expect("open");
+        let Msg::MutationSettled { result, .. } = msg else {
+            panic!("expected MutationSettled, got {msg:?}");
+        };
+        assert_eq!(result, Ok(MutationOutcome::Done));
+        for &p in &cluster.ports {
+            let text = slowlog_text(&cluster, p).await;
+            assert!(
+                !text.contains(":reset") && !text.contains("slower-than"),
+                "{p} still holds old entries after the reset: {text}"
+            );
+        }
+        poller.cancel();
+        let _ = client.quit().await;
+    }
+
+    #[tokio::test]
+    #[ignore = "needs docker"]
+    async fn a_dead_node_is_named_in_the_fetch_and_in_a_partial_reset() {
+        let cluster = start_cluster().await;
+        log_everything(&cluster).await;
+        let client = connect(&cluster).await;
+        let dead = cluster.replicas().await[0].port;
+        kill(&cluster, dead).await;
+
+        let mut pool = NodePool::default();
+        let round = slowlog_all(&client, &mut pool, 128, NODE_TIMEOUT)
+            .await
+            .expect("the other nodes still answer");
+        assert_eq!(round.failed.len(), 1, "{:?}", round.failed);
+        assert_eq!(round.failed[0].node, addr(dead));
+        assert!(!round.entries.is_empty(), "the others are still shown");
+        assert!(round.entries.iter().all(|e| e.node != addr(dead)));
+
+        let err =
+            redis_pane::redis::cluster_info::reset_slowlog_all(&client, &mut pool, NODE_TIMEOUT)
+                .await
+                .expect_err("one node cannot be reset");
+        assert!(err.contains("reset on 5 of 6 nodes"), "{err}");
+        assert!(err.contains(&addr(dead)), "{err}");
+        assert!(err.contains("failed"), "{err}");
+        for &p in cluster.ports.iter().filter(|&&p| p != dead) {
+            let text = slowlog_text(&cluster, p).await;
+            assert!(!text.contains("slower-than"), "{p} was not reset: {text}");
+        }
+        pool.close().await;
+    }
+
+    // ── Monitor ────────────────────────────────────────────────────────────
+
+    async fn open(
+        cluster: &Cluster,
+        client: &Client,
+    ) -> (
+        redis_pane::redis::feed::FeedHandle,
+        Receiver<Msg>,
+        FeedToken,
+    ) {
+        let (tx, rx) = tokio::sync::mpsc::channel(4096);
+        let clock: Arc<dyn Clock> = Arc::new(redis_pane::SystemClock);
+        let token = FeedToken::default();
+        let feed = open_feed(
+            &cluster.seed_url(),
+            &Credentials::default(),
+            FeedKind::Monitor,
+            token,
+            tx,
+            clock,
+            client,
+        )
+        .await
+        .expect("one feed per primary");
+        (feed, rx, token)
+    }
+
+    /// Wait for a line mentioning `needle`, returning the node it came from.
+    async fn line_node(rx: &mut Receiver<Msg>, needle: &str) -> String {
+        tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                match rx.recv().await.expect("the feed must not exit silently") {
+                    Msg::MonitorLine { raw, node, .. } if raw.contains(needle) => {
+                        return node.expect("a Cluster line names its node");
+                    }
+                    _ => {}
+                }
+            }
+        })
+        .await
+        .unwrap_or_else(|_| panic!("no MONITOR line for {needle} arrived"))
+    }
+
+    async fn monitor_ids(cluster: &Cluster, port: u16) -> Vec<String> {
+        cluster
+            .cli(port, &["client", "list"])
+            .await
+            .lines()
+            .filter(|l| l.contains("cmd=monitor"))
+            .filter_map(|l| {
+                l.split_whitespace()
+                    .find_map(|f| f.strip_prefix("id="))
+                    .map(str::to_string)
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    #[ignore = "needs docker"]
+    async fn monitor_sees_a_command_on_each_primary_tagged_with_its_node() {
+        let cluster = start_cluster().await;
+        let client = connect(&cluster).await;
+        let (feed, mut rx, _) = open(&cluster, &client).await;
+        let primaries = cluster.primaries().await;
+        let mut seen = Vec::new();
+        for p in &primaries {
+            let key = format!("{{{}}}:mon", cluster.key_in_slot_of(p.port).await);
+            client
+                .set::<(), _, _>(&key, "v", None, None, false)
+                .await
+                .unwrap();
+            let node = line_node(&mut rx, &key).await;
+            assert_eq!(node, addr(p.port), "{key} came from the wrong node");
+            seen.push(node);
+        }
+        assert_eq!(seen.len(), 3);
+        // One feed per primary, and only primaries: a replica is never a
+        // monitor client.
+        for p in &primaries {
+            assert_eq!(monitor_ids(&cluster, p.port).await.len(), 1, "{}", p.port);
+        }
+        for r in cluster.replicas().await {
+            assert!(monitor_ids(&cluster, r.port).await.is_empty(), "{}", r.port);
+        }
+        feed.close();
+        let _ = client.quit().await;
+    }
+
+    #[tokio::test]
+    #[ignore = "needs docker"]
+    async fn killing_one_feed_leaves_the_others_streaming_and_names_the_stopped_node() {
+        let cluster = start_cluster().await;
+        let client = connect(&cluster).await;
+        let (feed, mut rx, token) = open(&cluster, &client).await;
+        let primaries = cluster.primaries().await;
+        let victim = primaries[0].port;
+        let ids = monitor_ids(&cluster, victim).await;
+        assert_eq!(ids.len(), 1);
+        cluster
+            .cli(victim, &["client", "kill", "id", &ids[0]])
+            .await;
+
+        let stopped = tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                match rx.recv().await.expect("the feed must not exit silently") {
+                    Msg::MonitorNodeStopped {
+                        token: t,
+                        node,
+                        reason,
+                        ..
+                    } => {
+                        assert_eq!(t, token);
+                        return (node, reason);
+                    }
+                    Msg::FeedClosed { .. } => panic!("one dead feed must not close the view"),
+                    _ => {}
+                }
+            }
+        })
+        .await
+        .expect("a killed feed is named");
+        assert_eq!(stopped.0, addr(victim));
+        assert!(!stopped.1.is_empty());
+
+        // The others still stream.
+        for p in primaries.iter().filter(|p| p.port != victim) {
+            let key = format!("{{{}}}:alive", cluster.key_in_slot_of(p.port).await);
+            client
+                .set::<(), _, _>(&key, "v", None, None, false)
+                .await
+                .unwrap();
+            assert_eq!(line_node(&mut rx, &key).await, addr(p.port));
+        }
+
+        // Through the core: the stopped node is named, the feed stays open.
+        let (mut state, _) = update(
+            State::default(),
+            Msg::Key(redis_pane_core::msg::KeyPress::plain(
+                redis_pane_core::msg::KeyCode::Char('g'),
+            )),
+        );
+        state.connection.topology = Some(redis_pane_core::state::Topology {
+            primaries: 3,
+            nodes: 6,
+        });
+        let (state, _) = update(
+            state,
+            Msg::Key(redis_pane_core::msg::KeyPress::plain(
+                redis_pane_core::msg::KeyCode::Char('m'),
+            )),
+        );
+        let token = state.monitor.feed_token;
+        let (state, _) = update(state, Msg::FeedOpened { token });
+        let (state, _) = update(
+            state,
+            Msg::MonitorNodeStopped {
+                token,
+                node: stopped.0.clone(),
+                reason: stopped.1.clone(),
+                at_ms: 1,
+            },
+        );
+        assert_eq!(
+            state.monitor.status,
+            redis_pane_core::state::FeedStatus::Open
+        );
+        assert_eq!(state.monitor.stopped[0].node, addr(victim));
+
+        feed.close();
+        let _ = client.quit().await;
+    }
+
+    #[tokio::test]
+    #[ignore = "needs docker"]
+    async fn leaving_the_view_closes_every_feed() {
+        let cluster = start_cluster().await;
+        let client = connect(&cluster).await;
+        let (feed, _rx, _) = open(&cluster, &client).await;
+        let primaries = cluster.primaries().await;
+        for p in &primaries {
+            assert_eq!(monitor_ids(&cluster, p.port).await.len(), 1, "{}", p.port);
+        }
+        feed.close();
+        // `fred::monitor::run` has no handle to close, so each socket goes when
+        // its forwarding task next has a line to forward (the single-node test
+        // does the same): nudge every primary until none shows a monitor client.
+        let deadline = Instant::now() + Duration::from_secs(15);
+        loop {
+            for p in &primaries {
+                let key = format!("{{{}}}:nudge", cluster.key_in_slot_of(p.port).await);
+                client
+                    .set::<(), _, _>(&key, "1", None, None, false)
+                    .await
+                    .unwrap();
+            }
+            let mut left = 0;
+            for p in &primaries {
+                left += monitor_ids(&cluster, p.port).await.len();
+            }
+            if left == 0 {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "{left} monitor clients still connected after the view was left"
+            );
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+        let _ = client.quit().await;
+    }
+}

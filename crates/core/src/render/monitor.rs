@@ -29,20 +29,53 @@ const CLIENT_W: u16 = 22;
 struct Columns {
     time: Option<(u16, u16)>,
     db: Option<(u16, u16)>,
+    /// The primary the line came from — a Cluster's merged feeds only.
+    node: Option<(u16, u16)>,
     client: Option<(u16, u16)>,
     command: (u16, u16),
 }
 
+/// Wide enough for `255.255.255.255:65535`; below 70 columns it narrows to
+/// [`NODE_NARROW_W`] and truncates.
+const NODE_W: u16 = 22;
+const NODE_NARROW_W: u16 = 16;
+
 /// CLIENT sheds first, then DB, then TIME — COMMAND is never shed, the same
 /// "the reason this screen exists is never the first thing cut" rule
 /// `render::slowlog::columns_for` follows for DURATION/COMMAND there.
-fn columns_for(width: u16) -> Columns {
+///
+/// On a Cluster NODE is the fact the merged stream adds, so it is never shed
+/// and COMMAND still is not: CLIENT goes below 100 columns, and below 70 the
+/// NODE column itself narrows. DB is not shown at all, since a Cluster has
+/// only database 0.
+fn columns_for(width: u16, cluster: bool) -> Columns {
     let inner = width.saturating_sub(2);
+    if cluster {
+        let (node_w, with_client) = if width >= 100 {
+            (NODE_W, true)
+        } else if width >= 70 {
+            (NODE_W, false)
+        } else {
+            (NODE_NARROW_W, false)
+        };
+        let client_w = if with_client { CLIENT_W } else { 0 };
+        let node_x = 1 + TIME_W;
+        let command_x = node_x + node_w;
+        let command_w = inner.saturating_sub(TIME_W + node_w + client_w);
+        return Columns {
+            time: Some((1, TIME_W)),
+            db: None,
+            node: Some((node_x, node_w)),
+            client: with_client.then_some((command_x + command_w, CLIENT_W)),
+            command: (command_x, command_w),
+        };
+    }
     if width >= 90 {
         let command_w = inner.saturating_sub(TIME_W + DB_W + CLIENT_W);
         Columns {
             time: Some((1, TIME_W)),
             db: Some((1 + TIME_W, DB_W)),
+            node: None,
             client: Some((1 + TIME_W + DB_W, CLIENT_W)),
             command: (1 + TIME_W + DB_W + CLIENT_W, command_w),
         }
@@ -51,6 +84,7 @@ fn columns_for(width: u16) -> Columns {
         Columns {
             time: Some((1, TIME_W)),
             db: Some((1 + TIME_W, DB_W)),
+            node: None,
             client: None,
             command: (1 + TIME_W + DB_W, command_w),
         }
@@ -59,6 +93,7 @@ fn columns_for(width: u16) -> Columns {
         Columns {
             time: Some((1, TIME_W)),
             db: None,
+            node: None,
             client: None,
             command: (1 + TIME_W, command_w),
         }
@@ -71,16 +106,6 @@ pub fn render(state: &State, theme: &Theme, area: Rect, buf: &mut Buffer) {
     if area.width < 8 || area.height < 3 {
         return;
     }
-    if state.on_cluster() {
-        super::cluster_notice(
-            theme,
-            area,
-            "MONITOR",
-            "⚠ Monitor is per node on a Cluster — coming in M5 (task 8)",
-            buf,
-        );
-        return;
-    }
     let mut y = area.y;
     banner(state, theme, area, y, buf);
     y += 1;
@@ -89,6 +114,7 @@ pub fn render(state: &State, theme: &Theme, area: Rect, buf: &mut Buffer) {
     }
     status_line(state, theme, area, y, buf);
     y += 1;
+    y += stopped_lines(state, theme, area, y, buf);
 
     if state.filtering || !state.monitor.filter.is_empty() {
         if y >= area.y + area.height {
@@ -107,7 +133,7 @@ pub fn render(state: &State, theme: &Theme, area: Rect, buf: &mut Buffer) {
         return;
     }
 
-    let cols = columns_for(area.width);
+    let cols = columns_for(area.width, state.on_cluster());
     column_header(theme, area, cols, y, buf);
     y += 1;
     if y >= area.y + area.height {
@@ -166,7 +192,14 @@ fn filtered_lines(state: &State) -> Vec<(usize, &MonitorLine)> {
         lines
             .iter()
             .enumerate()
-            .filter(|(_, l)| matches(l.raw.as_bytes(), &state.monitor.filter, FilterMode::Glob))
+            .filter(|(_, l)| {
+                // The merged stream is filtered as one: by the line, or by
+                // the node it came from (`/7101`).
+                matches(l.raw.as_bytes(), &state.monitor.filter, FilterMode::Glob)
+                    || l.node.as_deref().is_some_and(|n| {
+                        matches(n.as_bytes(), &state.monitor.filter, FilterMode::Glob)
+                    })
+            })
             .collect()
     }
 }
@@ -190,15 +223,47 @@ const BANNER_SHORT: &str = "⚠ MONITOR running — costs the server";
 const STOPPED_FULL: &str = "MONITOR stopped — the server is no longer streaming to this view";
 const STOPPED_SHORT: &str = "MONITOR stopped";
 
+/// The Cluster's wording: one feed per primary, so the cost is named per node
+/// and the count says how many are still streaming (M5 task 8, ADR-0022).
+/// `3 primaries`, or `2 of 3 primaries` once one has stopped.
+fn cluster_banner(state: &State) -> (String, String) {
+    let total = state
+        .connection
+        .topology
+        .map_or(0, |t| t.primaries as usize);
+    let live = total.saturating_sub(state.monitor.stopped.len());
+    let of = if live == total {
+        format!("{total}")
+    } else {
+        format!("{live} of {total}")
+    };
+    let noun = if total == 1 { "primary" } else { "primaries" };
+    (
+        format!("⚠ MONITOR on {of} {noun} — costs each of them while open"),
+        format!("⚠ MONITOR on {of} {noun}"),
+    )
+}
+
 fn banner(state: &State, theme: &Theme, area: Rect, y: u16, buf: &mut Buffer) {
     let stopped = matches!(state.monitor.status, FeedStatus::Closed { .. });
     let (full, short, token) = if stopped {
-        (STOPPED_FULL, STOPPED_SHORT, Token::Muted)
+        (
+            STOPPED_FULL.to_string(),
+            STOPPED_SHORT.to_string(),
+            Token::Muted,
+        )
+    } else if state.on_cluster() {
+        let (full, short) = cluster_banner(state);
+        (full, short, Token::Warn)
     } else {
-        (BANNER_FULL, BANNER_SHORT, Token::Warn)
+        (
+            BANNER_FULL.to_string(),
+            BANNER_SHORT.to_string(),
+            Token::Warn,
+        )
     };
     let usable = area.width.saturating_sub(1) as usize;
-    let text = if full.chars().count() <= usable {
+    let text = if theme.glyphs.text(&full).chars().count() <= usable {
         full
     } else {
         short
@@ -214,9 +279,43 @@ fn banner(state: &State, theme: &Theme, area: Rect, y: u16, buf: &mut Buffer) {
         buf,
         area.x + 1,
         y,
-        &theme.glyphs.text(text),
+        &theme.glyphs.text(&text),
         theme.style(token),
     );
+}
+
+/// The primaries whose feed stopped while the others carry on, one line each
+/// under the status line (at most two, then `+N more`): node and reason, in
+/// the failure's own words (R7.4). Returns the rows used.
+fn stopped_lines(state: &State, theme: &Theme, area: Rect, y: u16, buf: &mut Buffer) -> u16 {
+    const SHOWN: usize = 2;
+    let stopped = &state.monitor.stopped;
+    let room = area.y + area.height;
+    let mut used = 0u16;
+    for (i, s) in stopped.iter().enumerate() {
+        if i >= SHOWN || y + used >= room.saturating_sub(2) {
+            break;
+        }
+        let text = if i == SHOWN - 1 && stopped.len() > SHOWN {
+            format!("+{} more feeds stopped", stopped.len() - i)
+        } else {
+            format!(
+                "{} {} stopped: {}",
+                theme.glyphs.get(Glyph::Deleted),
+                s.node,
+                s.reason
+            )
+        };
+        put(
+            buf,
+            area.x + 1,
+            y + used,
+            &truncate(&text, area.width.saturating_sub(2) as usize, theme.glyphs),
+            theme.style(Token::Danger),
+        );
+        used += 1;
+    }
+    used
 }
 
 /// The feed's own status (decision 9), plus pause/following (decisions 5, 7)
@@ -328,6 +427,9 @@ fn column_header(theme: &Theme, area: Rect, cols: Columns, y: u16, buf: &mut Buf
     if let Some((x, _)) = cols.db {
         put(buf, area.x + x, y, "DB", style);
     }
+    if let Some((x, _)) = cols.node {
+        put(buf, area.x + x, y, "NODE", style);
+    }
     if let Some((x, _)) = cols.client {
         put(buf, area.x + x, y, "CLIENT", style);
     }
@@ -385,6 +487,19 @@ fn line_row(
             muted_style,
         );
     }
+    if let Some((x, w)) = cols.node {
+        put(
+            buf,
+            area.x + x,
+            y,
+            &truncate(
+                line.node.as_deref().unwrap_or(""),
+                w.saturating_sub(1) as usize,
+                theme.glyphs,
+            ),
+            muted_style,
+        );
+    }
     if let Some((x, w)) = cols.client {
         put(
             buf,
@@ -416,12 +531,37 @@ mod tests {
 
     #[test]
     fn columns_shed_client_then_db_never_command() {
-        let full = columns_for(100);
+        let full = columns_for(100, false);
         assert!(full.client.is_some() && full.db.is_some());
-        let no_client = columns_for(75);
+        let no_client = columns_for(75, false);
         assert!(no_client.client.is_none() && no_client.db.is_some());
-        let narrow = columns_for(50);
+        let narrow = columns_for(50, false);
         assert!(narrow.client.is_none() && narrow.db.is_none());
         assert!(narrow.command.1 > 0);
+        assert!(narrow.node.is_none(), "no NODE column off a Cluster");
+    }
+
+    #[test]
+    fn on_a_cluster_node_and_command_are_never_shed() {
+        for w in [140u16, 100, 99, 80, 70, 69, 60] {
+            let c = columns_for(w, true);
+            assert!(
+                c.node.is_some() && c.time.is_some() && c.db.is_none(),
+                "{w}"
+            );
+            assert!(c.command.1 >= 20, "{w}: command width {}", c.command.1);
+            let mut spans: Vec<(u16, u16)> = [c.time, c.node, Some(c.command), c.client]
+                .into_iter()
+                .flatten()
+                .collect();
+            spans.sort();
+            for pair in spans.windows(2) {
+                assert!(pair[0].0 + pair[0].1 <= pair[1].0, "{w}: {spans:?}");
+            }
+            let last = spans.last().unwrap();
+            assert!(last.0 + last.1 < w, "{w}: {spans:?}");
+        }
+        assert!(columns_for(140, true).client.is_some());
+        assert!(columns_for(80, true).client.is_none());
     }
 }

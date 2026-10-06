@@ -3710,6 +3710,7 @@ fn slowlog_entry(
     client_name: &str,
 ) -> redis_pane_core::state::SlowlogEntry {
     redis_pane_core::state::SlowlogEntry {
+        node: String::new(),
         id,
         timestamp,
         duration_us,
@@ -4921,7 +4922,7 @@ fn copying_the_command_on_a_cluster_updates_through_the_core() {
     assert_eq!(cmd, "redis-cli -c -h cache-01 -p 7000 HGETALL k");
 }
 
-// ── M5 task 5 — server views on a Cluster show a notice, not data ───────────
+// ── M5 task 8 — Slowlog and Monitor on a Cluster ────────────────────────────
 
 fn cluster_view(view: redis_pane_core::state::View, w: u16) -> State {
     let mut state = cluster_state("redis-cluster://cache-01:7000/0");
@@ -4931,37 +4932,180 @@ fn cluster_view(view: redis_pane_core::state::View, w: u16) -> State {
     state
 }
 
+fn node_entry(
+    node: &str,
+    id: i64,
+    secs_ago: i64,
+    duration_us: i64,
+    command: &str,
+) -> redis_pane_core::state::SlowlogEntry {
+    let mut e = slowlog_entry(
+        id,
+        SLOWLOG_NOW_S - secs_ago,
+        duration_us,
+        command,
+        "10.0.0.4:51820",
+        "worker-3",
+    );
+    e.node = node.into();
+    e
+}
+
+/// A merged slowlog from three nodes, ids restarting per node (so `(node, id)`
+/// is the identity), the same id on two of them.
+fn cluster_slowlog(w: u16) -> State {
+    let mut state = cluster_view(redis_pane_core::state::View::Slowlog, w);
+    state.slowlog.set_entries(vec![
+        node_entry("10.0.0.1:7000", 4, 5, 185_000, "HGETALL user:8812:session"),
+        node_entry("10.0.0.2:7001", 4, 9, 2_400, "ZRANGE leaderboard 0 -1"),
+        node_entry("10.0.0.1:7000", 3, 20, 12_300, "SMEMBERS tags"),
+        node_entry("10.0.0.3:7002", 1, 31, 1_250_000, "KEYS user:*"),
+    ]);
+    state
+}
+
+fn cluster_draw(state: &State, w: u16, h: u16) -> String {
+    draw_at(state, w, h, &FixedClock(SLOWLOG_NOW_MS))
+}
+
 #[test]
-fn golden_server_views_on_a_cluster() {
-    use redis_pane_core::state::View;
-    for (name, view) in [("slowlog", View::Slowlog), ("monitor", View::Monitor)] {
-        for w in [140u16, 80] {
-            assert_golden(
-                &format!("cluster_{name}_{w}"),
-                &draw(&cluster_view(view, w), w, 24),
-            );
-        }
+fn golden_slowlog_on_a_cluster() {
+    for w in [140u16, 80, 60] {
+        assert_golden(
+            &format!("cluster_slowlog_{w}"),
+            &cluster_draw(&cluster_slowlog(w), w, 24),
+        );
     }
 }
 
 #[test]
 fn golden_slowlog_on_a_cluster_ascii() {
-    use redis_pane_core::state::View;
     assert_golden(
         "cluster_slowlog_ascii",
-        &ascii_frame(&cluster_view(View::Slowlog, 100), 100, 24, &CLOCK),
+        &ascii_frame(&cluster_slowlog(100), 100, 24, &FixedClock(SLOWLOG_NOW_MS)),
     );
 }
 
 #[test]
-fn golden_help_in_slowlog_on_a_cluster_dims_every_row_with_the_reason() {
+fn golden_slowlog_on_a_cluster_with_a_failed_node() {
+    let mut state = cluster_slowlog(100);
+    state.slowlog.failed = vec![redis_pane_core::state::NodeFailure {
+        node: "10.0.0.3:7002".into(),
+        detail: "no connection within 4s".into(),
+    }];
+    state.slowlog.set_entries(
+        state
+            .slowlog
+            .entries()
+            .iter()
+            .filter(|e| e.node != "10.0.0.3:7002")
+            .cloned()
+            .collect(),
+    );
+    assert_golden(
+        "cluster_slowlog_failed_node_100",
+        &cluster_draw(&state, 100, 24),
+    );
+}
+
+#[test]
+fn golden_slowlog_reset_confirm_names_the_node_count() {
+    let mut state = cluster_slowlog(100);
+    state.confirm = Some(redis_pane_core::state::PendingMutation::ResetSlowlog);
+    let frame = cluster_draw(&state, 100, 24);
+    assert!(frame.contains("SLOWLOG RESET on 6 nodes"), "{frame}");
+    assert_golden("cluster_slowlog_reset_confirm_100", &frame);
+}
+
+fn node_line(at_ms: u64, node: &str, raw: &str) -> (u64, String, Option<String>) {
+    (at_ms, raw.to_string(), Some(node.to_string()))
+}
+
+fn cluster_monitor(w: u16) -> State {
+    let mut state = cluster_view(redis_pane_core::state::View::Monitor, w);
+    state.monitor.status = FeedStatus::Open;
+    state.monitor.following = true;
+    for (at_ms, raw, node) in [
+        node_line(
+            MONITOR_NOW_MS,
+            "10.0.0.1:7000",
+            r#"1339518083.107412 [0 10.0.0.4:51820] "GET" "user:8812:session""#,
+        ),
+        node_line(
+            MONITOR_NOW_MS + 1,
+            "10.0.0.2:7001",
+            r#"1339518083.409003 [0 10.0.0.4:51822] "HSET" "order:77" "state" "paid""#,
+        ),
+        node_line(
+            MONITOR_NOW_MS + 2,
+            "10.0.0.3:7002",
+            r#"1339518084.002120 [0 10.0.0.9:40112] "EXPIRE" "cart:1" "600""#,
+        ),
+    ] {
+        state.monitor.push_monitor_line_from(at_ms, raw, node);
+    }
+    state
+}
+
+#[test]
+fn golden_monitor_on_a_cluster() {
+    for w in [140u16, 80, 60] {
+        let frame = draw(&cluster_monitor(w), w, 24);
+        assert!(frame.contains("MONITOR on 3 primaries"), "{w}: {frame}");
+        assert_golden(&format!("cluster_monitor_{w}"), &frame);
+    }
+}
+
+#[test]
+fn golden_monitor_on_a_cluster_ascii() {
+    assert_golden(
+        "cluster_monitor_ascii",
+        &ascii_frame(&cluster_monitor(100), 100, 24, &CLOCK),
+    );
+}
+
+#[test]
+fn golden_monitor_on_a_cluster_with_a_stopped_feed() {
+    let mut state = cluster_monitor(100);
+    state
+        .monitor
+        .stopped
+        .push(redis_pane_core::state::StoppedNode {
+            node: "10.0.0.2:7001".into(),
+            reason: "the feed connection closed".into(),
+        });
+    let frame = draw(&state, 100, 24);
+    assert!(frame.contains("MONITOR on 2 of 3 primaries"), "{frame}");
+    assert!(frame.contains("10.0.0.2:7001 stopped"), "{frame}");
+    assert_golden("cluster_monitor_stopped_feed_100", &frame);
+}
+
+#[test]
+fn golden_monitor_confirm_on_a_cluster_names_the_count() {
+    for (name, env) in [
+        ("prod", Environment::Prod),
+        ("unknown", Environment::Unknown),
+    ] {
+        let mut state = cluster_view(redis_pane_core::state::View::Keys, 100);
+        state.connection.environment = env;
+        state.pending_feed = Some(redis_pane_core::command::FeedKindMsg::Monitor);
+        let frame = draw(&state, 100, 24);
+        assert!(frame.contains("all 3 primaries"), "{name}: {frame}");
+        assert_golden(&format!("cluster_monitor_confirm_{name}_100"), &frame);
+    }
+}
+
+#[test]
+fn golden_help_in_slowlog_and_monitor_on_a_cluster_is_not_dimmed() {
     use redis_pane_core::state::View;
-    let mut state = cluster_view(View::Slowlog, 100);
-    state.help = Some(HelpView { pane: state.focus });
-    assert_golden("cluster_help_slowlog_100", &draw(&state, 100, 24));
-    let rows = help::here(&state, help::context(&state));
-    assert!(!rows.is_empty());
-    assert!(rows.iter().all(|r| r.refused.is_some()));
+    for (name, view) in [("slowlog", View::Slowlog), ("monitor", View::Monitor)] {
+        let mut state = cluster_view(view, 100);
+        state.help = Some(HelpView { pane: state.focus });
+        assert_golden(&format!("cluster_help_{name}_100"), &draw(&state, 100, 24));
+        let rows = help::here(&state, help::context(&state));
+        assert!(!rows.is_empty());
+        assert!(rows.iter().all(|r| r.refused.is_none()), "{name}");
+    }
 }
 
 // ── M5 task 7 — the Cluster Dashboard ───────────────────────────────────────
