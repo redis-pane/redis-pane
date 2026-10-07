@@ -584,8 +584,7 @@ impl Shell {
                 arm,
             } => self.read_key(key, index, token, arm),
             Command::Execute { mutation, index } => self.mutate(mutation, index),
-            // Phase 2 stub: wired in phase 3.
-            Command::CheckTarget { .. } => {}
+            Command::CheckTarget { key } => self.check_target(key),
             Command::CopyToClipboard { text, label } => self.copy(text, label, term).await,
             Command::Notify { text } => {
                 let at_ms = self.clock.now_epoch_ms();
@@ -879,6 +878,37 @@ impl Shell {
             // notification; this makes the redial replace the client.
             if link_lost {
                 let _ = tx.send(Msg::ConnectionLost).await;
+            }
+        });
+    }
+
+    /// `Command::CheckTarget`: one `EXISTS` for a staged rename's preview (M2
+    /// task 11). Advice only — the atomic `RENAMENX` is the guard — so a
+    /// failure is raised as an error naming `EXISTS`, never swallowed, and
+    /// leaves the preview unchecked. A wedged Cluster client is reported as a
+    /// lost link as well, like every other command on the main client.
+    fn check_target(&self, key: KeyName) {
+        let (client, tx, clock) = (self.client.clone(), self.tx.clone(), self.clock.clone());
+        tokio::spawn(async move {
+            let result = crate::redis::mutate::key_exists(&client, key.as_bytes()).await;
+            let at_ms = clock.now_epoch_ms();
+            match result {
+                Ok(exists) => {
+                    let _ = tx.send(Msg::TargetChecked { key, exists }).await;
+                }
+                Err(e) => {
+                    let wedged = crate::liveness::is_wedged(&client, &e);
+                    let _ = tx
+                        .send(Msg::Failed {
+                            command: format!("EXISTS {key}"),
+                            detail: e.details().to_string(),
+                            at_ms,
+                        })
+                        .await;
+                    if wedged {
+                        let _ = tx.send(Msg::ConnectionLost).await;
+                    }
+                }
             }
         });
     }

@@ -200,3 +200,9 @@ gone. An `Err` goes through the existing `failed()` path.
     (and shifted the rows beneath it): the help overlay lists every keys-pane binding, so a new
     binding necessarily moves it. No browser or hint-bar frame moved: `rename` is ranked after
     `copy redis-cli command`, where an 80-column bar stops before it.
+- **Phase 3 (shell).** `redis::mutate::rename_key` (`RENAMENX`: `1` -> `Renamed`, `0` ->
+  `TargetExists`, an `ERR no such key` error -> `KeyGone`, anything else propagates) and
+  `key_exists` (`EXISTS`), both building single binary-safe `Key`s. `Shell::check_target` runs the
+  pre-check on a task and answers `Msg::TargetChecked`; its failure is `Msg::Failed` naming
+  `EXISTS <key>` plus `ConnectionLost` when `is_wedged`. The write itself goes through the
+  existing `execute_settled`, so the Cluster wedge handling applies unchanged. No deviations.
