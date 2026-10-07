@@ -1,6 +1,6 @@
 # M6: rebuilds at real SCAN order. Task plan
 
-Status: **planned, not started.** The design and analysis are in
+Status: **task 1 done** (PR #78). The design and analysis are in
 [`m6-perf-rebuild.md`](m6-perf-rebuild.md). This file splits it into tasks in the M5 shape: one
 plan doc per task, one Sonnet subagent run per task, each merged before the next starts.
 
