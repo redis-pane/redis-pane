@@ -401,8 +401,10 @@ impl KeyView {
         match self.sort {
             SortBy::Scan => {}
             SortBy::Name => {
-                self.order
-                    .sort_by(|a, b| keys.name(*a as usize).cmp(&keys.name(*b as usize)));
+                // The record sort (M6 task 4): byte order of the names, equal
+                // names in index order, which is what the stable `sort_by`
+                // over an ascending order gave.
+                super::sort::sort_by_name(keys, &mut self.order);
             }
             // For every lazily-fetched column the rule is the same: order what
             // arrived, park the unknowns at the end in scan order, and say how

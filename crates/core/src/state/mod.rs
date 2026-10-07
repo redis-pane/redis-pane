@@ -17,6 +17,7 @@ pub mod rebuild;
 pub mod scan;
 pub mod session;
 pub mod slowlog;
+mod sort;
 pub mod tail;
 pub mod tree;
 pub mod ttl;
