@@ -228,6 +228,23 @@ impl KeyView {
         });
     }
 
+    /// Whether the order is exactly what [`KeyView::rebuild`] would produce
+    /// right now, for the typed filter, mode and sort: built for those, over
+    /// every one of `keys_len` loaded keys. Read-only; `Applied` stays private.
+    ///
+    /// Only meaningful for `Scan` and `Name` orders. A lazily-fetched sort
+    /// re-sorts by whatever metadata has arrived since, so a rebuild can
+    /// differ even when this is true; callers that need equivalence with a
+    /// rebuild check the sort themselves (`State::view_is_current`).
+    pub fn is_current_for(&self, keys_len: usize) -> bool {
+        self.applied.as_ref().is_some_and(|a| {
+            a.covered == keys_len
+                && a.sort == self.sort
+                && a.mode == self.mode
+                && a.filter == self.filter
+        })
+    }
+
     /// Whether the typed filter can be applied by re-filtering the rows
     /// already shown instead of rebuilding from the Loaded set.
     ///

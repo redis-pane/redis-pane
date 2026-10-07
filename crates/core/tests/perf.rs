@@ -481,6 +481,33 @@ variants!(toggle_tree:
     toggle_tree_at_1m_keys_random_flat => (Fixture::RandomFlat, 740),
     toggle_tree_at_1m_keys_random_deep => (Fixture::RandomDeep, 841));
 
+/// `t` over a flat view that is already Name-sorted (M6 task 2): a fold, no
+/// re-sort. `toggle_tree` above starts from scan order, which still sorts.
+fn toggle_tree_from_name_sorted(fx: Fixture, ceil_ms: u64) {
+    let base = make_state(fx, false, SortBy::Name);
+    let elapsed = time_update_and_render(&base, SLOW_SAMPLES, || key(KeyCode::Char('t')));
+    println!(
+        "[{}] toggle tree mode, flat view already Name-sorted @ 1M keys: {elapsed:?}",
+        fx.label()
+    );
+    assert_budget("tree toggle (Name-sorted flat view)", elapsed, ceil_ms);
+}
+variants!(toggle_tree_from_name_sorted:
+    toggle_tree_from_name_sorted_random_deep => (Fixture::RandomDeep, 400));
+
+/// `t` out of tree mode over a current view: no fold, no sort.
+fn toggle_tree_off(fx: Fixture, ceil_ms: u64) {
+    let base = make_state(fx, true, SortBy::Name);
+    let elapsed = time_update_and_render(&base, SLOW_SAMPLES, || key(KeyCode::Char('t')));
+    println!(
+        "[{}] toggle tree mode off @ 1M keys: {elapsed:?}",
+        fx.label()
+    );
+    assert_budget("tree toggle off", elapsed, ceil_ms);
+}
+variants!(toggle_tree_off:
+    toggle_tree_off_random_deep => (Fixture::RandomDeep, 50));
+
 fn time_to_new_list_tree_toggle(fx: Fixture, ceil_ms: u64) {
     let base = big_state(fx);
     let elapsed = time_to_new_list(&base, SLOW_SAMPLES, || key(KeyCode::Char('t')));
@@ -507,7 +534,8 @@ fn tree_state(fx: Fixture) -> State {
 
 fn collapse_group(fx: Fixture, ceil_ms: u64) {
     // The real path: Left on an expanded group row -> `collapse_group` in
-    // `update/keys.rs` -> `Tree::toggle` + a full `rebuild_list`.
+    // `update/keys.rs` -> `Tree::toggle` + `State::refold` (the fold alone,
+    // M6 task 2).
     let base = tree_state(fx);
     let rows_before = base.tree.len();
     let (collapsed, _) = update(base.clone(), key(KeyCode::Left));
@@ -521,8 +549,8 @@ fn collapse_group(fx: Fixture, ceil_ms: u64) {
         "[{}] collapse one top-level group @ 1M keys: {elapsed:?}",
         fx.label()
     );
-    // CEILING, calibrated on CI: today it re-filters and re-sorts everything
-    // (M6 task 2 makes it a fold-only rebuild).
+    // CEILING, calibrated on CI: the fold alone since M6 task 2 (it
+    // re-filtered and re-sorted everything before).
     assert_budget("collapse", elapsed, ceil_ms);
 }
 variants!(collapse_group:
