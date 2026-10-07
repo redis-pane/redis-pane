@@ -550,7 +550,7 @@ fn time_to_new_list_sort_change(fx: Fixture, ceil_ms: u64) {
     assert_budget("time-to-new-list (sort change)", elapsed, ceil_ms);
 }
 variants!(time_to_new_list_sort_change:
-    time_to_new_list_sort_change_random_deep => (Fixture::RandomDeep, 812));
+    time_to_new_list_sort_change_random_deep => (Fixture::RandomDeep, 231));
 
 // ── (d) toggling tree mode ───────────────────────────────────────────────
 
@@ -614,7 +614,7 @@ fn time_to_new_list_tree_toggle(fx: Fixture, ceil_ms: u64) {
     assert_budget("time-to-new-list (tree toggle)", elapsed, ceil_ms);
 }
 variants!(time_to_new_list_tree_toggle:
-    time_to_new_list_tree_toggle_random_deep => (Fixture::RandomDeep, 1126));
+    time_to_new_list_tree_toggle_random_deep => (Fixture::RandomDeep, 575));
 
 // ── (d2) collapse / expand one top-level group, fold alone, sort alone ──
 
@@ -723,14 +723,16 @@ fn name_sort_alone(fx: Fixture, ceil_ms: u64) {
         "[{}] Name sort alone (KeyView::rebuild, no filter) @ 1M keys: {elapsed:?}",
         fx.label()
     );
-    // M6 task 4 target: <= 80ms. Sorted control AT TARGET; random CEILING,
-    //.
+    // M6 task 4 target: <= 80ms local on random_deep (71ms measured; CI 120ms).
+    // All three are CEILINGS, 1.5x the slowest CI run: the record sort pays
+    // its refinement rounds even on already-sorted names (13ms CI, was 4ms
+    // when pdqsort saw them in order), and wins 2-3x on the random fixtures.
     assert_budget("name sort", elapsed, ceil_ms);
 }
 variants!(name_sort_alone:
-    name_sort_alone_at_1m_keys => (Fixture::Sorted, 16),
-    name_sort_alone_at_1m_keys_random_flat => (Fixture::RandomFlat, 488),
-    name_sort_alone_at_1m_keys_random_deep => (Fixture::RandomDeep, 520));
+    name_sort_alone_at_1m_keys => (Fixture::Sorted, 21),
+    name_sort_alone_at_1m_keys_random_flat => (Fixture::RandomFlat, 94),
+    name_sort_alone_at_1m_keys_random_deep => (Fixture::RandomDeep, 180));
 
 // ── (e) one ScanBatch page arriving into an already-1M-key set ──────────
 
