@@ -89,3 +89,63 @@ Throwaway profile (1M random_deep, Name-sorted view, median of 5, no collapsed p
 So: the split is 74 ms of which most is the *serialised* miss (A shows the misses are cheap when
 independent), the comparison ~49 ms, the row pushes ~55 ms, and with any collapsed prefix the
 ancestor probes are the single biggest cost.
+
+### Phase 2: LCP-driven fold
+
+**Shared segments.** `shared` = the number of the previous key's separators that sit before byte
+`lcp` (`s < lcp`). Equivalent to the old comparison: segment *i* is equal in both names exactly when
+both carry the same bytes through its terminating separator, i.e. when that separator is inside the
+shared prefix; a separator *at* the LCP is the first differing byte or past it (so `a:b`, `a:c`
+share one segment, `a`, `a:` share none). A key that is a prefix of its predecessor (`lcp = len`)
+shares the separators it has; `a::b` empty segments, a trailing separator and no separator fall out
+of the same rule (pinned by a boundary test and a randomised oracle). The separator is
+`self.separator as u8`, the low byte of the char, exactly as before (`é` and `→` are tested and
+behave as they did).
+
+**What it removed.** The fold no longer builds `(offset, len)` segment lists or compares bytes: it
+keeps one `seps: Vec<u16>` (positions of the separators of the last key), truncates it to `shared`,
+and scans only `name[lcp..]` for new separators, so the shared prefix's bytes are never read.
+Group rows are built from the separator positions.
+
+**Two further changes the profile asked for** (both in the same loop):
+- *Descendant counts without the per-key pass.* A group records `placed` when it opens and is given
+  `placed_at_close - placed_at_open` when it closes (when a later key shares fewer segments, or at
+  the end). The `counts` column (8 MB at 1M, one push per row) and the per-key
+  `for g in open_groups { counts[g] += 1 }` are gone; the fix-up pass only writes the inverse now.
+- *No per-separator hashing for the collapsed test.* The old per-key `ancestor_collapsed(name)`
+  probed the hash set once per separator (the 115 ms collapsed-prefix cost in the profile). With no
+  irregular prefix, the key is hidden exactly when the innermost open group is collapsed (the groups
+  stop at the first collapsed prefix), so that is read directly. And `prefix_is_collapsed`
+  (still needed for each *new* group) is skipped unless a collapsed prefix has that byte length
+  (`collapsed_lens`, recomputed by `toggle`). The irregular-prefix path (a hand-toggled prefix that
+  does not end in the separator) keeps the old linear scan.
+
+**Where the LCP lives: a parallel column on `KeyView` (`lcp: Vec<u32>`), not carried through
+`FoldProgress`.** Reasons: (1) fold-only jobs (collapse, expand, entering tree mode over a Name
+view) have no Sort stage, so a job-carried LCP could never reach the hottest everyday case, while a
+column on the view is already there when they start; (2) one source for the sync path and the job
+path (the job moves its sorter's by-product into the view at the swap, `KeyView::install`, as it
+does with `order`); (3) the fold takes `Option<&[u32]>`, so the same function is used by both.
+Cost: 4 MB at 1M (u32; u16 would be exact since names are capped at 65535 bytes, but the job's
+sorter emits u32 and a conversion pass costs more than the 2 MB it would save).
+
+**Validity.** `KeyView::name_lcp()` returns the column only when the order was built for Name and
+the column is exactly as long as `order`. It is set by `rebuild` and `install`, **patched** by
+`narrow` (a kept row's new LCP is the minimum of the adjacent LCPs since the previous kept row,
+exact because the LCP of two names in sorted order is the minimum of the adjacent ones), and cleared
+by `extend` (Scan order only). Every other sort leaves it empty. **Fallback:** with no column the
+fold computes each key's LCP against the previous key's name itself (`common_prefix`, 8 bytes at a
+time) and runs the same code, so there is one fold, not two.
+
+**Tests.** `the_lcp_fold_equals_the_legacy_fold_for_every_separator_and_collapsed_set` keeps the old
+fold verbatim as an oracle (`legacy_rows`) and compares rows (so descendants, expanded flags, depth)
+and the inverse for 400 random keyspaces over five separators (`:`, `/`, `.`, `é`, `→`), empty
+segments, trailing separators, bare names, prefix-of-neighbour names, invalid UTF-8 and random
+collapsed sets including irregular prefixes, with the view's LCP, with none, and sliced. Plus the
+`cache:` / `cache:user:` regression, the boundary cases, narrowing keeps the column equal to a brute
+force LCP, `extend`/other sorts carry none, and the job equivalence suite additionally asserts the
+swapped view's column. A mutation (`<` to `<=`) fails two of them. Task 2 and 3 tests pass unchanged.
+
+First measurement (local, load avg 6.5, noisy): fold alone 207 -> 98 ms; collapse time-to-swap
+183 -> 59 ms; tree toggle time-to-swap 309 -> 181 ms; toggle from Name-sorted flat 99 ms to swap,
+worst step 4.0 ms.

@@ -49,6 +49,11 @@ pub struct Tree {
     /// caller toggled — see [`Tree::prefix_is_collapsed`] for why not by
     /// arena `(offset, len)`.
     collapsed: HashSet<String>,
+    /// The distinct byte lengths of the members of `collapsed`. A prefix of
+    /// any other length cannot be one of them, so the fold skips the hash
+    /// (a SipHash of the whole prefix) for the overwhelming majority of
+    /// group rows (M6 task 5).
+    collapsed_lens: Vec<usize>,
     /// How many members of `collapsed` do *not* end in the separator. The
     /// O(1) ancestor test probes only separator-terminated prefixes of a
     /// key's name; a hand-toggled prefix that does not end in one (nothing in
@@ -68,26 +73,29 @@ pub struct Tree {
 pub(super) struct FoldProgress {
     /// The next view row to place.
     next: usize,
-    /// The previous key's prefix segments, and the current key's: two
-    /// buffers swapped per key, so the fold allocates no per-key `Vec`.
-    previous: Vec<(u32, u16)>,
-    segments: Vec<(u32, u16)>,
-    /// Row indices of the currently-open ancestor Group rows.
-    open_groups: Vec<usize>,
-    /// Descendant counts, parallel to `rows`, applied in the fix-up pass.
-    counts: Vec<u32>,
+    /// Where the separators sit in the last key placed, as byte positions in
+    /// its name. The next key keeps the ones inside the prefix it shares
+    /// (M6 task 5): one buffer for the whole fold, no per-key `Vec`.
+    seps: Vec<u16>,
+    /// The last key placed, as an arena `(start, len)`: the fallback's
+    /// comparison target when the view carries no LCP.
+    prev: (u32, u16),
+    /// Keys placed so far (hidden ones too).
+    placed: u32,
+    /// The currently-open ancestor Group rows: row index, and `placed` when
+    /// the group opened. A group's descendant count is `placed` at the
+    /// moment it closes minus `placed` at the moment it opened, so no
+    /// per-key pass touches every open group.
+    open_groups: Vec<(usize, u32)>,
     /// `Some(cursor)` once every key is placed: the next row to fix up.
     fixup: Option<usize>,
 }
 
 impl FoldProgress {
-    /// Heap bytes the loop state holds: chiefly the descendant counts, which
-    /// run parallel to the rows.
+    /// Heap bytes the loop state holds.
     pub(super) fn heap_bytes(&self) -> usize {
-        self.counts.capacity() * std::mem::size_of::<u32>()
-            + self.open_groups.capacity() * std::mem::size_of::<usize>()
-            + (self.previous.capacity() + self.segments.capacity())
-                * std::mem::size_of::<(u32, u16)>()
+        self.open_groups.capacity() * std::mem::size_of::<(usize, u32)>()
+            + self.seps.capacity() * std::mem::size_of::<u16>()
     }
 }
 
@@ -104,6 +112,7 @@ impl Tree {
         Self {
             rows: Vec::new(),
             collapsed: HashSet::new(),
+            collapsed_lens: Vec::new(),
             irregular: 0,
             inverse: Vec::new(),
             separator,
@@ -165,6 +174,9 @@ impl Tree {
             }
             self.collapsed.insert(prefix.to_string());
         }
+        self.collapsed_lens = self.collapsed.iter().map(String::len).collect();
+        self.collapsed_lens.sort_unstable();
+        self.collapsed_lens.dedup();
     }
 
     pub fn is_collapsed(&self, prefix: &str) -> bool {
@@ -180,8 +192,11 @@ impl Tree {
     /// the text, so the same prefix would need a byte comparison per probe
     /// anyway, and the set is a handful of entries, not a column.
     fn prefix_is_collapsed(&self, prefix: &[u8]) -> bool {
+        if self.collapsed.is_empty() {
+            return false;
+        }
         match std::str::from_utf8(prefix) {
-            Ok(s) => self.collapsed.contains(s),
+            Ok(s) => self.collapsed_lens.contains(&s.len()) && self.collapsed.contains(s),
             Err(_) => self.collapsed.contains(&*String::from_utf8_lossy(prefix)),
         }
     }
@@ -197,8 +212,9 @@ impl Tree {
     /// cannot disagree.
     pub fn rebuild(&mut self, keys: &LoadedSet, view: &KeyView) {
         let order = view.order();
+        let lcp = view.name_lcp();
         let mut progress = self.fold_begin();
-        while !self.fold_step(keys, order, keys.len(), &mut progress, usize::MAX) {}
+        while !self.fold_step(keys, order, lcp, keys.len(), &mut progress, usize::MAX) {}
     }
 
     /// A tree with this one's collapsed set and separator and no rows: what a
@@ -207,6 +223,7 @@ impl Tree {
         Tree {
             rows: Vec::new(),
             collapsed: self.collapsed.clone(),
+            collapsed_lens: self.collapsed_lens.clone(),
             irregular: self.irregular,
             inverse: Vec::new(),
             separator: self.separator,
@@ -235,15 +252,19 @@ impl Tree {
     }
 
     /// Advance a fold by at most `limit` view rows (then, once every key has
-    /// been placed, `limit` rows of the fix-up pass that writes descendant
-    /// counts and the inverse). Returns whether the fold is finished.
+    /// been placed, `limit` rows of the fix-up pass that writes the inverse).
+    /// Returns whether the fold is finished.
     ///
     /// `order` is the name-ordered view's index vector; `inverse_len` sizes
-    /// the inverse (the Loaded set's length the view covers).
+    /// the inverse (the Loaded set's length the view covers). `lcp`, when the
+    /// view has one, is parallel to `order`: how many bytes each name shares
+    /// with the one before it. Without it the fold measures the shared
+    /// prefix itself, one byte comparison per key.
     pub(super) fn fold_step(
         &mut self,
         keys: &LoadedSet,
         order: &[u32],
+        lcp: Option<&[u32]>,
         inverse_len: usize,
         p: &mut FoldProgress,
         limit: usize,
@@ -252,7 +273,8 @@ impl Tree {
         if p.fixup.is_none() {
             let end = p.next.saturating_add(limit).min(order.len());
             while p.next < end {
-                let index = order[p.next] as usize;
+                let pos = p.next;
+                let index = order[pos] as usize;
                 p.next += 1;
                 let Some(name) = keys.name(index) else {
                     continue;
@@ -260,10 +282,23 @@ impl Tree {
                 let Some(start) = keys.name_offset(index) else {
                     continue;
                 };
-                self.fold_key(keys, p, index, name, start, sep);
+                let shared_bytes = match lcp.and_then(|l| l.get(pos)) {
+                    Some(&l) => l as usize,
+                    None => {
+                        let before = keys.arena_slice(p.prev.0, p.prev.1).unwrap_or(&[]);
+                        common_prefix(before, name)
+                    }
+                };
+                self.fold_key(p, index, name, start, shared_bytes, sep);
             }
             if p.next < order.len() {
                 return false;
+            }
+            // Every group still open closes with the last key.
+            while let Some((row, opened)) = p.open_groups.pop() {
+                if let Row::Group { descendants, .. } = &mut self.rows[row] {
+                    *descendants = p.placed - opened;
+                }
             }
             p.fixup = Some(0);
             self.inverse.clear();
@@ -273,59 +308,72 @@ impl Tree {
         let cursor = p.fixup.unwrap_or(0);
         let end = cursor.saturating_add(limit).min(self.rows.len());
         for i in cursor..end {
-            match &mut self.rows[i] {
-                Row::Group { descendants, .. } => *descendants = p.counts[i],
-                Row::Key { index, .. } => {
-                    if let Some(slot) = self.inverse.get_mut(*index as usize) {
-                        *slot = i as u32;
-                    }
-                }
+            if let Row::Key { index, .. } = self.rows[i]
+                && let Some(slot) = self.inverse.get_mut(index as usize)
+            {
+                *slot = i as u32;
             }
         }
         p.fixup = Some(end);
         end >= self.rows.len()
     }
 
-    /// Place one key: the body of the fold loop.
+    /// Place one key: the body of the fold loop. `shared_bytes` is how many
+    /// leading bytes `name` shares with the previous key's name.
     fn fold_key(
         &mut self,
-        keys: &LoadedSet,
         p: &mut FoldProgress,
         index: usize,
         name: &[u8],
         start: u32,
+        shared_bytes: usize,
         sep: u8,
     ) {
-        split_segments(name, sep, start, &mut p.segments);
+        let lcp = shared_bytes.min(name.len());
         // How many leading segments this key shares with the previous one.
         //
-        // Compared by *bytes*, not by `(offset, len)`: the same prefix text
-        // sits at a different arena offset in every key that carries it, so
-        // comparing handles would find nothing in common and emit a fresh
-        // group header for every single key.
-        let shared = p
-            .segments
-            .iter()
-            .zip(p.previous.iter())
-            .take_while(|((ao, al), (bo, bl))| {
-                keys.arena_slice(*ao, *al) == keys.arena_slice(*bo, *bl)
-            })
-            .count();
-        p.open_groups.truncate(shared);
+        // A segment is shared exactly when its terminating separator lies
+        // inside the shared prefix: both names then carry the same bytes
+        // through that separator, so the segments up to it are equal; and a
+        // separator at or past the LCP ends a segment whose bytes differ
+        // (or whose end is not in the other name). That is the old
+        // segment-by-segment byte comparison, answered from the previous
+        // key's separator positions alone. The same prefix text sits at a
+        // different arena offset in every key that carries it, which is why
+        // this is a *byte* question and never a comparison of `(offset,
+        // len)` handles.
+        let shared = p.seps.iter().take_while(|&&s| (s as usize) < lcp).count();
+        p.seps.truncate(shared);
+        // The shared prefix holds exactly those separators and no others, so
+        // only the bytes from the LCP on need looking at.
+        for (i, &b) in name[lcp..].iter().enumerate() {
+            if b == sep {
+                p.seps.push((lcp + i) as u16);
+            }
+        }
+        p.prev = (start, name.len() as u16);
 
-        // `shared` is a *byte* comparison against `previous`'s full
-        // segment list, which is set below regardless of whether the
-        // matching key actually got rows for every one of those
-        // segments. If it broke early because an ancestor was collapsed,
-        // `previous` still carries every segment past that point — so
-        // the next key in a *different* branch under the same collapsed
-        // ancestor (e.g. `cache:user:…` right after `cache:page:…`, both
-        // hidden under a collapsed `cache:`) can still show `shared >= 1`
-        // purely because their leading bytes coincide, and `depth <
-        // shared` below would then `continue` straight past re-checking
-        // whether `cache:` is collapsed — walking right into creating a
-        // fresh `user:` row underneath a parent marked shut (#reported
-        // as "collapsing cache: leaves one child visible").
+        // Groups that closed with the previous key: their count is final.
+        while p.open_groups.len() > shared {
+            if let Some((row, opened)) = p.open_groups.pop()
+                && let Row::Group { descendants, .. } = &mut self.rows[row]
+            {
+                *descendants = p.placed - opened;
+            }
+        }
+
+        // `shared` says how many segments the *previous key's bytes* have in
+        // common with this one, whether or not the previous key actually got
+        // rows for every one of them. If it broke early because an ancestor
+        // was collapsed, `p.seps` still carries every separator past that
+        // point — so the next key in a *different* branch under the same
+        // collapsed ancestor (e.g. `cache:user:…` right after
+        // `cache:page:…`, both hidden under a collapsed `cache:`) can still
+        // show `shared >= 1` purely because their leading bytes coincide,
+        // and skipping straight to `depth < shared` would walk past
+        // re-checking whether `cache:` is collapsed and create a fresh
+        // `user:` row underneath a parent marked shut (#reported as
+        // "collapsing cache: leaves one child visible").
         //
         // `open_groups` does not have this problem: it only ever holds
         // rows that were actually pushed, so if an ancestor was
@@ -333,34 +381,27 @@ impl Tree {
         // was ever opened past a `break`). Checking it directly is the
         // fix — anything still open and collapsed hides this key's
         // entire remaining subtree, group rows included.
-        let hidden_by_collapsed_ancestor = p.open_groups.last().is_some_and(|&r| {
-            matches!(
-                self.rows[r],
-                Row::Group {
-                    expanded: false,
-                    ..
-                }
-            )
-        });
+        let hidden_by_collapsed_ancestor = self.last_open_is_collapsed(p);
 
         if !hidden_by_collapsed_ancestor {
-            for (depth, (offset, len)) in p.segments.iter().enumerate() {
-                if depth < shared {
-                    continue;
-                }
+            for depth in shared..p.seps.len() {
+                let begin = if depth == 0 {
+                    0
+                } else {
+                    p.seps[depth - 1] as usize + 1
+                };
+                let at = p.seps[depth] as usize;
                 // The prefix through this segment and its separator is a
                 // slice of the key's own name — segments are contiguous.
-                let end = (*offset - start) as usize + *len as usize + 1;
-                let collapsed = self.prefix_is_collapsed(&name[..end]);
+                let collapsed = self.prefix_is_collapsed(&name[..=at]);
                 self.rows.push(Row::Group {
-                    offset: *offset,
-                    len: *len,
+                    offset: start + begin as u32,
+                    len: (at - begin) as u16,
                     depth: depth as u16,
                     descendants: 0,
                     expanded: !collapsed,
                 });
-                p.counts.push(0);
-                p.open_groups.push(self.rows.len() - 1);
+                p.open_groups.push((self.rows.len() - 1, p.placed));
                 if collapsed {
                     // Stop descending: every key under this prefix is
                     // hidden. The collapsed group's own row stays in
@@ -372,26 +413,39 @@ impl Tree {
             }
         }
 
-        // Every ancestor still open at this key's depth gains one
-        // descendant — the group itself if it is collapsed, same as an
-        // expanded one; folding hides rows, not the count of what they
-        // represent.
-        for &g in &p.open_groups {
-            p.counts[g] += 1;
-        }
-
-        // If any ancestor is collapsed, the key itself is not shown.
-        if !self.ancestor_collapsed(name) {
+        // If any ancestor is collapsed, the key itself is not shown. The
+        // groups above stop at the first collapsed prefix, so that prefix
+        // is the last open group exactly when one exists — the same answer
+        // as probing every prefix of the name, without the probes. A
+        // collapsed prefix that does not end in the separator is invisible
+        // to the groups, so while one exists the old per-prefix test runs.
+        let hidden = if self.collapsed.is_empty() {
+            false
+        } else if self.irregular > 0 {
+            self.ancestor_collapsed(name)
+        } else {
+            self.last_open_is_collapsed(p)
+        };
+        if !hidden {
             self.rows.push(Row::Key {
                 index: index as u32,
-                depth: p.segments.len() as u16,
+                depth: p.seps.len() as u16,
             });
-            // `counts` is indexed the same as `rows`, so every push to one
-            // needs a push to the other — this entry is never read back
-            // (only `Row::Group` rows are), it just keeps the two in step.
-            p.counts.push(0);
         }
-        std::mem::swap(&mut p.previous, &mut p.segments);
+        p.placed += 1;
+    }
+
+    /// Whether the innermost open group is a collapsed one.
+    fn last_open_is_collapsed(&self, p: &FoldProgress) -> bool {
+        p.open_groups.last().is_some_and(|&(r, _)| {
+            matches!(
+                self.rows[r],
+                Row::Group {
+                    expanded: false,
+                    ..
+                }
+            )
+        })
     }
 
     /// Whether any collapsed prefix is a prefix of `name`. One set probe per
@@ -412,22 +466,22 @@ impl Tree {
     }
 }
 
-/// Split a key name into arena-relative `(offset, len)` segments.
-///
-/// The trailing segment (the leaf) is excluded: it is the key itself, not a
-/// group. `a:b:c` yields the groups `a` and `b`.
-///
-/// Writes into a caller-owned buffer (cleared first) so the per-key loop in
-/// [`Tree::rebuild`] reuses two allocations for the whole pass.
-fn split_segments(name: &[u8], sep: u8, arena_start: u32, out: &mut Vec<(u32, u16)>) {
-    out.clear();
-    let mut begin = 0usize;
-    for (i, b) in name.iter().enumerate() {
-        if *b == sep {
-            out.push((arena_start + begin as u32, (i - begin) as u16));
-            begin = i + 1;
+/// How many leading bytes `a` and `b` share.
+fn common_prefix(a: &[u8], b: &[u8]) -> usize {
+    let m = a.len().min(b.len());
+    let mut i = 0;
+    while i + 8 <= m {
+        let x = u64::from_le_bytes(a[i..i + 8].try_into().unwrap_or([0; 8]));
+        let y = u64::from_le_bytes(b[i..i + 8].try_into().unwrap_or([0; 8]));
+        if x != y {
+            return i + ((x ^ y).trailing_zeros() / 8) as usize;
         }
+        i += 8;
     }
+    while i < m && a[i] == b[i] {
+        i += 1;
+    }
+    i
 }
 
 #[cfg(test)]
@@ -859,5 +913,323 @@ mod tests {
                 assert_eq!(tree.row_of(index), linear, "index {index}, set {set:?}");
             }
         }
+    }
+
+    // ── LCP-driven fold (M6 task 5, docs/plans/m6-fast-fold.md) ─────────────
+
+    /// The fold exactly as it was before task 5: split every key into
+    /// segments, compare them with the previous key's byte by byte, probe the
+    /// collapsed set once per separator. Kept verbatim as the oracle the LCP
+    /// fold must equal for every separator, including a multi-byte one
+    /// (truncated to its low byte, as `Tree` always did).
+    fn legacy_rows(tree: &Tree, keys: &LoadedSet, view: &KeyView) -> Vec<Row> {
+        let sep = tree.separator as u8;
+        let split = |name: &[u8], start: u32| {
+            let mut out: Vec<(u32, u16)> = Vec::new();
+            let mut begin = 0usize;
+            for (i, b) in name.iter().enumerate() {
+                if *b == sep {
+                    out.push((start + begin as u32, (i - begin) as u16));
+                    begin = i + 1;
+                }
+            }
+            out
+        };
+        let mut rows: Vec<Row> = Vec::new();
+        let mut counts: Vec<u32> = Vec::new();
+        let mut open_groups: Vec<usize> = Vec::new();
+        let mut previous: Vec<(u32, u16)> = Vec::new();
+        for pos in 0..view.len() {
+            let index = view.order()[pos] as usize;
+            let (Some(name), Some(start)) = (keys.name(index), keys.name_offset(index)) else {
+                continue;
+            };
+            let segments = split(name, start);
+            let shared = segments
+                .iter()
+                .zip(previous.iter())
+                .take_while(|((ao, al), (bo, bl))| {
+                    keys.arena_slice(*ao, *al) == keys.arena_slice(*bo, *bl)
+                })
+                .count();
+            open_groups.truncate(shared);
+            let hidden = open_groups.last().is_some_and(|&r| {
+                matches!(
+                    rows[r],
+                    Row::Group {
+                        expanded: false,
+                        ..
+                    }
+                )
+            });
+            if !hidden {
+                for (depth, (offset, len)) in segments.iter().enumerate() {
+                    if depth < shared {
+                        continue;
+                    }
+                    let end = (*offset - start) as usize + *len as usize + 1;
+                    let collapsed = tree.prefix_is_collapsed(&name[..end]);
+                    rows.push(Row::Group {
+                        offset: *offset,
+                        len: *len,
+                        depth: depth as u16,
+                        descendants: 0,
+                        expanded: !collapsed,
+                    });
+                    counts.push(0);
+                    open_groups.push(rows.len() - 1);
+                    if collapsed {
+                        break;
+                    }
+                }
+            }
+            for &g in &open_groups {
+                counts[g] += 1;
+            }
+            if !tree.ancestor_collapsed(name) {
+                rows.push(Row::Key {
+                    index: index as u32,
+                    depth: segments.len() as u16,
+                });
+                counts.push(0);
+            }
+            previous = segments;
+        }
+        for (i, row) in rows.iter_mut().enumerate() {
+            if let Row::Group { descendants, .. } = row {
+                *descendants = counts[i];
+            }
+        }
+        rows
+    }
+
+    /// Fold with an explicit LCP column (or none), slice by slice.
+    fn fold_with(
+        tree: &Tree,
+        keys: &LoadedSet,
+        view: &KeyView,
+        lcp: Option<&[u32]>,
+        slice: usize,
+    ) -> Tree {
+        let mut out = tree.shell();
+        let mut p = out.fold_begin();
+        while !out.fold_step(keys, view.order(), lcp, keys.len(), &mut p, slice) {}
+        out
+    }
+
+    fn brute_lcp(keys: &LoadedSet, view: &KeyView) -> Vec<u32> {
+        (0..view.len())
+            .map(|r| {
+                if r == 0 {
+                    return 0;
+                }
+                let a = keys.name(view.order()[r - 1] as usize).unwrap();
+                let b = keys.name(view.order()[r] as usize).unwrap();
+                a.iter().zip(b).take_while(|(x, y)| x == y).count() as u32
+            })
+            .collect()
+    }
+
+    struct Xs(u64);
+    impl Xs {
+        fn below(&mut self, n: usize) -> usize {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            (self.0 % n as u64) as usize
+        }
+    }
+
+    /// Names shaped to hit every boundary: empty segments, a trailing
+    /// separator, no separator, a key that is a prefix of its neighbour,
+    /// duplicate-prefix segments, and raw bytes (the separator's own low
+    /// byte, and invalid UTF-8).
+    fn random_names(rng: &mut Xs, sep: char, n: usize) -> LoadedSet {
+        let sep_byte = sep as u32 as u8;
+        let words: [&[u8]; 9] = [
+            b"a", b"ab", b"abc", b"b", b"", b"cache", b"user", b"\xff", b"1",
+        ];
+        let mut keys = LoadedSet::default();
+        for _ in 0..n {
+            let mut name: Vec<u8> = Vec::new();
+            let segs = rng.below(5);
+            for s in 0..segs {
+                if s > 0 {
+                    name.push(sep_byte);
+                }
+                name.extend_from_slice(words[rng.below(words.len())]);
+            }
+            match rng.below(6) {
+                0 => name.push(sep_byte),
+                1 => name.extend_from_slice(b"zz"),
+                _ => {}
+            }
+            keys.push(&name);
+        }
+        keys
+    }
+
+    fn prefixes_of(keys: &LoadedSet, sep: u8, rng: &mut Xs, count: usize) -> Vec<String> {
+        let mut out = Vec::new();
+        for _ in 0..count {
+            let name = keys.name(rng.below(keys.len())).unwrap();
+            let seps: Vec<usize> = (0..name.len()).filter(|&i| name[i] == sep).collect();
+            if seps.is_empty() {
+                continue;
+            }
+            let at = seps[rng.below(seps.len())];
+            let mut prefix = String::from_utf8_lossy(&name[..=at]).into_owned();
+            // An occasional prefix that does not end in the separator.
+            if rng.below(8) == 0 {
+                prefix.pop();
+            }
+            out.push(prefix);
+        }
+        out
+    }
+
+    #[test]
+    fn the_lcp_fold_equals_the_legacy_fold_for_every_separator_and_collapsed_set() {
+        let mut rng = Xs(0x9e37_79b9_7f4a_7c15);
+        for case in 0..400 {
+            let sep = [':', '/', '.', '\u{e9}', '\u{2192}'][case % 5];
+            let n = 1 + rng.below(60);
+            let keys = random_names(&mut rng, sep, n);
+            let mut view = KeyView::new("", crate::state::FilterMode::Glob, SortBy::Name);
+            view.rebuild(&keys);
+            let lcp = view
+                .name_lcp()
+                .expect("a Name-sorted rebuild carries an LCP");
+            assert_eq!(lcp, brute_lcp(&keys, &view), "case {case}: view lcp");
+            for round in 0..4 {
+                let mut tree = Tree::new(sep);
+                if round > 0 {
+                    for prefix in prefixes_of(&keys, sep as u32 as u8, &mut rng, round) {
+                        tree.toggle(&prefix);
+                    }
+                }
+                let want = legacy_rows(&tree, &keys, &view);
+                for (what, got) in [
+                    (
+                        "view lcp",
+                        fold_with(&tree, &keys, &view, Some(lcp), usize::MAX),
+                    ),
+                    (
+                        "view lcp, slices",
+                        fold_with(&tree, &keys, &view, Some(lcp), 3),
+                    ),
+                    ("no lcp", fold_with(&tree, &keys, &view, None, usize::MAX)),
+                    ("no lcp, slices", fold_with(&tree, &keys, &view, None, 2)),
+                ] {
+                    assert_eq!(got.rows, want, "case {case}.{round} sep {sep:?}: {what}");
+                    for index in 0..keys.len() {
+                        let linear = want.iter().position(
+                            |r| matches!(r, Row::Key { index: i, .. } if *i as usize == index),
+                        );
+                        assert_eq!(got.row_of(index), linear, "case {case}.{round}: inverse");
+                    }
+                }
+            }
+        }
+    }
+
+    /// The reported shape: with `cache:` shut, the next key under `cache:user:`
+    /// shares leading bytes with the hidden `cache:page:` keys and must not
+    /// grow a visible child.
+    #[test]
+    fn the_cache_user_regression_holds_with_an_lcp() {
+        let (keys, view, mut tree) = built(&[
+            "cache:page:1",
+            "cache:page:2",
+            "cache:user:1",
+            "cache:user:2",
+            "feed:x",
+        ]);
+        tree.toggle("cache:");
+        let want = legacy_rows(&tree, &keys, &view);
+        let got = fold_with(&tree, &keys, &view, view.name_lcp(), usize::MAX);
+        assert_eq!(got.rows, want);
+        assert_eq!(
+            rendered(&keys, &got),
+            ["cache: (4)", "feed: (1)", "  feed:x"]
+        );
+        tree.toggle("cache:");
+        tree.toggle("cache:user:");
+        let got = fold_with(&tree, &keys, &view, view.name_lcp(), usize::MAX);
+        assert_eq!(got.rows, legacy_rows(&tree, &keys, &view));
+        assert_eq!(
+            rendered(&keys, &got),
+            [
+                "cache: (4)",
+                "  page: (2)",
+                "    cache:page:1",
+                "    cache:page:2",
+                "  user: (2)",
+                "feed: (1)",
+                "  feed:x"
+            ]
+        );
+    }
+
+    /// A boundary exactly at the LCP: `a:b` then `a:c` share `a:` (the
+    /// separator is inside the prefix), `ab` then `a:` share only `a`.
+    #[test]
+    fn a_separator_at_the_lcp_boundary_counts_only_when_inside_the_shared_prefix() {
+        for names in [
+            vec!["a:b", "a:c"],
+            vec!["a", "a:"],
+            vec!["a:", "a:b"],
+            vec!["a:b", "a:b:c"],
+            vec!["a::b", "a::c", "a:b"],
+            vec!["a:b:", "a:b:c"],
+            vec!["", ":", "::", ":a"],
+        ] {
+            let (keys, view, tree) = built(&names);
+            let got = fold_with(&tree, &keys, &view, view.name_lcp(), usize::MAX);
+            assert_eq!(got.rows, legacy_rows(&tree, &keys, &view), "{names:?}");
+        }
+    }
+
+    #[test]
+    fn narrowing_keeps_the_lcp_column_exact() {
+        let mut rng = Xs(77);
+        for case in 0..200 {
+            let n = 2 + rng.below(80);
+            let keys = random_names(&mut rng, ':', n);
+            let mut view = KeyView::new("", crate::state::FilterMode::Glob, SortBy::Name);
+            view.rebuild(&keys);
+            for text in ["a", "ab", "ab:"] {
+                view.filter = text.to_string();
+                if !view.can_narrow(keys.len()) {
+                    continue;
+                }
+                view.narrow(&keys);
+                assert_eq!(
+                    view.name_lcp().expect("narrowed view keeps its LCP"),
+                    brute_lcp(&keys, &view),
+                    "case {case} filter {text:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn only_a_name_sorted_order_carries_an_lcp() {
+        let mut keys = LoadedSet::default();
+        for n in ["b:1", "a:1", "a:2"] {
+            keys.push(n.as_bytes());
+        }
+        let mut view = KeyView::new("", crate::state::FilterMode::Glob, SortBy::Scan);
+        view.rebuild(&keys);
+        assert!(view.name_lcp().is_none());
+        view.sort = SortBy::Name;
+        view.rebuild(&keys);
+        assert_eq!(view.name_lcp(), Some(&[0, 2, 0][..]));
+        keys.push(b"a:3");
+        view.sort = SortBy::Scan;
+        view.rebuild(&keys);
+        keys.push(b"a:4");
+        view.extend(&keys, 4);
+        assert!(view.name_lcp().is_none());
     }
 }

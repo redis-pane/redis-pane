@@ -106,6 +106,14 @@ pub struct KeyView {
     /// beside the field it mirrors means no caller can change one and forget
     /// the other.
     inverse: Vec<u32>,
+    /// For a Name-sorted `order`: how many bytes each row's name shares with
+    /// the row before it (0 for row 0), the sort's by-product (M6 task 5,
+    /// `docs/plans/m6-fast-fold.md`). Parallel to `order`, so it lives and
+    /// dies with it: set wherever a Name order is built or installed,
+    /// patched by `narrow`, cleared by `extend`. Empty for any other sort.
+    /// Read through [`KeyView::name_lcp`], which refuses it unless it is
+    /// exactly as long as `order`.
+    lcp: Vec<u32>,
     applied: Option<Applied>,
     pub filter: String,
     pub mode: FilterMode,
@@ -121,6 +129,7 @@ impl KeyView {
         Self {
             order: Vec::new(),
             inverse: Vec::new(),
+            lcp: Vec::new(),
             applied: None,
             filter: filter.into(),
             mode,
@@ -138,6 +147,17 @@ impl KeyView {
         &self.order
     }
 
+    /// The LCP column for the fold, when the order is Name-sorted and the
+    /// column is exactly as long as it. `None` makes the fold measure the
+    /// shared prefixes itself.
+    pub(super) fn name_lcp(&self) -> Option<&[u32]> {
+        let name_sorted = self
+            .applied
+            .as_ref()
+            .is_some_and(|a| a.sort == SortBy::Name);
+        (name_sorted && self.lcp.len() == self.order.len()).then_some(self.lcp.as_slice())
+    }
+
     /// How many Loaded set keys the order was built or extended over (zero
     /// before any build).
     pub fn covered_len(&self) -> usize {
@@ -151,12 +171,18 @@ impl KeyView {
         &mut self,
         order: Vec<u32>,
         inverse: Vec<u32>,
+        lcp: Vec<u32>,
         known: usize,
         built: (String, FilterMode, SortBy),
         covered: usize,
     ) {
         self.order = order;
         self.inverse = inverse;
+        self.lcp = if built.2 == SortBy::Name {
+            lcp
+        } else {
+            Vec::new()
+        };
         self.known = known;
         self.applied = Some(Applied {
             filter: built.0,
@@ -176,7 +202,8 @@ impl KeyView {
     /// `View` alongside [`LoadedSet::heap_bytes`](super::loaded::LoadedSet::heap_bytes),
     /// which only covers the arena itself.
     pub fn heap_bytes(&self) -> usize {
-        (self.order.capacity() + self.inverse.capacity()) * std::mem::size_of::<u32>()
+        (self.order.capacity() + self.inverse.capacity() + self.lcp.capacity())
+            * std::mem::size_of::<u32>()
     }
 
     /// The row a Loaded set index is shown at, if the filter lets it through.
@@ -251,7 +278,7 @@ impl KeyView {
                 self.order.push(i as u32);
             }
         }
-        self.apply_sort(keys);
+        self.lcp = self.apply_sort(keys);
         self.rebuild_inverse(keys.len());
         self.applied = Some(Applied {
             filter: self.filter.clone(),
@@ -309,19 +336,34 @@ impl KeyView {
             .is_some_and(|a| a.filter == self.filter);
         if !unchanged {
             let mut kept = 0usize;
+            // Two names' LCP is the minimum of the adjacent LCPs between
+            // them, so dropping rows keeps the column exact: a kept row's
+            // new LCP is the running minimum since the last kept row.
+            let has_lcp = self.lcp.len() == self.order.len();
+            let mut run = u32::MAX;
             for row in 0..self.order.len() {
                 let i = self.order[row];
+                if has_lcp {
+                    run = run.min(self.lcp[row]);
+                }
                 let keep = self.filter.is_empty()
                     || keys
                         .name(i as usize)
                         .is_some_and(|name| matches(name, &self.filter, self.mode));
                 if keep {
                     self.order[kept] = i;
+                    if has_lcp {
+                        self.lcp[kept] = if kept == 0 { 0 } else { run };
+                        run = u32::MAX;
+                    }
                     self.inverse[i as usize] = kept as u32;
                     kept += 1;
                 } else {
                     self.inverse[i as usize] = NO_ROW;
                 }
+            }
+            if has_lcp {
+                self.lcp.truncate(kept);
             }
             self.order.truncate(kept);
         }
@@ -352,6 +394,9 @@ impl KeyView {
             SortBy::Scan,
             "extend is only correct in scan order; other sorts need a rebuild"
         );
+        // Scan order has no LCP; a column left over from an earlier Name
+        // order would no longer be parallel to `order`.
+        self.lcp.clear();
         // Rows are only ever appended, so existing inverse entries stay
         // valid; the new tail starts as "filtered out" and is set below.
         self.inverse.resize(keys.len(), NO_ROW);
@@ -378,7 +423,9 @@ impl KeyView {
         self.known = self.order.len();
     }
 
-    fn apply_sort(&mut self, keys: &LoadedSet) {
+    /// Sort `order` by `sort`. Returns the Name sort's LCP column, empty for
+    /// every other sort.
+    fn apply_sort(&mut self, keys: &LoadedSet) -> Vec<u32> {
         self.known = match self.sort {
             SortBy::Scan | SortBy::Name => self.order.len(),
             SortBy::Ttl => self
@@ -404,7 +451,7 @@ impl KeyView {
                 // The record sort (M6 task 4): byte order of the names, equal
                 // names in index order, which is what the stable `sort_by`
                 // over an ascending order gave.
-                super::sort::sort_by_name(keys, &mut self.order);
+                return super::sort::sort_by_name(keys, &mut self.order);
             }
             // For every lazily-fetched column the rule is the same: order what
             // arrived, park the unknowns at the end in scan order, and say how
@@ -415,6 +462,7 @@ impl KeyView {
             SortBy::Size => self.sort_by_lazy(|i| keys.size(i)),
             SortBy::Kind => self.sort_by_lazy(|i| keys.kind(i).map(|k| k as u8)),
         }
+        Vec::new()
     }
 
     fn sort_by_lazy<T: Ord, F: Fn(usize) -> Option<T>>(&mut self, value: F) {
