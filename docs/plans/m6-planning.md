@@ -1,6 +1,6 @@
 # M6: rebuilds at real SCAN order. Task plan
 
-Status: **tasks 1-5 done** (PR #78, PR #79, PR #80, PR #81, PR #82; task 5 pending merge). The design and analysis are in
+Status: **tasks 1-6 done** (PR #78, PR #79, PR #80, PR #81, PR #82, PR #83; tasks 5 and 6 pending merge). The design and analysis are in
 [`m6-perf-rebuild.md`](m6-perf-rebuild.md). This file splits it into tasks in the M5 shape: one
 plan doc per task, one Sonnet subagent run per task, each merged before the next starts.
 
@@ -20,7 +20,7 @@ plan doc per task, one Sonnet subagent run per task, each merged before the next
 | 3 | Sliced rebuild job ([`m6-rebuild-job.md`](m6-rebuild-job.md)) | No `update` exceeds 16 ms at 1M random-order keys. A large rebuild runs as a resumable `RebuildJob`, the old list stays usable with `rebuilding N%`, and the new list is swapped in. User actions replace a job; scan pages mark it dirty. Small rebuilds stay synchronous, so every existing test and golden is unchanged |
 | 4 | Fast name sort ([`m6-fast-sort.md`](m6-fast-sort.md)) | Name sort at 1M deep random order takes ≤ 80 ms total, via a sort-prefix column and a record sort that refines ties by gathering. A measured go or no-go on a persistent name order is recorded |
 | 5 | Fast fold ([`m6-fast-fold.md`](m6-fast-fold.md)) | The fold takes ≤ 60 ms total at 1M deep random order, using the sort's LCP plus a gather or prefetch pass. Tree toggle shows its list within 250 ms total |
-| 6 | Filter fast path ([`m6-filter-fast-path.md`](m6-filter-fast-path.md)) | **Gated.** Built only if, after tasks 3–5, the filter pass is the longest stage left. It is a case-insensitive substring search over the arena, with hits mapped back to keys |
+| 6 | Filter fast path ([`m6-filter-fast-path.md`](m6-filter-fast-path.md)) | **Done (PR #83).** Was gated: built only if, after tasks 3–5, the filter pass is the longest stage left. It is a case-insensitive substring search over the arena, with hits mapped back to keys |
 | 7 | Close out M6 ([`m6-close-out.md`](m6-close-out.md)) | The docs and known limits are updated, the version is bumped, and the release is cut after confirmation |
 
 ## Order and gating

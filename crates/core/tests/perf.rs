@@ -533,11 +533,11 @@ fn time_to_new_list_filter_rebuild(fx: Fixture, ceil_ms: u64) {
         "[{}] time-to-new-list (to the swap), debounced filter rebuild @ 1M keys: {elapsed:?}",
         fx.label()
     );
-    // CEILING. M6 task 6: ~13ms local / ~17ms CI, was ~40 / ~36-64.
+    // CEILING. M6 task 6: ~13ms local / 17-18ms CI (ceiling 1.5x slowest of 2 runs), was ~40 / ~36-64.
     assert_budget("time-to-new-list (filter rebuild)", elapsed, ceil_ms);
 }
 variants!(time_to_new_list_filter_rebuild:
-    time_to_new_list_filter_rebuild_random_deep => (Fixture::RandomDeep, 26));
+    time_to_new_list_filter_rebuild_random_deep => (Fixture::RandomDeep, 28));
 
 // ── (c) sort change ──────────────────────────────────────────────────────
 
