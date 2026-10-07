@@ -14,9 +14,10 @@
 
 use std::cmp::Ordering;
 
+use super::search::filter_range;
 use super::sort::NameSorter;
 use super::tree::{FoldProgress, NO_ROW};
-use super::view::{has_sort_value, matches, order_cmp};
+use super::view::{has_sort_value, order_cmp};
 use super::{FilterMode, KeyView, LoadedSet, SortBy, State, Tree};
 
 /// Keys (or output positions) one step of a rebuild job handles.
@@ -321,18 +322,13 @@ impl RebuildJob {
     fn filter_step(&mut self, keys: &LoadedSet) {
         let end = (self.cursor + self.slice).min(self.covered);
         let lazy = self.sort.is_lazy();
-        for i in self.cursor..end {
-            let keep = self.filter.is_empty()
-                || keys
-                    .name(i)
-                    .is_some_and(|name| matches(name, &self.filter, self.mode));
-            if keep {
-                self.order.push(i as u32);
-                if lazy && has_sort_value(keys, self.sort, i) {
-                    self.known += 1;
-                }
+        let (order, known, sort) = (&mut self.order, &mut self.known, self.sort);
+        filter_range(keys, &self.filter, self.mode, self.cursor, end, |i| {
+            order.push(i as u32);
+            if lazy && has_sort_value(keys, sort, i) {
+                *known += 1;
             }
-        }
+        });
         self.cursor = end;
         if self.cursor >= self.covered {
             if !lazy {
