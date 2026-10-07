@@ -57,8 +57,9 @@
 //! and the figure these tests assert is the **worst single `update`**: the
 //! trigger and each `Msg::RebuildStep`, timed on its own (`Profile`). That is
 //! the claim the milestone makes, "no frame waits on a rebuild", and it is
-//! held at 16ms (AT TARGET): the slowest step is about 8-9ms on a laptop and on
-//! CI, so the 1.5x rule lands under the target. The worst update across the
+//! held at 16ms (AT TARGET): the slowest step was about 8-9ms on a laptop and on
+//! CI after task 3 and is 1-3ms since task 5's fast fold, so the 1.5x rule lands
+//! well under the target. The worst update across the
 //! runs is printed beside the median so a noisy runner is visible in the log.
 
 use std::sync::OnceLock;
@@ -309,6 +310,22 @@ impl Profile {
     }
 }
 
+impl Profile {
+    /// The summed time of each stage that ran, in stage order: which stage
+    /// is the longest, which is what decides whether a stage is worth a
+    /// faster path (M6 task 6's gate).
+    fn stage_totals(&self) -> Vec<(&'static str, Duration)> {
+        let mut out: Vec<(&'static str, Duration)> = Vec::new();
+        for (name, d) in &self.steps {
+            match out.iter_mut().find(|(n, _)| n == name) {
+                Some((_, t)) => *t += *d,
+                None => out.push((name, *d)),
+            }
+        }
+        out
+    }
+}
+
 /// Run `msg` against a clone of `base` and then step any job it started to the
 /// swap, timing every update.
 fn profile_once(base: &State, msg: Msg) -> Profile {
@@ -351,6 +368,7 @@ fn profile(base: &State, n: usize, msg: impl Fn() -> Msg) -> Profile {
         median.to_swap,
         median.worst_per_stage(),
     );
+    println!("    stage totals {:?}", median.stage_totals());
     median
 }
 
@@ -614,7 +632,9 @@ fn time_to_new_list_tree_toggle(fx: Fixture, ceil_ms: u64) {
     assert_budget("time-to-new-list (tree toggle)", elapsed, ceil_ms);
 }
 variants!(time_to_new_list_tree_toggle:
-    time_to_new_list_tree_toggle_random_deep => (Fixture::RandomDeep, 575));
+    // CEILING: 1.5x the slowest of three CI runs (194ms) = 292, M6 task 5. The
+    // goal is <= 250ms; local runs are 108-115ms.
+    time_to_new_list_tree_toggle_random_deep => (Fixture::RandomDeep, 292));
 
 // ── (d2) collapse / expand one top-level group, fold alone, sort alone ──
 
@@ -681,7 +701,8 @@ fn time_to_new_list_collapse(fx: Fixture, ceil_ms: u64) {
     assert_budget("time-to-new-list (collapse)", elapsed, ceil_ms);
 }
 variants!(time_to_new_list_collapse:
-    time_to_new_list_collapse_random_deep => (Fixture::RandomDeep, 290));
+    // CEILING: 1.5x the slowest of three CI runs (36ms) = 55, M6 task 5.
+    time_to_new_list_collapse_random_deep => (Fixture::RandomDeep, 55));
 
 fn fold_alone(fx: Fixture, ceil_ms: u64) {
     // `Tree::rebuild` over a name-sorted KeyView, nothing else.
@@ -700,13 +721,14 @@ fn fold_alone(fx: Fixture, ceil_ms: u64) {
         "[{}] fold alone (Tree::rebuild over a name-sorted view) @ 1M keys: {elapsed:?} ({rows} rows)",
         fx.label()
     );
-    // M6 task 5 target: <= 60ms. CEILING.
+    // M6 task 5 target: <= 60ms local (met: 27-33ms; CI 37-48ms). CEILING: 1.5x the
+    // slowest of three CI runs (sorted 26ms, random_flat 48ms, random_deep 45ms).
     assert_budget("fold alone", elapsed, ceil_ms);
 }
 variants!(fold_alone:
-    fold_alone_at_1m_keys => (Fixture::Sorted, 75),
-    fold_alone_at_1m_keys_random_flat => (Fixture::RandomFlat, 248),
-    fold_alone_at_1m_keys_random_deep => (Fixture::RandomDeep, 333));
+    fold_alone_at_1m_keys => (Fixture::Sorted, 40),
+    fold_alone_at_1m_keys_random_flat => (Fixture::RandomFlat, 73),
+    fold_alone_at_1m_keys_random_deep => (Fixture::RandomDeep, 68));
 
 fn name_sort_alone(fx: Fixture, ceil_ms: u64) {
     // `KeyView::rebuild` with SortBy::Name and no filter, nothing else.
@@ -935,12 +957,13 @@ fn whole_scan_fold(fx: Fixture, budget: ScanBudget) {
 fn whole_scan_fold_in_tree_mode_from_empty() {
     // Sorted control. Before M4 task 3 this took ~120s; ~0.4s now. Worst
     // update (a page or a job step): 2.3ms local, 3.9ms CI; AT TARGET 16ms
-    // since M6 task 3. Total gate 10s.
+    // since M6 task 3. Total gate 2s since M6 task 5: 242-345ms on CI, 1.5x
+    // the slowest rounded up to a whole second.
     whole_scan_fold(
         Fixture::Sorted,
         ScanBudget {
             worst_ms: 16,
-            total_s: 10,
+            total_s: 2,
         },
     );
 }
@@ -949,14 +972,14 @@ fn whole_scan_fold_in_tree_mode_from_empty() {
 #[ignore]
 fn whole_scan_fold_in_tree_mode_from_empty_random_deep() {
     // AT TARGET since M6 task 3: the worst update, page or job step, was up to
-    // 479ms before and is 9.4ms local, 9.2ms CI now, with no update over
-    // 16ms. Total gate: 3.55s on CI x 1.5, rounded up = 6s (the scan now also
-    // runs the job steps between pages, so it does more work than before).
+    // 479ms before, 9.4ms local and 9.2ms CI after task 3, and 1.8ms local,
+    // 2.9ms CI after task 5, with no update over 16ms. Total gate since M6 task 5: 548-825ms on CI (worst page 2.4-2.9ms),
+    // x 1.5 = 1.24s, rounded up to a whole second = 2s. Was 6s (3.55s on CI).
     whole_scan_fold(
         Fixture::RandomDeep,
         ScanBudget {
             worst_ms: 16,
-            total_s: 6,
+            total_s: 2,
         },
     );
 }
