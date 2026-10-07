@@ -73,7 +73,7 @@ fn tied(a: Rec, b: Rec) -> bool {
 
 /// Resumable merge over `recs[lo..hi]`: sorted chunks of `slice` merged
 /// pairwise, bottom-up, ping-ponging between the two buffers.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct RangeSort {
     lo: usize,
     hi: usize,
@@ -82,7 +82,7 @@ struct RangeSort {
     flipped: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum RangePhase {
     /// Sorting chunks of `recs[lo..hi]` in place; `next` is the next start.
     Chunks {
@@ -91,7 +91,7 @@ enum RangePhase {
     Merge(MergePass),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct MergePass {
     width: usize,
     /// Output position (absolute).
@@ -205,7 +205,7 @@ impl RangeSort {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum Phase {
     /// Filling records from the prefix column and sorting each chunk.
     Fill {
@@ -227,7 +227,7 @@ enum Phase {
 }
 
 /// A tied run too large for one step: gathered, then sorted by [`RangeSort`].
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct Big {
     run: Run,
     /// Next position to gather; at `hi` the sort has started.
@@ -236,7 +236,7 @@ struct Big {
 }
 
 /// The Name sort as a resumable state machine. See the module docs.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct NameSorter {
     n: usize,
     slice: usize,
@@ -279,7 +279,6 @@ impl NameSorter {
     }
 
     /// Bytes per position the sorter holds beside the order.
-    #[allow(dead_code)] // wired by the rebuild job (phase 3)
     pub(super) fn heap_bytes(&self) -> usize {
         (self.recs.capacity() + self.scratch.capacity()) * std::mem::size_of::<Rec>()
             + self.lcp.capacity() * 4
@@ -293,7 +292,6 @@ impl NameSorter {
     }
 
     /// Coarse progress, 0 to 1, for the `rebuilding N%` readout.
-    #[allow(dead_code)] // wired by the rebuild job (phase 3)
     pub(super) fn fraction(&self) -> f32 {
         let n = self.n.max(1) as f32;
         match &self.phase {
@@ -314,7 +312,6 @@ impl NameSorter {
         }
     }
 
-    #[allow(dead_code)] // wired by the rebuild job (phase 3)
     fn merge_fraction(&self, r: &RangeSort) -> f32 {
         let len = (r.hi - r.lo).max(1);
         let passes = (len.div_ceil(self.slice))
@@ -331,7 +328,6 @@ impl NameSorter {
     }
 
     /// Which part is next, for the perf suite's per-stage figures.
-    #[allow(dead_code)] // wired by the rebuild job (phase 3)
     pub(super) fn phase_name(&self) -> &'static str {
         match &self.phase {
             Phase::Fill { .. } => "sort chunk",
