@@ -67,6 +67,32 @@ pub struct Tree {
     pub separator: char,
 }
 
+/// How many keys' names the fold loads ahead of placing them.
+///
+/// The fold visits names in *name* order, but the arena holds them in the
+/// order they arrived, so every key is a cache miss, and the fold loop is
+/// too long and too branchy for the core to overlap one key's miss with the
+/// next key's work (a single touch a few keys ahead measured no better than
+/// none, at 1M random deep: 70 ms vs 78). A pass over a chunk of keys that
+/// does nothing but load is a short loop of independent loads, which the
+/// core overlaps dozens at a time; the fold loop then finds its names in
+/// cache. 256 keys is a few KB of lines, resident in L1/L2, and the
+/// measured optimum is flat from 64 to 4096 (M6 task 5, phase 3).
+const TOUCH_CHUNK: usize = 256;
+
+/// A Group row the fold has opened and not yet closed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct OpenGroup {
+    /// Its index in `rows`.
+    row: u32,
+    /// `placed` when it opened.
+    opened: u32,
+    /// Whether it is collapsed, kept here so the per-key "is this key
+    /// hidden" test reads the small open-group stack, not a row that may
+    /// be far back in a 32 MB vector.
+    collapsed: bool,
+}
+
 /// Where a fold has got to: [`Tree::rebuild`]'s loop state as a value, so the
 /// rebuild job can stop after a slice and resume on the next step.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -86,7 +112,7 @@ pub(super) struct FoldProgress {
     /// the group opened. A group's descendant count is `placed` at the
     /// moment it closes minus `placed` at the moment it opened, so no
     /// per-key pass touches every open group.
-    open_groups: Vec<(usize, u32)>,
+    open_groups: Vec<OpenGroup>,
     /// `Some(cursor)` once every key is placed: the next row to fix up.
     fixup: Option<usize>,
 }
@@ -94,7 +120,7 @@ pub(super) struct FoldProgress {
 impl FoldProgress {
     /// Heap bytes the loop state holds.
     pub(super) fn heap_bytes(&self) -> usize {
-        self.open_groups.capacity() * std::mem::size_of::<(usize, u32)>()
+        self.open_groups.capacity() * std::mem::size_of::<OpenGroup>()
             + self.seps.capacity() * std::mem::size_of::<u16>()
     }
 }
@@ -272,8 +298,15 @@ impl Tree {
         let sep = self.separator as u8;
         if p.fixup.is_none() {
             let end = p.next.saturating_add(limit).min(order.len());
+            let mut sink = 0u8;
+            let mut touched_to = p.next;
             while p.next < end {
                 let pos = p.next;
+                if pos >= touched_to {
+                    let hi = (pos + TOUCH_CHUNK).min(end);
+                    sink = sink.wrapping_add(touch_names(keys, order, lcp, pos..hi));
+                    touched_to = hi;
+                }
                 let index = order[pos] as usize;
                 p.next += 1;
                 let Some(name) = keys.name(index) else {
@@ -291,13 +324,15 @@ impl Tree {
                 };
                 self.fold_key(p, index, name, start, shared_bytes, sep);
             }
+            // Keeps the touch pass's loads from being optimised away.
+            std::hint::black_box(sink);
             if p.next < order.len() {
                 return false;
             }
             // Every group still open closes with the last key.
-            while let Some((row, opened)) = p.open_groups.pop() {
-                if let Row::Group { descendants, .. } = &mut self.rows[row] {
-                    *descendants = p.placed - opened;
+            while let Some(g) = p.open_groups.pop() {
+                if let Row::Group { descendants, .. } = &mut self.rows[g.row as usize] {
+                    *descendants = p.placed - g.opened;
                 }
             }
             p.fixup = Some(0);
@@ -346,19 +381,15 @@ impl Tree {
         p.seps.truncate(shared);
         // The shared prefix holds exactly those separators and no others, so
         // only the bytes from the LCP on need looking at.
-        for (i, &b) in name[lcp..].iter().enumerate() {
-            if b == sep {
-                p.seps.push((lcp + i) as u16);
-            }
-        }
+        push_separators(name, lcp, sep, &mut p.seps);
         p.prev = (start, name.len() as u16);
 
         // Groups that closed with the previous key: their count is final.
         while p.open_groups.len() > shared {
-            if let Some((row, opened)) = p.open_groups.pop()
-                && let Row::Group { descendants, .. } = &mut self.rows[row]
+            if let Some(g) = p.open_groups.pop()
+                && let Row::Group { descendants, .. } = &mut self.rows[g.row as usize]
             {
-                *descendants = p.placed - opened;
+                *descendants = p.placed - g.opened;
             }
         }
 
@@ -401,7 +432,11 @@ impl Tree {
                     descendants: 0,
                     expanded: !collapsed,
                 });
-                p.open_groups.push((self.rows.len() - 1, p.placed));
+                p.open_groups.push(OpenGroup {
+                    row: (self.rows.len() - 1) as u32,
+                    opened: p.placed,
+                    collapsed,
+                });
                 if collapsed {
                     // Stop descending: every key under this prefix is
                     // hidden. The collapsed group's own row stays in
@@ -437,15 +472,7 @@ impl Tree {
 
     /// Whether the innermost open group is a collapsed one.
     fn last_open_is_collapsed(&self, p: &FoldProgress) -> bool {
-        p.open_groups.last().is_some_and(|&(r, _)| {
-            matches!(
-                self.rows[r],
-                Row::Group {
-                    expanded: false,
-                    ..
-                }
-            )
-        })
+        p.open_groups.last().is_some_and(|g| g.collapsed)
     }
 
     /// Whether any collapsed prefix is a prefix of `name`. One set probe per
@@ -463,6 +490,76 @@ impl Tree {
         name.iter()
             .enumerate()
             .any(|(i, b)| *b == sep && self.prefix_is_collapsed(&name[..=i]))
+    }
+}
+
+/// Load the two cache lines of each name in `range` the fold will read: the
+/// one holding the first byte past the shared prefix, and the one holding the
+/// last byte. Returns a byte derived from them, only so the loads are used.
+fn touch_names(
+    keys: &LoadedSet,
+    order: &[u32],
+    lcp: Option<&[u32]>,
+    range: std::ops::Range<usize>,
+) -> u8 {
+    let mut sink = 0u8;
+    for pos in range {
+        let (start, len) = keys.span(order[pos] as usize);
+        let shared = lcp
+            .and_then(|l| l.get(pos))
+            .map_or(0, |&l| l as usize)
+            .min(len.saturating_sub(1));
+        for at in [start + shared, start + len.saturating_sub(1)] {
+            sink = sink.wrapping_add(keys.arena_at(at, 1).first().copied().unwrap_or(0));
+        }
+    }
+    sink
+}
+
+/// Append the position of every `sep` byte in `name[from..]` to `out`, eight
+/// bytes at a time. Positions fit `u16`: a name is at most 65535 bytes
+/// (`LoadedSet::push`).
+///
+/// SWAR: XOR with the separator turns its bytes to zero, and the exact
+/// zero-byte test `!(((v & 0x7f..) + 0x7f..) | v | 0x7f..)` sets the high
+/// bit of precisely those bytes (the cheaper `(v - 0x01..) & !v & 0x80..`
+/// can flag a byte above a real hit). Words load little-endian, so the
+/// lowest set bit is the earliest byte on every host. A tail that is not a
+/// whole number of words is covered by one last word that ends at the end
+/// of the name and overlaps the previous one; the bytes already done are
+/// masked off.
+fn push_separators(name: &[u8], from: usize, sep: u8, out: &mut Vec<u16>) {
+    const LO7: u64 = 0x7f7f_7f7f_7f7f_7f7f;
+    let len = name.len();
+    if len < 8 || len - from < 8 {
+        for (i, &b) in name.iter().enumerate().skip(from) {
+            if b == sep {
+                out.push(i as u16);
+            }
+        }
+        return;
+    }
+    let pattern = u64::from_le_bytes([sep; 8]);
+    let hits_at = |at: usize| {
+        let word = name[at..at + 8].try_into().unwrap_or([0; 8]);
+        let v = u64::from_le_bytes(word) ^ pattern;
+        !(((v & LO7) + LO7) | v | LO7)
+    };
+    let mut at = from;
+    while at + 8 <= len {
+        let mut hits = hits_at(at);
+        while hits != 0 {
+            out.push((at + (hits.trailing_zeros() / 8) as usize) as u16);
+            hits &= hits - 1;
+        }
+        at += 8;
+    }
+    if at < len {
+        let mut hits = hits_at(len - 8) & (!0u64 << (8 * (8 - (len - at))));
+        while hits != 0 {
+            out.push((len - 8 + (hits.trailing_zeros() / 8) as usize) as u16);
+            hits &= hits - 1;
+        }
     }
 }
 

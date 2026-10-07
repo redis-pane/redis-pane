@@ -149,3 +149,33 @@ swapped view's column. A mutation (`<` to `<=`) fails two of them. Task 2 and 3 
 First measurement (local, load avg 6.5, noisy): fold alone 207 -> 98 ms; collapse time-to-swap
 183 -> 59 ms; tree toggle time-to-swap 309 -> 181 ms; toggle from Name-sorted flat 99 ms to swap,
 worst step 4.0 ms.
+
+### Phase 3: hiding the per-key miss
+
+Measured at 1M random_deep, Name-sorted view, minimum or median of 5-15 runs, load average 2.6-4.
+(One trap worth recording: a first matrix of these runs was invalid because zsh does not word-split
+`$cfg`, so every run used the default; the numbers below are from the re-run.)
+
+Steps taken before the miss work, each from a profile of the loop: the key pass after phase 2 was
+~88 ms. The SWAR separator search (`push_separators`: 8 bytes per word, exact zero-byte test, one
+overlapping last word, byte loop under 8 bytes) took it to ~80; keeping each open group's collapsed
+flag on the open-group stack instead of reading `rows[r]` (a row up to 47 KB back, per key) took it to
+~69 ms. Both are plain safe Rust.
+
+| Variant | Key pass / fold alone |
+|---|---|
+| none | 69-70 ms |
+| (b) software lookahead: touch the name k ahead inside the loop, k = 4 / 8 / 16 / 32 / 64 | 79 / 80 / 81 / 78 / 78 ms (worse: the touch is an ordinary load that blocks retirement, and the loop body is too long to overlap it) |
+| chunk touch pass (loads only, over the next 64 / 256 / 1024 / 4096 / 16384 keys, then the fold loop) | 29.6 / **28.5** / 29.8 / 30.5 / 35.3 ms |
+| (a) gather: copy each chunk's name tails into one buffer, then scan the buffer (isolated harness: name read + shared + tail scan only) | none 35.0 ms, chunk touch 17.9 ms, **gather 37.0 ms** (chunks of 512 and 4096) |
+| floor: the same fold over an arena stored in name order (no misses) | 16 ms |
+
+Kept: **the chunk touch pass**, a degenerate gather that copies nothing (`touch_names`, chunk of
+256 keys, loads the line at the first byte past the shared prefix and the line with the last byte).
+It is a tight loop of independent loads the core overlaps dozens at a time; the fold loop then reads
+its names from L1/L2. The gather with a copy only added the copy to the same misses, and the in-loop
+lookahead loses. No `unsafe`, no arch intrinsics. The fold lands 12 ms above its no-miss floor.
+
+After phase 3 (local): fold alone 207 -> 27 ms (target 60); collapse time-to-swap 183 -> 19 ms;
+tree toggle time-to-swap 309 -> 108 ms (target 250); toggle from a Name-sorted flat view 225 -> 30 ms;
+worst fold step at slice 32768: 8 ms -> 1.05 ms.
