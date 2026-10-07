@@ -101,6 +101,10 @@ pub async fn start_cluster() -> Cluster {
 }
 
 async fn try_start() -> Result<Cluster, String> {
+    // `--daemonize yes` returns once the server has forked, not once it is
+    // listening, so the script waits for every node to answer PING (30s
+    // each at most) before announcing. Without that, a slow runner reached
+    // `--cluster create` with the last node still binding its port.
     let all = free_ports(12);
     let (ports, bus) = all.split_at(6);
     let script = format!(
@@ -111,6 +115,11 @@ async fn try_start() -> Result<Cluster, String> {
            --cluster-announce-ip 127.0.0.1 --cluster-node-timeout 3000 \
            --bind 0.0.0.0 --protected-mode no --appendonly no --save '' \
            --daemonize yes --logfile /data/$p/log; \
+         done; \
+         for p in {ports}; do n=0; \
+           until redis-cli -p $p ping >/dev/null 2>&1; do \
+             n=$((n+1)); [ $n -gt 300 ] && exit 1; sleep 0.1; \
+           done; \
          done; echo {STARTED}; exec tail -f /dev/null",
         ports = join(ports),
         bus = join(bus),
