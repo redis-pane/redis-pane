@@ -1,6 +1,6 @@
 # M5 task 10: Close out M5
 
-Status: **planned.**
+Status: **done.** Outcome at the end of this document.
 
 ## Context
 
@@ -31,3 +31,27 @@ bumped in the same change.
 
 Docs and metadata only. Every version string agrees. The install URLs resolve once the release
 exists, and the downloaded binary prints the new version.
+
+## Outcome
+
+Built as planned, on 2026-10-07, after tasks 1–9 merged (#67–#75).
+
+- **PLAN.md:** new §7.2 has M5's "Progress: done" narrative, a per-task table and the `fred`
+  10.1.0 findings. The "still unbuilt" line and §8 no longer list Cluster.
+- **PRD:** §9's M5 bullet is marked done. R1.11 and the Cluster non-goal describe what shipped:
+  the merged scan, owner-pinned liveness, owner-routed mutations, the aggregated Dashboard, the
+  merged Slowlog and Monitor, and sharded Pub/Sub.
+- **ADR-0008:** marked resolved. ADR-0021 has said superseded since task 5, and ADR-0022 has been
+  Accepted since task 5.
+- **README and ALPHA:**
+  - The README Status describes Cluster as supported.
+  - ALPHA's "What to try" has covered Cluster since tasks 5–9, and its stale "Slowlog and Monitor
+    not there yet" bullet is removed.
+  - The install URLs moved to `v0.1.0-beta.2`.
+  - The known limits keep M6 (rebuilds at real `SCAN` order) and the M2 leftovers.
+- **`m5-cluster.md` and `m5-planning.md`:** marked done.
+- **Version:** `0.1.0-beta.2` in `Cargo.toml`. The tag goes on the close-out merge commit, after
+  the user confirms.
+- **Stale-wording grep:** I searched README, ALPHA, CLAUDE, CONTEXT, PRD, PLAN, DESIGN and the
+  ADRs for "refused", "ADR-0021", "coming in M5" and "planned as M5". The remaining hits are
+  history: M4's own §7 narrative, ADR-0021 itself, and ADR-0022's account of superseding it.

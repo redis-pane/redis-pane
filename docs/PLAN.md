@@ -300,7 +300,7 @@ large rebuilds sliced across frames — is milestone M6, after the beta:
 [`m6-perf-rebuild.md`](plans/m6-perf-rebuild.md).
 
 Still unbuilt after M4 and not part of it: rename, copy, bulk operations and Hash field rename (M2
-tasks 11–14, §5); Cluster support (M5); rebuild cost at real `SCAN` order (M6).
+tasks 11–14, §5); rebuild cost at real `SCAN` order (M6). Cluster support shipped in M5 (§7.2).
 
 | # | Task | Proves |
 |---|---|---|
@@ -332,15 +332,41 @@ files touched, tests, the CLAUDE.md rules it binds, and what stays out of scope:
 [`m4-themes.md`](plans/m4-themes.md), [`m4-glyphs.md`](plans/m4-glyphs.md),
 [`m4-session-restore.md`](plans/m4-session-restore.md), and [`m4-close-out.md`](plans/m4-close-out.md).
 
+### 7.2 M5 — Cluster
+
+**Progress: done**, released as `0.1.0-beta.2`. Ten tasks, planned in
+[`m5-planning.md`](plans/m5-planning.md) from the design in [`m5-cluster.md`](plans/m5-cluster.md),
+each built by a subagent from its own plan doc and merged before the next started.
+[ADR-0022](adr/0022-cluster-supported-in-stages.md) records the decisions and supersedes
+[ADR-0021](adr/0021-cluster-refused-until-supported.md)'s refusal.
+
+| # | Task | Shipped |
+|---|---|---|
+| 1 | Test harness ([`m5-harness.md`](plans/m5-harness.md)) | A real 3-primary / 3-replica cluster in `testcontainers`, one container with identity-mapped ports, plus failover and slot-migration helpers |
+| 2 | Connection + title bar ([`m5-connection.md`](plans/m5-connection.md)) | `redis-cluster://`, or a plain URL to any node (redialled as a cluster); `cluster · N primaries · M nodes`; `redis-cli -c` for `C` |
+| 3 | Merged scan ([`m5-scan.md`](plans/m5-scan.md)) | One `SCAN` per primary on its own connection (fred's `scan_cluster` stalls on a dead node), summed `DBSIZE`, "the cluster changed during the scan — r to rescan" |
+| 4 | Owner-pinned liveness ([`m5-liveness.md`](plans/m5-liveness.md)) | Arming pipeline pinned to the key's slot; only the owner's reconnect or an owner change re-arms; fred's ASK wedge turned into a redial |
+| 5 | Open the keyspace ([`m5-narrowed-refusal.md`](plans/m5-narrowed-refusal.md)) | The refusal removed; server views held behind a notice until their task |
+| 6 | Mutations ([`m5-mutations.md`](plans/m5-mutations.md)) | Every shipped mutation proven per primary; `replica` reason only when every node is a replica; Cluster rules for M2 tasks 11–13 written into §5 |
+| 7 | Dashboard ([`m5-dashboard.md`](plans/m5-dashboard.md)) | Per-node `INFO` on dedicated connections, aggregated tiles, a `CLUSTER INFO` health line, a node table with drill-down |
+| 8 | Slowlog + Monitor ([`m5-slowlog-monitor.md`](plans/m5-slowlog-monitor.md)) | Merged with a NODE column; reset on every node; one Monitor feed per primary; a stopped feed is named |
+| 9 | Sharded Pub/Sub ([`m5-sharded-pubsub.md`](plans/m5-sharded-pubsub.md)) | `SSUBSCRIBE` chips (`Tab` in the add form), re-issued on an owner change because fred does not move them; gated on Redis 7 |
+| 10 | Close-out ([`m5-close-out.md`](plans/m5-close-out.md)) | These docs, `0.1.0-beta.2` |
+
+`fred` 10.1.0 findings that shaped the build, all in ADR-0022: `scan_cluster` stalls on a dead
+node; one dead node stalls the main client's single router, so every per-node read uses its own
+connection with a bound naming the node; a read or write of a migrating slot wedges the client
+until a redial; a failover is noticed only on traffic (`sync_cluster()` forces it); a reconnect
+policy makes the router spin on a dead node, so none is set; sharded subscriptions are not moved
+on failover.
+
 ## 8. Explicitly not in M0–M3
 
 Palette, Console, dashboard, monitor, pub/sub, slowlog (M3) — Console cut, Palette shipped then
-withdrawn (ADR-0020), see §6 above. Cluster is milestone M5, after the beta — designed in
-[`m5-cluster.md`](plans/m5-cluster.md) and split into ten tasks in [`m5-planning.md`](plans/m5-planning.md). Rebuild cost at real `SCAN` order is milestone M6, also
-after the beta — [`m6-perf-rebuild.md`](plans/m6-perf-rebuild.md); a Cluster target
-is browsable from M5 task 5, the Dashboard shows the whole Cluster from task 7, and Slowlog and Monitor show a notice until task 8
-(§7, [ADR-0022](adr/0022-cluster-supported-in-stages.md), which superseded the M4 refusal in
-[ADR-0021](adr/0021-cluster-refused-until-supported.md)). Themes beyond the two M0 defaults, the ASCII glyph
+withdrawn (ADR-0020), see §6 above. Cluster shipped in M5 (§7.2,
+[ADR-0022](adr/0022-cluster-supported-in-stages.md), which superseded the M4 refusal in
+[ADR-0021](adr/0021-cluster-refused-until-supported.md)). Rebuild cost at real `SCAN` order is
+milestone M6 — [`m6-perf-rebuild.md`](plans/m6-perf-rebuild.md). Themes beyond the two M0 defaults, the ASCII glyph
 fallback, session restore, and the million-key performance work are M4 (§7). Packaging and
 distribution beyond the alpha's raw GitHub Release archives is a decision parked to the end of
 alpha (PRD §9, §10) — M4 ships no official packages. Keybinding overrides from config are
