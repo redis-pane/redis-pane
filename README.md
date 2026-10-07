@@ -14,7 +14,7 @@ refresh needed.*
 
 ## Status
 
-This is a beta (`0.1.0-beta.2`). It handles browsing a keyspace, viewing every Redis type, and live updates
+This is a beta (`0.1.0-beta.3`). It handles browsing a keyspace, viewing every Redis type, and live updates
 when a value changes on the server. You can edit every core type in place — a String value, Hash
 fields, List elements, Set members, Sorted set scores — change a key's TTL, and delete a key (`e`
 to edit, `a` to add, `d` to delete, `t` for the TTL, `y` to confirm). Every change previews the
@@ -31,9 +31,13 @@ key list covers every primary, an open key stays live on whichever node owns it 
 and slot moves), edits go to the owner, and every server view is cluster-aware — a Dashboard with
 a node table, the Slowlog and Monitor merged across nodes, and sharded Pub/Sub.
 
-Known limits: at a million keys, scrolling, typing into the filter and drawing are fast, but toggling
-the tree, changing the sort or rebuilding the whole filter takes roughly half a second when keys
-arrive in a real `SCAN` order. Rename, copy, and bulk operations across several keys are not built
+It stays responsive at a million keys arriving in real `SCAN` order: no keystroke or scan page
+waits on a rebuild. A large rebuild (toggling the tree, changing the sort, rebuilding the filter)
+runs in slices between frames while the old list stays usable under a `rebuilding N%` readout,
+and the new list arrives in about a tenth of a second — a tree toggle ~0.1 s, a sort change
+~0.1 s, a collapse or a filter rebuild a few hundredths.
+
+Known limits: rename, copy, and bulk operations across several keys are not built
 yet and are still coming next.
 
 Requires Redis 6.0 or newer (Valkey works too).
@@ -43,13 +47,13 @@ Requires Redis 6.0 or newer (Valkey works too).
 Download the binary for your OS from the [Releases page](https://github.com/vinodsantharam/redis-pane/releases) — macOS, Linux, and Windows are all covered. Or run the install script:
 
 ```bash
-curl --proto '=https' --tlsv1.2 -LsSf https://github.com/vinodsantharam/redis-pane/releases/download/v0.1.0-beta.2/redis-pane-installer.sh | sh
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/vinodsantharam/redis-pane/releases/download/v0.1.0-beta.3/redis-pane-installer.sh | sh
 ```
 
 On Windows, from PowerShell:
 
 ```powershell
-irm https://github.com/vinodsantharam/redis-pane/releases/download/v0.1.0-beta.2/redis-pane-installer.ps1 | iex
+irm https://github.com/vinodsantharam/redis-pane/releases/download/v0.1.0-beta.3/redis-pane-installer.ps1 | iex
 ```
 
 These beta builds are unsigned, so your OS may flag them on first run — on macOS, right-click the

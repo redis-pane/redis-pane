@@ -1,6 +1,6 @@
 # M6 task 7: Close out M6
 
-Status: **planned.**
+Status: **done.** Outcome at the end of this document.
 
 ## Context
 
@@ -28,3 +28,19 @@ This task changes only docs and metadata.
 - Every version string agrees.
 - The install URLs resolve once the release exists.
 - The downloaded binary prints the new version.
+
+## Outcome
+
+Built 2026-10-08 after tasks 1–6 merged (#78–#83).
+
+- **PLAN §7.3** (new): progress narrative, per-task table, before/after at 1M deep random keys,
+  and the known gaps. The "still unbuilt" line and §8 no longer list M6.
+- **PRD §9**: M6 marked done with the measured figures; M4's qualified 16 ms note now says the gap
+  was closed by M6.
+- **README / ALPHA**: the "half a second at a million keys" limit is replaced by what is true now
+  (no update waits on a rebuild; `rebuilding N%`; ~0.1 s to a new list for a tree toggle). ALPHA's
+  "What to try" gives the 1M-key recipe, and its known limits list the remaining gaps: a
+  synchronous rebuild when restoring a tree-mode session at startup, `Esc` not cancelling a job,
+  wildcard/fuzzy filters off the fast path, ASCII-only case folding.
+- **DESIGN** already documents the readout (§6.2, task 3).
+- **Version** `0.1.0-beta.3`; install URLs re-pinned. Tag after the user confirms.
