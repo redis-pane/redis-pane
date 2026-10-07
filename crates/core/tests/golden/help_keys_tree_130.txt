@@ -10,15 +10,15 @@
    ▾ 8812:  │ c         copy                                                                                         │
      ● cart │ r         rescan                                                                                       │
      ● profi│ C         copy redis-cli command                                                                       │
-     ● sessi│ ↑↓ jk     move                                                                                         │
-   ▾ 8813:  │ PgUp/PgDn page                                                                                         │
-     ● sessi│ Home/End  top/bottom                                                                                   │
+     ● sessi│ R         rename                                                                                       │
+   ▾ 8813:  │ ↑↓ jk     move                                                                                         │
+     ● sessi│ PgUp/PgDn page                                                                                         │
+            │ Home/End  top/bottom                                                                                   │
             │                                                                                                        │
             │ ⌃R read-only   g s slowlog   g m monitor   g p pub/sub   g d dashboard   Esc back   q quit   ? F1 help │
             │                                                                                                        │
             │ Tab value keys · Esc close                                                                             │
             └────────────────────────────────────────────────────────────────────────────────────────────────────────┘
-                                                          │
                                                           │
     sorted by name
  → open / expand   / filter   s sort   t flat view   d delete   c copy   r rescan   C copy redis-cli command   ? F1 help

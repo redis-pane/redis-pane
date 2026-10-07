@@ -584,6 +584,8 @@ impl Shell {
                 arm,
             } => self.read_key(key, index, token, arm),
             Command::Execute { mutation, index } => self.mutate(mutation, index),
+            // Phase 2 stub: wired in phase 3.
+            Command::CheckTarget { .. } => {}
             Command::CopyToClipboard { text, label } => self.copy(text, label, term).await,
             Command::Notify { text } => {
                 let at_ms = self.clock.now_epoch_ms();

@@ -166,6 +166,7 @@ pub(super) fn rebuild_step(mut state: State) -> (State, Vec<Command>) {
     {
         state.rebuild_list_coalescing();
     }
+    follow_after_swap(&mut state, covered);
     after_move(state)
 }
 

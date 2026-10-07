@@ -7,8 +7,8 @@
 | c         copy                                                                                   |
 | r         rescan                                                                                 |
 | C         copy redis-cli command                                                                 |
+| R         rename                                                                                 |
 | ^v jk     move                                                                                   |
 | PgUp/PgDn page                                                                                   |
 | Home/End  top/bottom                                                                             |
-|                                                                                                  |
 +--------------------------------------------------------------------------------------------------+

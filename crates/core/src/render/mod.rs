@@ -111,6 +111,8 @@ pub fn frame(state: &State, theme: &Theme, clock: &dyn Clock, area: Rect) -> Buf
     // help is also open — `PendingMutation` is read straight off `State`.
     if let Some(pending) = &state.confirm {
         confirm_overlay(state, pending, theme, area, &mut buf);
+    } else if let Some(capture) = &state.rename {
+        rename_overlay(capture, theme, area, &mut buf);
     } else if state.pending_feed.is_some() {
         feed_confirm_overlay(state, theme, area, &mut buf);
     }
@@ -1042,6 +1044,7 @@ fn context_title(ctx: help::HelpContext) -> String {
             format!("keys pane{}", if tree { " · tree" } else { "" })
         }
         HelpContext::Filter => "filter".to_string(),
+        HelpContext::Rename => "rename".to_string(),
         HelpContext::Value(None) => "value pane".to_string(),
         HelpContext::Value(Some(vc)) => {
             let ty = match vc {
@@ -1334,7 +1337,17 @@ fn confirm_overlay(
     buf: &mut Buffer,
 ) {
     let refused = state.read_only;
+    // A cross-slot rename can never run, whatever the mode: its dialog is an
+    // explanation, and says so instead of offering `y`.
+    let cross_slot = matches!(
+        pending,
+        PendingMutation::RenameKey {
+            cross_slot: true,
+            ..
+        }
+    );
     let hint = match refused {
+        _ if cross_slot => "can't run on a Cluster · Esc cancel".to_string(),
         Some(reason) => format!("read-only ({}) · Esc dismiss", reason.label()),
         None => "y confirm · Esc cancel".to_string(),
     };
@@ -1358,6 +1371,51 @@ fn confirm_overlay(
                 None => pending.command_text(),
             };
             lines.push((text, Token::Text));
+        }
+        // Rename (M2 task 11): the command, its guard, then the one fact that
+        // changes — and, ahead of `y`, what the pre-check and the slots say.
+        PendingMutation::RenameKey {
+            name,
+            to,
+            target,
+            cross_slot,
+            ..
+        } => {
+            lines.push((pending.command_text(), Token::Text));
+            if let Some(guard) = pending.guard_text() {
+                lines.push((g.text(&guard).into_owned(), Token::Muted));
+            }
+            lines.push((
+                format!(
+                    "{} {} {}",
+                    name.display(),
+                    g.get(Glyph::Right),
+                    to.display()
+                ),
+                Token::Text,
+            ));
+            if *cross_slot {
+                lines.push((
+                    g.text("⚠ RENAME across slots fails with CROSSSLOT on a Cluster")
+                        .into_owned(),
+                    Token::Warn,
+                ));
+                lines.push((
+                    g.text(
+                        "these names hash to different slots — share a {tag} to keep them together",
+                    )
+                    .into_owned(),
+                    Token::Muted,
+                ));
+            } else if *target == crate::state::TargetCheck::Taken {
+                lines.push((
+                    g.text(&format!(
+                        "⚠ {to} already exists — y will be refused, nothing is overwritten"
+                    ))
+                    .into_owned(),
+                    Token::Warn,
+                ));
+            }
         }
         PendingMutation::SetString { name, old, new, .. } => {
             // The value itself is the `+` side of the diff below.
@@ -1609,6 +1667,41 @@ fn confirm_overlay(
         (hint, hint_token),
         border_token,
         " confirm ",
+        theme,
+        area,
+        buf,
+    );
+}
+
+/// The rename capture (M2 task 11): a small dialog in the confirm dialog's
+/// frame, with the typed name, its cursor, and the reason it cannot be staged
+/// yet, if there is one.
+fn rename_overlay(
+    capture: &crate::state::RenameCapture,
+    theme: &Theme,
+    area: Rect,
+    buf: &mut Buffer,
+) {
+    let g = theme.glyphs;
+    let mut lines = vec![
+        (format!("from  {}", capture.from.display()), Token::Muted),
+        (
+            format!("to    {}{}", capture.text, g.get(Glyph::Cursor)),
+            Token::Text,
+        ),
+    ];
+    if let Some(problem) = capture.problem() {
+        lines.push((
+            g.text(&format!("·· {}", problem.reason())).into_owned(),
+            Token::Warn,
+        ));
+    }
+    let hint = (g.text("⏎ stage · Esc cancel").into_owned(), Token::Text);
+    draw_confirm_box(
+        lines,
+        hint,
+        Token::BorderFocus,
+        " rename ",
         theme,
         area,
         buf,

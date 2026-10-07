@@ -280,6 +280,15 @@ pub enum Msg {
         result: Result<crate::mutation::MutationOutcome, String>,
         at_ms: u64,
     },
+    /// `Command::CheckTarget` answered (M2 task 11): whether a key named `key`
+    /// exists. Applied only to a staged rename whose new name is `key`; a
+    /// reply that finds nothing staged, or something else, is dropped — it
+    /// arrived after `y` (the atomic `RENAMENX` is already the guard) or after
+    /// `Esc`.
+    TargetChecked {
+        key: crate::key::KeyName,
+        exists: bool,
+    },
     /// An operation failed. Carries the command that failed (R7.4).
     ///
     /// Errors are never swallowed: a Redis error that produces no visible

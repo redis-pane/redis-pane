@@ -20,6 +20,7 @@ pub mod mutation;
 pub mod render;
 pub mod resolve;
 pub mod server;
+pub mod slot;
 pub mod state;
 pub mod theme;
 pub mod update;

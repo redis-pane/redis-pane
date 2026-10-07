@@ -190,3 +190,13 @@ Every outcome has a visible result: `TargetExists` and `KeyGone` raise an error 
 `RENAMENX old new` even when the source is not the Open key (the existing `not_written` returns
 early unless the key is open, so rename is handled before it). `KeyGone` also marks the old row
 gone. An `Err` goes through the existing `failed()` path.
+
+### Phase log
+
+- **Phase 2 (core).** Landed as designed. Deviations:
+  - The shell has two stubs (`CheckTarget` is a no-op, `RenameKey` returns an error) so the
+    workspace compiles at this commit; phase 3 replaces both.
+  - The six `help_*` golden frames and the `help_disconnected_*` pair gained one `R rename` row
+    (and shifted the rows beneath it): the help overlay lists every keys-pane binding, so a new
+    binding necessarily moves it. No browser or hint-bar frame moved: `rename` is ranked after
+    `copy redis-cli command`, where an 80-column bar stops before it.

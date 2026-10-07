@@ -174,6 +174,13 @@ pub async fn execute(client: &Client, mutation: &Mutation) -> Result<MutationOut
                 ShiftTtlWrite::KeyGone => MutationOutcome::NotWritten(NotWritten::KeyGone),
             }
         }
+        // Phase 2 stub: wired in phase 3.
+        Mutation::RenameKey { .. } => {
+            return Err(Error::new(
+                fred::error::ErrorKind::Unknown,
+                "rename is not wired to the server yet",
+            ));
+        }
         // Handled above, before `key` was ever computed — never reached.
         Mutation::ResetSlowlog => unreachable!("returned above"),
     })
