@@ -20,3 +20,6 @@ ratatui = { version = "0.30", default-features = false }
 ratatui-textarea = { version = "0.9.2", default-features = false }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
+# Already in the tree through serde_json; the first-byte scan of the filter
+# fast path (M6 task 6). Pure Rust, no I/O, so the boundary is untouched.
+memchr = "2"

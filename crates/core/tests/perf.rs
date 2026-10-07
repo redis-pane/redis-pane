@@ -474,13 +474,14 @@ fn filter_first_character(fx: Fixture, ceil_ms: u64) {
         "[{}] filter first character @ 1M keys: {elapsed:?}",
         fx.label()
     );
-    // Sorted control: AT TARGET (~3.9ms). On random_deep it matches every
-    // key through the shuffled arena and is a CEILING (~21ms).
+    // AT TARGET on both fixtures (M6 task 6): the wildcard-free glob is one
+    // vectorised search of the arena, then a bit test per row. Sorted ~4ms,
+    // random_deep ~6ms local / ~9.5ms CI (was ~21ms / ~35ms, a CEILING).
     assert_budget("first filter character", elapsed, ceil_ms);
 }
 variants!(filter_first_character:
     filter_first_character_at_1m_keys => (Fixture::Sorted, 16),
-    filter_first_character_at_1m_keys_random_deep => (Fixture::RandomDeep, 52));
+    filter_first_character_at_1m_keys_random_deep => (Fixture::RandomDeep, 16));
 
 fn filter_backspace_keystroke(fx: Fixture, ceil_ms: u64) {
     // M4 task 4 decision 2: a keystroke that cannot be narrowed defers its
@@ -532,11 +533,11 @@ fn time_to_new_list_filter_rebuild(fx: Fixture, ceil_ms: u64) {
         "[{}] time-to-new-list (to the swap), debounced filter rebuild @ 1M keys: {elapsed:?}",
         fx.label()
     );
-    // CEILING.
+    // CEILING. M6 task 6: ~13ms local / 17-18ms CI (ceiling 1.5x slowest of 2 runs), was ~40 / ~36-64.
     assert_budget("time-to-new-list (filter rebuild)", elapsed, ceil_ms);
 }
 variants!(time_to_new_list_filter_rebuild:
-    time_to_new_list_filter_rebuild_random_deep => (Fixture::RandomDeep, 88));
+    time_to_new_list_filter_rebuild_random_deep => (Fixture::RandomDeep, 28));
 
 // ── (c) sort change ──────────────────────────────────────────────────────
 

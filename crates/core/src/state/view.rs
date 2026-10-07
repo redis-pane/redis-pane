@@ -7,6 +7,7 @@
 //! indices, not 40MB of names.
 
 use super::loaded::LoadedSet;
+use super::search::{Substring, filter_range};
 use super::tree::NO_ROW;
 
 /// How a filter pattern is interpreted.
@@ -93,6 +94,11 @@ fn narrows(mode: FilterMode, prev: &str, new: &str) -> bool {
         FilterMode::Glob => !prev.contains(['*', '?']) || prev.ends_with('*'),
     }
 }
+
+/// `narrow` searches the whole arena only when the rows it would test are at
+/// least this fraction of the Loaded set; below that, testing each row's name
+/// is cheaper than a pass over every name.
+const NARROW_SEARCH_FRACTION: usize = 4;
 
 /// The ordered, filtered list of rows on offer.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -269,15 +275,10 @@ impl KeyView {
     pub fn rebuild(&mut self, keys: &LoadedSet) {
         self.order.clear();
         self.order.reserve(keys.len());
-        for i in 0..keys.len() {
-            if self.filter.is_empty() {
-                self.order.push(i as u32);
-            } else if let Some(name) = keys.name(i)
-                && matches(name, &self.filter, self.mode)
-            {
-                self.order.push(i as u32);
-            }
-        }
+        let order = &mut self.order;
+        filter_range(keys, &self.filter, self.mode, 0, keys.len(), |i| {
+            order.push(i as u32)
+        });
         self.lcp = self.apply_sort(keys);
         self.rebuild_inverse(keys.len());
         self.applied = Some(Applied {
@@ -341,15 +342,33 @@ impl KeyView {
             // new LCP is the running minimum since the last kept row.
             let has_lcp = self.lcp.len() == self.order.len();
             let mut run = u32::MAX;
+            // A wildcard-free glob over a big enough list is decided by one
+            // sequential search of the arena in index order, marking hits in a
+            // bitset; the walk below then only reads the bit per row instead
+            // of reading each name in `order`'s (maybe shuffled) order. The
+            // walk, and so the order, the inverse patch and the LCP running
+            // minimum, is the same either way (M6 task 6).
+            let marks = (self.order.len() >= keys.len() / NARROW_SEARCH_FRACTION)
+                .then(|| Substring::new(&self.filter, self.mode))
+                .flatten()
+                .map(|s| {
+                    let mut bits = vec![0u64; keys.len().div_ceil(64)];
+                    s.for_each(keys, 0, keys.len(), |i| bits[i >> 6] |= 1 << (i & 63));
+                    bits
+                });
             for row in 0..self.order.len() {
                 let i = self.order[row];
                 if has_lcp {
                     run = run.min(self.lcp[row]);
                 }
-                let keep = self.filter.is_empty()
-                    || keys
-                        .name(i as usize)
-                        .is_some_and(|name| matches(name, &self.filter, self.mode));
+                let keep = if let Some(bits) = &marks {
+                    bits[i as usize >> 6] >> (i & 63) & 1 == 1
+                } else {
+                    self.filter.is_empty()
+                        || keys
+                            .name(i as usize)
+                            .is_some_and(|name| matches(name, &self.filter, self.mode))
+                };
                 if keep {
                     self.order[kept] = i;
                     if has_lcp {
@@ -412,12 +431,11 @@ impl KeyView {
         });
         applied.covered = keys.len();
         let (filter, mode) = (applied.filter.as_str(), applied.mode);
-        for i in new_from..keys.len() {
-            if filter.is_empty() || keys.name(i).is_some_and(|name| matches(name, filter, mode)) {
-                self.inverse[i] = self.order.len() as u32;
-                self.order.push(i as u32);
-            }
-        }
+        let (order, inverse) = (&mut self.order, &mut self.inverse);
+        filter_range(keys, filter, mode, new_from, keys.len(), |i| {
+            inverse[i] = order.len() as u32;
+            order.push(i as u32);
+        });
         // Scan order has no lazily-fetched column to be partial about —
         // `known` tracks the whole order, same as `apply_sort`'s `Scan` arm.
         self.known = self.order.len();
@@ -1015,5 +1033,69 @@ mod tests {
             narrows(FilterMode::Fuzzy, "a?", "a?b"),
             "fuzzy: always safe"
         );
+    }
+
+    // ── the filter fast path (M6 task 6) ────────────────────────────────────
+
+    /// Narrowing through the arena search and the bitset must be exactly
+    /// narrowing by `matches` row by row: same rows, same order, same inverse,
+    /// same LCP column.
+    #[test]
+    fn narrow_through_the_arena_search_equals_narrow_by_matches() {
+        let mut x = 0x2545F4914F6CDD1Du64;
+        let mut next = move |n: usize| {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            (x % n as u64) as usize
+        };
+        const A: [&str; 8] = ["a", "A", "b", ":", "1", "x", "é", "B"];
+        for round in 0..1500 {
+            let mut keys = LoadedSet::default();
+            for _ in 0..next(60) {
+                let w: String = (0..next(9)).map(|_| A[next(A.len())]).collect();
+                keys.push(w.as_bytes());
+            }
+            let prev: String = (0..next(3)).map(|_| A[next(A.len())]).collect();
+            let more: String = (0..1 + next(3)).map(|_| A[next(A.len())]).collect();
+            let new = format!("{prev}{more}");
+            for sort in [SortBy::Scan, SortBy::Name] {
+                let mut v = KeyView::new(prev.clone(), FilterMode::Glob, sort);
+                v.rebuild(&keys);
+                let before: Vec<u32> = v.order.clone();
+                v.filter = new.clone();
+                assert!(v.can_narrow(keys.len()));
+                v.narrow(&keys);
+
+                let want: Vec<u32> = before
+                    .iter()
+                    .copied()
+                    .filter(|&i| matches(keys.name(i as usize).unwrap(), &new, FilterMode::Glob))
+                    .collect();
+                assert_eq!(v.order, want, "round {round} {prev:?}->{new:?} {sort:?}");
+                for (r, &i) in v.order.iter().enumerate() {
+                    assert_eq!(v.inverse[i as usize], r as u32);
+                }
+                let shown = v.order.iter().collect::<std::collections::HashSet<_>>();
+                for i in 0..keys.len() {
+                    if !shown.contains(&(i as u32)) {
+                        assert_eq!(v.inverse[i], NO_ROW);
+                    }
+                }
+                if sort == SortBy::Name {
+                    assert_eq!(v.lcp.len(), v.order.len());
+                    for r in 0..v.order.len() {
+                        let want = if r == 0 {
+                            0
+                        } else {
+                            let a = keys.name(v.order[r - 1] as usize).unwrap();
+                            let b = keys.name(v.order[r] as usize).unwrap();
+                            a.iter().zip(b).take_while(|(p, q)| p == q).count() as u32
+                        };
+                        assert_eq!(v.lcp[r], want, "round {round} lcp row {r}");
+                    }
+                }
+            }
+        }
     }
 }
