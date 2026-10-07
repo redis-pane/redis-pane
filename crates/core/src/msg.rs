@@ -427,6 +427,8 @@ pub enum Msg {
         channel: Vec<u8>,
         via: Option<Vec<u8>>,
         payload: Vec<u8>,
+        /// An `SMESSAGE` from a sharded subscription (M5 task 9).
+        sharded: bool,
     },
     /// A `Command::UpdateSubscription` add or remove failed on the server
     /// (`docs/plans/m3-pubsub.md` — R7.4: errors surface as a non-blocking

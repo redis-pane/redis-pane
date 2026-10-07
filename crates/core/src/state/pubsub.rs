@@ -35,6 +35,12 @@ pub const PUBSUB_PAYLOAD_MAX: usize = 4 * 1024;
 pub enum Subscription {
     Channel(String),
     Pattern(String),
+    /// A sharded channel (`SSUBSCRIBE`, Redis 7+, M5 task 9). Delivered only
+    /// by `SPUBLISH`, and only from the node that owns the channel's slot;
+    /// a classic `PUBLISH` does not reach it and an `SPUBLISH` does not
+    /// reach a classic [`Subscription::Channel`] of the same name. There is
+    /// no sharded pattern in Redis, so there is no such variant.
+    Sharded(String),
 }
 
 impl Subscription {
@@ -42,13 +48,35 @@ impl Subscription {
     /// forced it.
     pub fn name(&self) -> &str {
         match self {
-            Subscription::Channel(s) | Subscription::Pattern(s) => s,
+            Subscription::Channel(s) | Subscription::Pattern(s) | Subscription::Sharded(s) => s,
         }
     }
 
     pub fn is_pattern(&self) -> bool {
         matches!(self, Subscription::Pattern(_))
     }
+
+    pub fn is_sharded(&self) -> bool {
+        matches!(self, Subscription::Sharded(_))
+    }
+}
+
+/// The oldest Redis that has `SSUBSCRIBE`/`SPUBLISH` (M5 task 9, decision 4).
+pub const SHARDED_MIN_MAJOR: u16 = 7;
+
+/// What the add form makes of the typed text and its sharded toggle.
+///
+/// With the toggle off this is [`parse_subscription`]. With it on the text is
+/// always one literal sharded channel — `*`, `?` and `[` are ordinary
+/// characters there, because Redis has no sharded pattern to mean them with
+/// (decision 1: the form never offers pattern together with sharded). A
+/// leading `=` is still stripped, so the same "force a literal" habit works
+/// either way.
+pub fn parse_subscription_with(input: &str, sharded: bool) -> Subscription {
+    if !sharded {
+        return parse_subscription(input);
+    }
+    Subscription::Sharded(input.strip_prefix('=').unwrap_or(input).to_string())
 }
 
 /// Auto-detect a channel or a pattern from typed input (decision 2). Never
@@ -201,6 +229,9 @@ pub struct PubSubMessage {
     /// [`PubSubState::push_pubsub_message`].
     pub payload: Vec<u8>,
     pub truncated: bool,
+    /// Arrived by `SPUBLISH` on a sharded subscription (M5 task 9). Marked in
+    /// the feed so a reader can tell the two apart on one channel name.
+    pub sharded: bool,
 }
 
 impl PubSubMessage {
@@ -283,6 +314,10 @@ pub struct PubSubState {
     /// different actions on different keys and must not be conflated into
     /// one bool.
     pub adding: bool,
+    /// The add form's sharded toggle (M5 task 9, decision 1) — a field of the
+    /// form, not a key of the view. Only meaningful while `adding`; cleared
+    /// whenever the form opens or closes.
+    pub sharded: bool,
 }
 
 impl std::ops::Deref for PubSubState {
@@ -320,6 +355,7 @@ impl PubSubState {
         self.selected_chip = 0;
         self.input.clear();
         self.adding = false;
+        self.sharded = false;
     }
 
     /// The one function that appends to the tail (CLAUDE.md: "the cap is
@@ -332,7 +368,20 @@ impl PubSubState {
         at_ms: u64,
         channel: Vec<u8>,
         via: Option<Vec<u8>>,
+        payload: Vec<u8>,
+    ) {
+        self.push_message(at_ms, channel, via, payload, false);
+    }
+
+    /// [`Self::push_pubsub_message`] with the message's kind: `sharded` for an
+    /// `SMESSAGE`. Same single enforcement point for the cap.
+    pub fn push_message(
+        &mut self,
+        at_ms: u64,
+        channel: Vec<u8>,
+        via: Option<Vec<u8>>,
         mut payload: Vec<u8>,
+        sharded: bool,
     ) {
         let truncated = payload.len() > PUBSUB_PAYLOAD_MAX;
         if truncated {
@@ -347,6 +396,7 @@ impl PubSubState {
                 via,
                 payload,
                 truncated,
+                sharded,
             },
             PUBSUB_CAP,
         );
@@ -501,6 +551,7 @@ mod tests {
             via: None,
             payload: b"hi".to_vec(),
             truncated: false,
+            sharded: false,
         };
         let subs = vec![
             Subscription::Pattern("user:*".into()),
@@ -517,6 +568,7 @@ mod tests {
             via: Some(b"user:*".to_vec()),
             payload: b"hi".to_vec(),
             truncated: false,
+            sharded: false,
         };
         let subs = vec![
             Subscription::Pattern("user:*".into()),
@@ -533,6 +585,7 @@ mod tests {
             via: Some(b"user:*".to_vec()),
             payload: b"hi".to_vec(),
             truncated: false,
+            sharded: false,
         };
         let subs = vec![
             Subscription::Pattern("user:*".into()),

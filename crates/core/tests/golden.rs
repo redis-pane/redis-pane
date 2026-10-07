@@ -4240,6 +4240,79 @@ fn golden_help_pubsub_adding() {
     );
 }
 
+// ── M5 task 9 — sharded Pub/Sub (`SSUBSCRIBE`, R6.2, ADR-0022) ──────────────
+
+/// `pubsub_with_messages` plus a sharded `orders` subscription and a sharded
+/// message on the same channel name as a classic one, newest and selected, so
+/// the feed marker and the detail strip both show.
+fn pubsub_with_sharded() -> State {
+    let mut state = pubsub_with_messages();
+    state
+        .pubsub
+        .subscriptions
+        .push(Subscription::Sharded("orders".into()));
+    state.pubsub.push_message(
+        PUBSUB_NOW_MS + 3,
+        b"orders".to_vec(),
+        None,
+        br#"{"id":8814,"shard":true}"#.to_vec(),
+        true,
+    );
+    state
+}
+
+#[test]
+fn golden_pubsub_sharded_chip_and_message() {
+    let state = pubsub_with_sharded();
+    let clock = FixedClock(PUBSUB_NOW_MS);
+    let (uni, ascii) = draw_both(&state, 80, 24, &clock);
+    assert_golden("pubsub_sharded_80", &uni);
+    assert_golden("pubsub_sharded_80_ascii", &ascii);
+    // A narrow frame folds the channel into the payload: the marker survives.
+    assert_golden("pubsub_sharded_60", &draw_at(&state, 60, 20, &clock));
+}
+
+#[test]
+fn golden_pubsub_add_form_with_the_sharded_toggle() {
+    let mut state = State {
+        screen: redis_pane_core::state::View::PubSub,
+        link: up(Tk::Armed),
+        ..base()
+    };
+    state.pubsub.adding = true;
+    state.pubsub.input.push_str("orders");
+    let clock = FixedClock(PUBSUB_NOW_MS);
+    assert_golden("pubsub_add_form_off_80", &draw_at(&state, 80, 24, &clock));
+    state.pubsub.sharded = true;
+    let (uni, ascii) = draw_both(&state, 80, 24, &clock);
+    assert_golden("pubsub_add_form_sharded_80", &uni);
+    assert_golden("pubsub_add_form_sharded_80_ascii", &ascii);
+}
+
+#[test]
+fn golden_pubsub_add_form_sharded_disabled_on_redis_6() {
+    let mut state = State {
+        screen: redis_pane_core::state::View::PubSub,
+        link: Link::Up {
+            version: "6.2.14".into(),
+            tracking: Tk::Armed,
+        },
+        ..base()
+    };
+    state.pubsub.adding = true;
+    state.pubsub.input.push_str("orders");
+    let clock = FixedClock(PUBSUB_NOW_MS);
+    assert_golden(
+        "pubsub_add_form_redis6_80",
+        &draw_at(&state, 80, 24, &clock),
+    );
+    state.help = Some(HelpView { pane: state.focus });
+    assert_golden(
+        "help_pubsub_adding_redis6_80",
+        &draw_at(&state, 80, 24, &clock),
+    );
+}
+
 // ── M3 task 6 — the Dashboard (`g d`, R6.3, `docs/plans/m3-dashboard.md`) ───
 
 const DASHBOARD_NOW_MS: u64 = 200_000;
@@ -4630,6 +4703,13 @@ fn the_ascii_frame_has_the_unicode_frames_layout_and_no_non_ascii() {
             130,
             26,
             Box::new(FixedClock(SLOWLOG_NOW_MS)),
+        ),
+        (
+            "sharded pub/sub",
+            pubsub_with_sharded(),
+            100,
+            24,
+            Box::new(FixedClock(PUBSUB_NOW_MS)),
         ),
         (
             "monitor",

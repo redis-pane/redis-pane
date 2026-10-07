@@ -103,8 +103,10 @@ Beyond the keyspace, four views show what the server itself is doing:
 - `g m` opens **Monitor**, a live tail of every command the server runs. `p` pauses it, `/`
   filters it, and leaving the view shuts the feed down so it never keeps running out of sight
 - `g p` opens **Pub/Sub**: add a channel or pattern and watch what's published to it, on its own
-  connection so it never competes with your reads. `d` unsubscribes a chip, `p` pauses the tail,
-  and leaving the view closes the connection — nothing stays subscribed behind you
+  connection so it never competes with your reads. `Tab` in the add form makes it a **sharded**
+  subscription (Redis 7+, `SSUBSCRIBE`, the kind a Cluster delivers only from the channel's own
+  node). `d` unsubscribes a chip, `p` pauses the tail, and leaving the view closes the connection —
+  nothing stays subscribed behind you
 - `g s` opens the **Slowlog**, the server's own list of commands that ran too long, sortable by
   time or duration. On a Cluster it merges every node's log with a NODE column, and `d` resets
   them all

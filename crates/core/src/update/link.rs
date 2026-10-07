@@ -13,6 +13,17 @@ pub(super) fn connected(
     // best, and only an accepted arming moves it to Armed — which is
     // ADR-0009's invariant expressed as a state transition rather than
     // as a comment somebody has to remember.
+    // A Cluster owner-change re-arm reports no version (`liveness.rs`): keep
+    // what the real connect told us rather than forgetting it, since the
+    // sharded Pub/Sub gate (M5 task 9) reads it.
+    let version = if version.is_empty() {
+        match &state.link {
+            Link::Up { version, .. } => version.clone(),
+            _ => version,
+        }
+    } else {
+        version
+    };
     state.link = Link::Up {
         version,
         tracking: if tracking_supported {

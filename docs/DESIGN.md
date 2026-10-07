@@ -173,7 +173,7 @@ recomputed each frame from which tile is focused, never a persisted scroll posit
 | `d` | Stage delete of the Selected key (`DEL`), (Hash, cursor on a field) of that field (`HDEL`), or (Slowlog view) `SLOWLOG RESET` | key list, value pane, slowlog view |
 | `y` | Confirm a staged mutation (`Esc` dismisses) | global, only while one is staged |
 | `p` | Pause / resume consuming the `MONITOR` or Pub/Sub feed (the socket stays open; paused lines/messages are counted, not buffered) | Monitor view, Pub/Sub tail |
-| `a` | Add a subscription | Pub/Sub view, either half |
+| `a` | Add a subscription (`Tab` in the form: sharded, Redis 7+) | Pub/Sub view, either half |
 | `d` / `←→` | Unsubscribe the selected chip / pick a chip | Pub/Sub strip |
 | `←→↑↓` / `hjkl` | Move tile focus | Dashboard view |
 | `Enter` | Expand the focused tile's raw `INFO` section into a scrollable overlay | Dashboard view |
@@ -749,6 +749,17 @@ carries a channel identity Monitor's raw command text has no analogue of.
   This is the "configure before you see anything" step Monitor has no equivalent of.
 - **Channel or pattern is auto-detected**: `*`, `?` or `[` anywhere in the typed text makes it a
   pattern (`PSUBSCRIBE`); anything else is a channel (`SUBSCRIBE`); a leading `=` forces a channel.
+- **Sharded is a field of the add form** (M5 task 9, `docs/plans/m5-sharded-pubsub.md`): `Tab` in
+  the form toggles `[x] sharded` (`SSUBSCRIBE`, Redis 7+), drawn at the right of the same row. It is
+  a form field and not a key, so the keymap growth rule is untouched. A sharded subscription is one
+  literal channel — Redis has no sharded pattern, so `*` is an ordinary character with the toggle on.
+  Its chip reads `[orders §]` (`#` in ASCII), and its messages carry the same `§` in the CHANNEL cell
+  and `sharded §` in the detail head, so a sharded and a classic `orders` stay distinct in one feed.
+  Sharded messages are delivered only on the node that owns the channel's slot (a classic `PUBLISH`
+  does not reach them, an `SPUBLISH` does not reach a classic subscription); on a Cluster the shell
+  subscribes there and re-subscribes after a failover or slot move. Below Redis 7 the toggle is drawn
+  `[-] sharded · needs Redis 7` and help says the same. On a single Redis 7+ server sharded behaves
+  like a classic channel.
 - **No persistent warning banner and no `prod`/`unknown` confirmation** — unlike `MONITOR`'s
   server-wide, involuntary cost, a Pub/Sub subscription costs only what the reader chose to
   subscribe to. Subscribing is not a write, so Read-only Mode never sees it either.
@@ -888,7 +899,8 @@ placeholder standing in for all of them.
 - **Leaving the view** (`Esc`, `g k`, any other `g` chord) closes the per-node connections and
   aborts a fetch in flight.
 
-Pub/Sub stays open, because classic `PUBLISH` is cluster-wide.
+Pub/Sub stays open, because classic `PUBLISH` is cluster-wide, and `a` + `Tab` adds a sharded
+subscription on the channel's slot owner (§6.8).
 
 ## 7. Interaction details that carry the product
 

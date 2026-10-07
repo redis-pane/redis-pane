@@ -442,6 +442,14 @@ pub fn here(state: &State, ctx: HelpContext) -> Vec<HelpRow> {
         HelpContext::Monitor => monitor_rows(state),
         HelpContext::PubSubAdding => vec![
             HelpRow::new(keys_for(state, Action::EnterValueCursor), "subscribe"),
+            HelpRow::new(
+                "Tab",
+                if state.sharded_available() {
+                    "sharded"
+                } else {
+                    "sharded: needs Redis 7"
+                },
+            ),
             HelpRow::new(keys_for(state, Action::Cancel), "cancel"),
         ],
         HelpContext::PubSub { focus } => pubsub_rows(state, focus),

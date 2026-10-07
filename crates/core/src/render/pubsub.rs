@@ -204,6 +204,7 @@ fn strip_line(state: &State, theme: &Theme, area: Rect, y: u16, buf: &mut Buffer
             &format!("{}{}", state.pubsub.input, theme.glyphs.get(Glyph::Cursor)),
             theme.style(Token::Text),
         );
+        sharded_toggle(state, theme, area, y, buf);
         return;
     }
 
@@ -253,6 +254,8 @@ fn strip_line(state: &State, theme: &Theme, area: Rect, y: u16, buf: &mut Buffer
             });
             let label = if sub.is_pattern() {
                 format!("[{} {}]", sub.name(), theme.glyphs.get(Glyph::PatternSub))
+            } else if sub.is_sharded() {
+                format!("[{} {}]", sub.name(), theme.glyphs.get(Glyph::Sharded))
             } else {
                 format!("[{}]", sub.name())
             };
@@ -268,6 +271,35 @@ fn strip_line(state: &State, theme: &Theme, area: Rect, y: u16, buf: &mut Buffer
         area.width.saturating_sub(1),
         "a add",
         theme.style(Token::Muted),
+    );
+}
+
+/// The add form's sharded toggle, right-aligned on the same row as the text
+/// (M5 task 9, decision 1): a field of the form, flipped with `Tab`. Below
+/// Redis 7 it is drawn disabled with the reason (decision 4), so a reader who
+/// reaches for it learns why it will not turn on.
+fn sharded_toggle(state: &State, theme: &Theme, area: Rect, y: u16, buf: &mut Buffer) {
+    let sep = theme.glyphs.get(Glyph::Separator);
+    let (text, token) = if !state.sharded_available() {
+        (format!("[-] sharded {sep} needs Redis 7"), Token::Muted)
+    } else if state.pubsub.sharded {
+        (
+            format!(
+                "Tab {sep} [x] sharded {} channel",
+                theme.glyphs.get(Glyph::Sharded)
+            ),
+            Token::Text,
+        )
+    } else {
+        (format!("Tab {sep} [ ] sharded"), Token::Muted)
+    };
+    put_right(
+        buf,
+        area.x,
+        y,
+        area.width.saturating_sub(1),
+        &text,
+        theme.style(token),
     );
 }
 
@@ -437,7 +469,12 @@ fn message_row(
         );
     }
     // Decision 8: shown with the Viewer's own byte escaping, never raw.
-    let channel = cell_text(&msg.channel);
+    let mut channel = cell_text(&msg.channel);
+    if msg.sharded {
+        // The marker rides with the channel name, so a sharded `orders` and a
+        // classic `orders` are told apart at a glance (M5 task 9, decision 3).
+        channel = format!("{} {channel}", theme.glyphs.get(Glyph::Sharded));
+    }
     if let Some((x, w)) = cols.channel {
         put(
             buf,
@@ -494,6 +531,13 @@ fn detail_strip(
 
     let channel = cell_text(&msg.channel);
     let mut head = format!("channel {channel}");
+    if msg.sharded {
+        head.push_str(&format!(
+            "  {}  sharded {}",
+            theme.glyphs.get(Glyph::Separator),
+            theme.glyphs.get(Glyph::Sharded)
+        ));
+    }
     if let Some(via) = &msg.via {
         let via_text = cell_text(via);
         if msg.ambiguous_via(&state.pubsub.subscriptions) {

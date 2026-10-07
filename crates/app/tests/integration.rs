@@ -3924,6 +3924,53 @@ async fn two_sequential_polls_show_counters_moving_between_them() {
 // as `Msg::FeedClosed` rather than a hang, and `Command::CloseFeed`'s
 // teardown really does disconnect — not just stop reading.
 
+// ── M5 task 9 — the Redis 7 gate for sharded Pub/Sub ─────────────────────────
+
+/// Below Redis 7 the server has no `SSUBSCRIBE`: the core refuses to offer the
+/// toggle from the version probed at connect, and the shell cannot open a
+/// sharded feed there either, so a mistake would be a visible error rather
+/// than a silent no-op.
+#[tokio::test]
+#[ignore = "needs docker"]
+async fn sharded_pubsub_is_gated_off_on_redis_6() {
+    use redis_pane::redis::feed::{FeedKind, open_feed};
+    use redis_pane_core::command::FeedToken;
+    use redis_pane_core::state::Subscription;
+    let (_c, url) = start("redis", "6.2-alpine").await;
+    let (client, established) = redis_pane::redis::connect(&url).await.unwrap();
+    assert_eq!(established.version.major, 6);
+
+    let (state, _) = redis_pane_core::update(
+        redis_pane_core::State::default(),
+        Msg::Connected {
+            version: established.version.to_string(),
+            tracking_supported: established.tracking_supported,
+        },
+    );
+    assert!(
+        !state.sharded_available(),
+        "the version probed at connect gates the toggle"
+    );
+
+    let (tx, _rx) = tokio::sync::mpsc::channel(4);
+    let clock: std::sync::Arc<dyn redis_pane_core::clock::Clock> =
+        std::sync::Arc::new(redis_pane::SystemClock);
+    let refused = open_feed(
+        &url,
+        &Credentials::default(),
+        FeedKind::Subscribe(vec![Subscription::Sharded("gate:six".into())]),
+        FeedToken::default(),
+        tx,
+        clock,
+        &client,
+    )
+    .await;
+    assert!(
+        refused.is_err(),
+        "a Redis 6 server has no SSUBSCRIBE; the feed must fail loudly"
+    );
+}
+
 mod feed {
     use std::sync::Arc;
     use std::time::Duration;
@@ -4680,6 +4727,72 @@ mod feed {
     // tests assume arrives. Flagged for whoever picks this up next rather
     // than left as a silently-passing test that does not actually exercise
     // the failure path it claims to.
+
+    // ── M5 task 9 — sharded Pub/Sub on a single Redis 7+ node: one code path,
+    // behaving like a classic channel (`docs/plans/m5-sharded-pubsub.md`
+    // decision 4).
+
+    #[tokio::test]
+    #[ignore = "needs docker"]
+    async fn a_sharded_subscription_works_on_a_single_redis_7_node() {
+        let (_c, url) = start().await;
+        let writer = plain_client(&url).await;
+        let (tx, mut rx) = tokio::sync::mpsc::channel(16);
+        let clock: Arc<dyn Clock> = Arc::new(redis_pane::SystemClock);
+        let feed = open_feed(
+            &url,
+            &Credentials::default(),
+            FeedKind::Subscribe(vec![
+                redis_pane_core::state::Subscription::Sharded("one:shard".into()),
+                redis_pane_core::state::Subscription::Channel("one:shard".into()),
+            ]),
+            FeedToken::default(),
+            tx,
+            clock,
+            &writer,
+        )
+        .await
+        .expect("SSUBSCRIBE on a single Redis 7 node");
+
+        let _: i64 = writer.publish("one:shard", "classic").await.unwrap();
+        let _: i64 = writer.spublish("one:shard", "sharded").await.unwrap();
+        let mut seen = Vec::new();
+        while seen.len() < 2 {
+            let msg = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+                .await
+                .expect("both messages must arrive")
+                .unwrap();
+            if let Msg::PubSubMessage {
+                payload, sharded, ..
+            } = msg
+            {
+                seen.push((String::from_utf8(payload).unwrap(), sharded));
+            }
+        }
+        seen.sort();
+        assert_eq!(
+            seen,
+            vec![
+                ("classic".to_string(), false),
+                ("sharded".to_string(), true)
+            ],
+            "each kind receives only its own publish"
+        );
+
+        feed.close();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let held: Vec<String> = writer.pubsub_shardchannels("one:*").await.unwrap();
+                if held.is_empty() {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await
+        .expect("PUBSUB SHARDCHANNELS must show nothing of ours after close");
+        let _ = writer.quit().await;
+    }
 }
 
 // ── M5 task 1: the real-cluster harness (ADR-0022) ──────────────────────────
@@ -7638,5 +7751,355 @@ mod cluster_slowlog_monitor {
             tokio::time::sleep(Duration::from_millis(200)).await;
         }
         let _ = client.quit().await;
+    }
+}
+
+// ── M5 task 9 — sharded Pub/Sub (`SSUBSCRIBE`, ADR-0022) ────────────────────
+//
+// `docs/plans/m5-sharded-pubsub.md`: a sharded subscription lives on the node
+// that owns its channel's slot, `fred` does not move it when that owner
+// changes, and the shell re-issues it. Classic and sharded never cross.
+
+mod cluster_sharded_pubsub {
+    use super::Credentials;
+    use super::support::cluster::{Cluster, start_cluster};
+    use fred::prelude::*;
+    use redis_pane::redis::feed::{FeedHandle, FeedKind, open_feed};
+    use redis_pane_core::Msg;
+    use redis_pane_core::clock::Clock;
+    use redis_pane_core::command::FeedToken;
+    use redis_pane_core::state::Subscription;
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
+    use tokio::sync::mpsc::Receiver;
+
+    async fn open(cluster: &Cluster, subs: Vec<Subscription>) -> (FeedHandle, Receiver<Msg>) {
+        let main = cluster.client().await;
+        let (tx, rx) = tokio::sync::mpsc::channel(256);
+        let clock: Arc<dyn Clock> = Arc::new(redis_pane::SystemClock);
+        let feed = open_feed(
+            &cluster.seed_url(),
+            &Credentials::default(),
+            FeedKind::Subscribe(subs),
+            FeedToken::default(),
+            tx,
+            clock,
+            &main,
+        )
+        .await
+        .expect("a sharded Pub/Sub feed must open against a Cluster");
+        (feed, rx)
+    }
+
+    /// `PUBSUB SHARDNUMSUB <channel>` on one node, as a number.
+    async fn shardnumsub(cluster: &Cluster, port: u16, channel: &str) -> i64 {
+        let out = cluster.cli(port, &["pubsub", "shardnumsub", channel]).await;
+        out.lines()
+            .nth(1)
+            .and_then(|n| n.trim().parse().ok())
+            .unwrap_or_else(|| panic!("unreadable SHARDNUMSUB reply from {port}: {out:?}"))
+    }
+
+    /// Wait for a Pub/Sub message whose payload satisfies `want`, republishing
+    /// with `publish` on every lap (the subscription may land a beat after
+    /// the feed opens, and after a failover it lands when the shell re-issues
+    /// it). A deadline, not a sleep.
+    async fn expect_message<F, Fut>(
+        rx: &mut Receiver<Msg>,
+        deadline: Duration,
+        mut publish: F,
+        want: impl Fn(&Msg) -> bool,
+    ) -> Msg
+    where
+        F: FnMut(u32) -> Fut,
+        Fut: std::future::Future<Output = ()>,
+    {
+        let start = Instant::now();
+        let mut lap = 0u32;
+        loop {
+            lap += 1;
+            publish(lap).await;
+            let until = Instant::now() + Duration::from_millis(300);
+            while let Ok(Some(msg)) =
+                tokio::time::timeout(until.saturating_duration_since(Instant::now()), rx.recv())
+                    .await
+            {
+                if want(&msg) {
+                    return msg;
+                }
+            }
+            assert!(
+                start.elapsed() < deadline,
+                "no matching message within {deadline:?} ({lap} publishes)"
+            );
+        }
+    }
+
+    fn is_payload(msg: &Msg, sharded_flag: bool, prefix: &str) -> bool {
+        matches!(msg, Msg::PubSubMessage { payload, sharded, .. }
+            if *sharded == sharded_flag && payload.starts_with(prefix.as_bytes()))
+    }
+
+    #[tokio::test]
+    #[ignore = "needs docker"]
+    async fn a_sharded_subscription_receives_an_spublish_and_lives_on_the_slot_owner() {
+        let cluster = start_cluster().await;
+        let owner = cluster
+            .owner_of_slot(fred::util::redis_keyslot(b"sh:orders"))
+            .await;
+        let (feed, mut rx) = open(&cluster, vec![Subscription::Sharded("sh:orders".into())]).await;
+        let publisher = cluster.client().await;
+
+        let msg = expect_message(
+            &mut rx,
+            Duration::from_secs(15),
+            |_| {
+                let p = publisher.clone();
+                async move {
+                    let _: i64 = p.spublish("sh:orders", "hello").await.unwrap();
+                }
+            },
+            |m| is_payload(m, true, "hello"),
+        )
+        .await;
+        match msg {
+            Msg::PubSubMessage {
+                channel,
+                via,
+                sharded,
+                ..
+            } => {
+                assert_eq!(channel, b"sh:orders");
+                assert_eq!(via, None);
+                assert!(sharded);
+            }
+            other => panic!("{other:?}"),
+        }
+        for &p in &cluster.ports {
+            let want = i64::from(p == owner.port);
+            assert_eq!(
+                shardnumsub(&cluster, p, "sh:orders").await,
+                want,
+                "node {p} (owner is {})",
+                owner.port
+            );
+        }
+        feed.close();
+    }
+
+    #[tokio::test]
+    #[ignore = "needs docker"]
+    async fn classic_and_sharded_subscriptions_do_not_receive_each_others_publishes() {
+        let cluster = start_cluster().await;
+        // The same name, both kinds, on one feed: only the kind of the
+        // marker on each arriving message can tell them apart.
+        let (feed, mut rx) = open(
+            &cluster,
+            vec![
+                Subscription::Channel("sh:cross".into()),
+                Subscription::Sharded("sh:cross".into()),
+            ],
+        )
+        .await;
+        let publisher = cluster.client().await;
+
+        // A classic PUBLISH reaches the classic subscription only.
+        let classic = expect_message(
+            &mut rx,
+            Duration::from_secs(15),
+            |_| {
+                let p = publisher.clone();
+                async move {
+                    let _: i64 = p.publish("sh:cross", "classic").await.unwrap();
+                }
+            },
+            |m| is_payload(m, false, "classic"),
+        )
+        .await;
+        assert!(matches!(classic, Msg::PubSubMessage { sharded: false, .. }));
+        // ...and an SPUBLISH reaches the sharded one only.
+        expect_message(
+            &mut rx,
+            Duration::from_secs(15),
+            |_| {
+                let p = publisher.clone();
+                async move {
+                    let _: i64 = p.spublish("sh:cross", "sharded").await.unwrap();
+                }
+            },
+            |m| is_payload(m, true, "sharded"),
+        )
+        .await;
+
+        // Nothing crossed: every classic payload arrived unmarked, every
+        // sharded one marked. Drain what is left and check each.
+        while let Ok(Some(msg)) = tokio::time::timeout(Duration::from_millis(700), rx.recv()).await
+        {
+            assert!(
+                is_payload(&msg, false, "classic") || is_payload(&msg, true, "sharded"),
+                "a message crossed kinds: {msg:?}"
+            );
+        }
+        feed.close();
+    }
+
+    #[tokio::test]
+    #[ignore = "needs docker"]
+    async fn a_sharded_subscription_keeps_delivering_after_its_owner_fails_over() {
+        let cluster = start_cluster().await;
+        let channel = "sh:failover";
+        let owner = cluster
+            .owner_of_slot(fred::util::redis_keyslot(channel.as_bytes()))
+            .await;
+        let replica = cluster
+            .replicas()
+            .await
+            .into_iter()
+            .find(|n| n.primary_id.as_deref() == Some(owner.id.as_str()))
+            .expect("the owner has a replica");
+        let (feed, mut rx) = open(&cluster, vec![Subscription::Sharded(channel.into())]).await;
+        let publisher = cluster.client().await;
+        let send = |tag: &'static str| {
+            let p = publisher.clone();
+            move |lap: u32| {
+                let p = p.clone();
+                async move {
+                    let _: Result<i64, _> = p.spublish(channel, format!("{tag}-{lap}")).await;
+                }
+            }
+        };
+
+        expect_message(&mut rx, Duration::from_secs(15), send("before"), |m| {
+            is_payload(m, true, "before")
+        })
+        .await;
+
+        cluster.failover(replica.port).await;
+        assert!(
+            cluster
+                .nodes_from(replica.port)
+                .await
+                .iter()
+                .any(|n| n.port == replica.port && n.is_primary),
+            "the replica was promoted"
+        );
+
+        // `fred` does not move the subscription (spike, M5 task 9): the shell
+        // notices the new owner and re-issues it. Publish until it arrives.
+        expect_message(&mut rx, Duration::from_secs(60), send("after"), |m| {
+            is_payload(m, true, "after")
+        })
+        .await;
+        assert_eq!(
+            shardnumsub(&cluster, replica.port, channel).await,
+            1,
+            "the subscription lives on the new owner"
+        );
+        assert_eq!(
+            shardnumsub(&cluster, owner.port, channel).await,
+            0,
+            "and not on the old one"
+        );
+        feed.close();
+    }
+
+    #[tokio::test]
+    #[ignore = "needs docker"]
+    async fn leaving_the_view_leaves_no_sharded_subscription_on_any_node() {
+        let cluster = start_cluster().await;
+        // One channel per primary, so the subscriptions are spread across the
+        // Cluster rather than all on one node.
+        let mut channels = Vec::new();
+        for p in cluster.primaries().await {
+            channels.push(cluster.key_in_slot_of(p.port).await);
+        }
+        let subs = channels
+            .iter()
+            .map(|c| Subscription::Sharded(c.clone()))
+            .chain([Subscription::Channel("sh:classic".into())])
+            .collect();
+        let (feed, _rx) = open(&cluster, subs).await;
+        for c in &channels {
+            let total: i64 = {
+                let mut t = 0;
+                for &p in &cluster.ports {
+                    t += shardnumsub(&cluster, p, c).await;
+                }
+                t
+            };
+            assert_eq!(total, 1, "{c} is subscribed exactly once, somewhere");
+        }
+
+        feed.close();
+
+        let start = Instant::now();
+        loop {
+            let mut left = 0;
+            for &p in &cluster.ports {
+                for c in &channels {
+                    left += shardnumsub(&cluster, p, c).await;
+                }
+            }
+            if left == 0 {
+                return;
+            }
+            assert!(
+                start.elapsed() < Duration::from_secs(15),
+                "{left} sharded subscription(s) still held after the feed closed"
+            );
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "needs docker"]
+    async fn a_sharded_add_and_remove_mid_session_reach_the_owner() {
+        let cluster = start_cluster().await;
+        let (feed, mut rx) = open(&cluster, vec![Subscription::Channel("sh:first".into())]).await;
+        let (etx, _erx) = tokio::sync::mpsc::channel(16);
+        let clock: Arc<dyn Clock> = Arc::new(redis_pane::SystemClock);
+        let channel = "sh:mid";
+        feed.update_subscription(
+            vec![Subscription::Sharded(channel.into())],
+            Vec::new(),
+            etx.clone(),
+            clock.clone(),
+        );
+        let publisher = cluster.client().await;
+        expect_message(
+            &mut rx,
+            Duration::from_secs(15),
+            |lap| {
+                let p = publisher.clone();
+                async move {
+                    let _: i64 = p.spublish(channel, format!("mid-{lap}")).await.unwrap();
+                }
+            },
+            |m| is_payload(m, true, "mid"),
+        )
+        .await;
+
+        feed.update_subscription(
+            Vec::new(),
+            vec![Subscription::Sharded(channel.into())],
+            etx,
+            clock,
+        );
+        let start = Instant::now();
+        loop {
+            let mut total = 0;
+            for &p in &cluster.ports {
+                total += shardnumsub(&cluster, p, channel).await;
+            }
+            if total == 0 {
+                break;
+            }
+            assert!(
+                start.elapsed() < Duration::from_secs(15),
+                "SUNSUBSCRIBE never reached the owner"
+            );
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        feed.close();
     }
 }

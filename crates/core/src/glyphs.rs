@@ -58,6 +58,8 @@ pub enum Glyph {
     ActiveHalf,
     /// `⁎` — a pattern subscription.
     PatternSub,
+    /// `§` — a sharded subscription or message (`SSUBSCRIBE`, M5 task 9).
+    Sharded,
     /// `▶` — the focused Pub/Sub strip.
     StripFocused,
     /// `⟡` — the unfocused Pub/Sub strip.
@@ -130,7 +132,7 @@ pub enum Glyph {
 impl Glyph {
     /// Every role. Order matters only to [`Glyphs::text`]: where two roles share
     /// a Unicode character, the earlier one is what the character means in prose.
-    pub const ALL: [Glyph; 45] = [
+    pub const ALL: [Glyph; 46] = [
         Glyph::Deleted,
         Glyph::CheckFail,
         Glyph::CheckOk,
@@ -143,6 +145,7 @@ impl Glyph {
         Glyph::Cursor,
         Glyph::ActiveHalf,
         Glyph::PatternSub,
+        Glyph::Sharded,
         Glyph::StripFocused,
         Glyph::StripIdle,
         Glyph::Expanded,
@@ -193,6 +196,7 @@ impl Glyph {
             Glyph::Cursor => "▏",
             Glyph::ActiveHalf => "▌",
             Glyph::PatternSub => "⁎",
+            Glyph::Sharded => "§",
             Glyph::StripFocused => "▶",
             Glyph::StripIdle => "⟡",
             Glyph::Expanded => "▾",
@@ -235,6 +239,7 @@ impl Glyph {
             Glyph::Deleted | Glyph::CheckFail => "x",
             Glyph::CheckOk | Glyph::Editing => "+",
             Glyph::Live | Glyph::PatternSub | Glyph::Redacted => "*",
+            Glyph::Sharded => "#",
             Glyph::Manual | Glyph::StripIdle => "o",
             Glyph::Detached => "/",
             Glyph::Fetching => "@",

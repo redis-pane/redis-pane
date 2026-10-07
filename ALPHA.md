@@ -124,7 +124,9 @@ redis-pane --profile mine --probe
     every node's, with a NODE column).
   - **`g m`** — Monitor: every command the server runs, live. `p` pauses, `/` filters. It costs
     the server while it runs, so it asks first on `prod`/`unknown` and closes when you leave.
-  - **`g p`** — Pub/Sub: `a` to subscribe to a channel or a pattern (`user:*`), then watch what's
+  - **`g p`** — Pub/Sub: `a` to subscribe to a channel or a pattern (`user:*`); `Tab` in that form
+    turns it into a **sharded** channel (`SSUBSCRIBE`, Redis 7+; the chip shows `§`, and on a
+    Cluster it follows the channel's node through a failover), then watch what's
     published. Nothing stays subscribed after you leave.
   - **`g d`** — the Dashboard: memory against `maxmemory`, hit ratio, ops/sec, clients,
     replication and evictions, refreshed every 2s; `Enter` shows the raw `INFO` behind a tile.
