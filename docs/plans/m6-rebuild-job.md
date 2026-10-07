@@ -356,13 +356,18 @@ dozen steps in total and are left uniform for simplicity.
 | whole scan: updates over 16 ms | 12 of 2000 | **0** / **0** | |
 | whole scan: total | 1829 / 1285 | 2.3-2.5 s / 3.6 s | |
 
+A second CI run (ceilings in place, green) read: worst update 7.4-10.4 ms for every trigger (tree toggle
+from a Name-sorted view the highest, 10.4), whole-scan worst update 9.8 ms with 0 over 16 ms, total 4.0 s,
+and trigger to swap collapse 244, filter 60, sort 615, toggle 847 ms. The CI columns above are the first
+run; the ceilings below take the slowest of both.
+
 Sorted control: worst update 0.3 ms (sort), 1.7-3.5 ms (tree toggle), 0.8 ms (filter), whole-scan
 worst 2.3 / 3.9 ms.
 
 Trigger to swap is about today's total locally for the fold paths and 1.1-1.4x for sort (the merge
 passes cost 5 extra passes over the order). On CI it is 1.5-2.5x for sort and toggle, where the
 single `sort_by` had been unusually fast; tasks 4 and 5 shorten it. The perf ceilings are set per the
-harness rule from this PR's CI run: every worst-update test is held at 16 ms (AT TARGET: the 1.5x
+harness rule from this PR's two CI runs: every worst-update test is held at 16 ms (AT TARGET: the 1.5x
 rule lands below it); the time-to-swap ceilings are 1.5x the slowest figure observed, rounded up
 (collapse 290, filter 88, sort 812, toggle 1126); whole-scan total gate 6 s (sorted 10 s).
 
