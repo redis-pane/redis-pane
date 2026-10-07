@@ -1,0 +1,24 @@
+─ redis-pane ─ ● prod · redis-cluster://cache-01:7000 · from profile staging ────────────── ● live ─
+
+ KEY                                TYPE      TTL │ no key selected
+                                                  │
+                                                  │
+                                                  │
+                                                  │
+                                                  │
+           ┌─ confirm ─────────────────────────────────────────────────────────────────┐
+           │                                                                           │
+           │ Open MONITOR on prod?                                                     │
+           │ MONITOR runs on all 3 primaries — each streams every command it runs, and │
+           │ each pays for it for as long as this stays open.                          │
+           │                                                                           │
+           │ y open · Esc cancel                                                       │
+           └───────────────────────────────────────────────────────────────────────────┘
+                                                  │
+                                                  │
+                                                  │
+                                                  │
+                                                  │
+                                                  │
+
+ y confirm   Esc discard   F1 help

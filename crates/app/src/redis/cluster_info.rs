@@ -1,6 +1,8 @@
-//! The Cluster Dashboard's poll (R6.3, R1.11, M5 task 7, ADR-0022,
-//! `docs/plans/m5-dashboard.md`): `INFO default` on every node, concurrently,
-//! plus one `CLUSTER INFO`.
+//! Per-node reads and writes on a Cluster (R6.3, R6.4, R1.11, M5 tasks 7 and 8,
+//! ADR-0022, `docs/plans/m5-dashboard.md`, `docs/plans/m5-slowlog-monitor.md`):
+//! the Dashboard's poll (`INFO default` on every node plus one `CLUSTER INFO`),
+//! and the Slowlog's `SLOWLOG GET` and `SLOWLOG RESET` on every node. All of
+//! them share one pool of connections and one way to find the nodes.
 //!
 //! **Per-node connections, never the main client.** The main client has one
 //! router for every node: a dead node stalls commands bound for healthy ones, and
@@ -25,7 +27,7 @@ use std::time::Duration;
 use fred::prelude::*;
 use fred::types::InfoKind;
 use fred::types::config::{Server, ServerConfig};
-use redis_pane_core::state::{NodeReading, NodeRole};
+use redis_pane_core::state::{NodeFailure, NodeReading, NodeRole, SlowlogEntry};
 
 use super::read::parse_info;
 use super::scan::{close, describe_scan_error};
@@ -181,6 +183,75 @@ impl Poller {
         }
     }
 
+    /// `SLOWLOG GET` on every node, answered as `Msg::SlowlogLoaded` (or
+    /// `Msg::SlowlogFailed` when the nodes cannot be found). Shares the
+    /// abortable slot with the poll: the two views are never open together,
+    /// and a newer fetch supersedes an older one.
+    pub fn fetch_slowlog(
+        &self,
+        main: Client,
+        tx: tokio::sync::mpsc::Sender<redis_pane_core::Msg>,
+        clock: std::sync::Arc<dyn redis_pane_core::clock::Clock>,
+        count: i64,
+    ) {
+        use redis_pane_core::Msg;
+        let pool = self.pool.clone();
+        let handle = tokio::spawn(async move {
+            let msg = {
+                let mut pool = pool.lock().await;
+                match slowlog_all(&main, &mut pool, count, NODE_TIMEOUT).await {
+                    Ok(round) => Msg::SlowlogLoaded {
+                        entries: round.entries,
+                        failed: round.failed,
+                        at_ms: clock.now_epoch_ms(),
+                    },
+                    Err(detail) => Msg::SlowlogFailed {
+                        detail,
+                        at_ms: clock.now_epoch_ms(),
+                    },
+                }
+            };
+            let _ = tx.send(msg).await;
+        });
+        let previous = self
+            .task
+            .lock()
+            .ok()
+            .and_then(|mut t| t.replace(handle.abort_handle()));
+        if let Some(previous) = previous {
+            previous.abort();
+        }
+    }
+
+    /// `SLOWLOG RESET` on every node, answered as `Msg::MutationSettled`. Not
+    /// in the abortable slot: leaving the view must not cut a write short
+    /// (closing the pool waits behind it on the pool's lock).
+    pub fn reset_slowlog(
+        &self,
+        main: Client,
+        tx: tokio::sync::mpsc::Sender<redis_pane_core::Msg>,
+        clock: std::sync::Arc<dyn redis_pane_core::clock::Clock>,
+        mutation: redis_pane_core::mutation::Mutation,
+        index: Option<usize>,
+    ) {
+        use redis_pane_core::mutation::MutationOutcome;
+        let pool = self.pool.clone();
+        tokio::spawn(async move {
+            let result = {
+                let mut pool = pool.lock().await;
+                reset_slowlog_all(&main, &mut pool, NODE_TIMEOUT).await
+            };
+            let _ = tx
+                .send(redis_pane_core::Msg::MutationSettled {
+                    mutation,
+                    index,
+                    result: result.map(|()| MutationOutcome::Done),
+                    at_ms: clock.now_epoch_ms(),
+                })
+                .await;
+        });
+    }
+
     /// The Dashboard was left (or the main client replaced): abort the poll in
     /// flight and close the per-node connections, bounded, in the background.
     pub fn cancel(&self) {
@@ -255,31 +326,44 @@ pub fn parse_cluster_nodes(text: &str, fallback_host: &str) -> Vec<ListedNode> {
     out
 }
 
-/// The routing table's primaries, the seeds of the first poll.
-fn seeds(main: &Client) -> Vec<String> {
+/// The routing table's primaries, the seeds of the first poll and the nodes
+/// Monitor runs on. A local lookup: nothing is sent to the cluster.
+pub fn seeds(main: &Client) -> Vec<String> {
+    primary_servers(main)
+        .iter()
+        .map(|s| s.to_string())
+        .collect()
+}
+
+/// [`seeds`], as the `Server`s themselves.
+pub fn primary_servers(main: &Client) -> Vec<Server> {
     let Some(routing) = main.cached_cluster_state() else {
         return Vec::new();
     };
-    let mut out: Vec<String> = routing
-        .slots()
-        .iter()
-        .map(|r| r.primary.to_string())
-        .collect();
-    out.sort();
+    let mut out: Vec<Server> = routing.slots().iter().map(|r| r.primary.clone()).collect();
+    out.sort_by_key(|s| s.to_string());
     out.dedup();
     out
 }
 
-/// Poll the Cluster once.
+/// What discovery learned: every node with its role, the nodes that could not
+/// be connected to (and why), and `CLUSTER INFO`'s text.
+struct Discovery {
+    listed: Vec<ListedNode>,
+    connect_failures: BTreeMap<String, String>,
+    health: Result<String, String>,
+}
+
+/// Find every node of the Cluster and hold a connection to each that answers.
 ///
-/// `Err` is the poll failing as a whole (no node could say what the Cluster
-/// is), reported as the Dashboard's own error with the last good nodes kept. A
-/// node failing is not an `Err`: it is a [`NodeReading`] carrying the reason.
-pub async fn poll(
+/// `Err` is "no node could say what the Cluster is". A node that cannot be
+/// reached is not an `Err`: it is in `connect_failures`, and its caller reports
+/// it by name.
+async fn discover(
     main: &Client,
     pool: &mut NodePool,
     limit: Duration,
-) -> Result<ClusterPoll, String> {
+) -> Result<Discovery, String> {
     // 1. Connections to every node already known and to the routing table's
     //    primaries: the ones that can say what the Cluster looks like.
     let mut seed_addrs = seeds(main);
@@ -369,6 +453,147 @@ pub async fn poll(
     }
     let mut connect_failures = seed_failures;
     connect_failures.extend(pool.ensure(main, &addrs, limit).await);
+    Ok(Discovery {
+        listed,
+        connect_failures,
+        health,
+    })
+}
+
+/// What one `SLOWLOG GET` round over every node found.
+#[derive(Debug)]
+pub struct SlowlogRound {
+    /// Every answering node's entries, each tagged with its node.
+    pub entries: Vec<SlowlogEntry>,
+    /// The nodes that did not answer, with why.
+    pub failed: Vec<NodeFailure>,
+}
+
+/// `SLOWLOG GET <count>` on every node (primaries and replicas: replicas log
+/// slow reads too), concurrently, each on its own connection and each wait
+/// bounded and naming its node (R6.4, R7.4). `Err` only when the nodes
+/// themselves cannot be found; a node that fails is in `failed`.
+pub async fn slowlog_all(
+    main: &Client,
+    pool: &mut NodePool,
+    count: i64,
+    limit: Duration,
+) -> Result<SlowlogRound, String> {
+    let d = discover(main, pool, limit).await?;
+    let asks = d.listed.iter().map(|node| {
+        let client = pool.clients.get(&node.addr).cloned();
+        let refused = d.connect_failures.get(&node.addr).cloned();
+        async move {
+            let result = match (client, refused) {
+                (Some(client), _) => {
+                    match tokio::time::timeout(limit, super::read::fetch_slowlog(&client, count))
+                        .await
+                    {
+                        Ok(Ok(entries)) => Ok(entries),
+                        Ok(Err(e)) => Err(describe_scan_error(&e)),
+                        Err(_) => Err(format!("no answer within {}s", limit.as_secs())),
+                    }
+                }
+                (None, Some(why)) => Err(why),
+                (None, None) => Err("not connected".to_string()),
+            };
+            (node.addr.clone(), result)
+        }
+    });
+    let mut round = SlowlogRound {
+        entries: Vec::new(),
+        failed: Vec::new(),
+    };
+    let mut broken = Vec::new();
+    for (addr, result) in futures::future::join_all(asks).await {
+        match result {
+            Ok(entries) => round.entries.extend(entries.into_iter().map(|mut e| {
+                e.node = addr.clone();
+                e
+            })),
+            Err(detail) => {
+                broken.push(addr.clone());
+                round.failed.push(NodeFailure { node: addr, detail });
+            }
+        }
+    }
+    for addr in broken {
+        pool.evict(&addr).await;
+    }
+    Ok(round)
+}
+
+/// `SLOWLOG RESET` on every node, concurrently, bounded and named like
+/// [`slowlog_all`]. `Ok` only when every node reset; otherwise the `Err` is the
+/// notification text: `reset on 5 of 6 nodes; 10.0.0.3:7002 failed: …`. It is
+/// run only from the mutation path (`Shell::mutate`), after the core's
+/// confirm and Read-only checks.
+pub async fn reset_slowlog_all(
+    main: &Client,
+    pool: &mut NodePool,
+    limit: Duration,
+) -> Result<(), String> {
+    let d = discover(main, pool, limit)
+        .await
+        .map_err(|e| format!("could not list the Cluster's nodes: {e}"))?;
+    let asks = d.listed.iter().map(|node| {
+        let client = pool.clients.get(&node.addr).cloned();
+        let refused = d.connect_failures.get(&node.addr).cloned();
+        async move {
+            let result = match (client, refused) {
+                (Some(client), _) => {
+                    match tokio::time::timeout(limit, client.slowlog_reset()).await {
+                        Ok(Ok(())) => Ok(()),
+                        Ok(Err(e)) => Err(describe_scan_error(&e)),
+                        Err(_) => Err(format!("no answer within {}s", limit.as_secs())),
+                    }
+                }
+                (None, Some(why)) => Err(why),
+                (None, None) => Err("not connected".to_string()),
+            };
+            (node.addr.clone(), result)
+        }
+    });
+    let results = futures::future::join_all(asks).await;
+    let total = results.len();
+    let failed: Vec<String> = results
+        .iter()
+        .filter_map(|(addr, r)| r.as_ref().err().map(|why| format!("{addr} failed: {why}")))
+        .collect();
+    let broken: Vec<String> = results
+        .iter()
+        .filter(|(_, r)| r.is_err())
+        .map(|(a, _)| a.clone())
+        .collect();
+    for addr in broken {
+        pool.evict(&addr).await;
+    }
+    if failed.is_empty() {
+        Ok(())
+    } else {
+        Err(format!(
+            "reset on {} of {total} nodes; {}",
+            total - failed.len(),
+            failed.join("; ")
+        ))
+    }
+}
+
+/// Poll the Cluster once.
+///
+/// `Err` is the poll failing as a whole (no node could say what the Cluster
+/// is), reported as the Dashboard's own error with the last good nodes kept. A
+/// node failing is not an `Err`: it is a [`NodeReading`] carrying the reason.
+pub async fn poll(
+    main: &Client,
+    pool: &mut NodePool,
+    limit: Duration,
+) -> Result<ClusterPoll, String> {
+    let Discovery {
+        listed,
+        connect_failures,
+        health,
+    } = discover(main, pool, limit).await?;
 
     // 4. `INFO default` on every node, concurrently, each bounded and named.
     let asks = listed.iter().map(|node| {

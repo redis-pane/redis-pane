@@ -50,6 +50,16 @@ pub struct MonitorLine {
     /// [`MONITOR_LINE_MAX`] if it ran over.
     pub raw: String,
     pub truncated: bool,
+    /// The primary this line came from (`host:port`) on a Cluster, where one
+    /// feed per primary is merged (M5 task 8); `None` otherwise.
+    pub node: Option<String>,
+}
+
+/// One primary's feed that stopped while the rest carry on (M5 task 8).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoppedNode {
+    pub node: String,
+    pub reason: String,
 }
 
 /// The server-time columns parsed out of a [`MonitorLine::raw`] (decision 8):
@@ -153,6 +163,9 @@ pub struct MonitorState {
     /// [`crate::update::update`], so a shell reply naming an old feed cannot
     /// be mistaken for one about the feed currently open.
     pub feed_token: FeedToken,
+    /// Primaries whose feed stopped while the others kept streaming (Cluster
+    /// only). Cleared with the tail on a fresh `g m`.
+    pub stopped: Vec<StoppedNode>,
 }
 
 impl std::ops::Deref for MonitorState {
@@ -189,6 +202,7 @@ impl MonitorState {
         self.tail.following = true;
         self.status = FeedStatus::default();
         self.feed_token = feed_token;
+        self.stopped.clear();
     }
 
     /// The one function that appends to the tail (CLAUDE.md: "the cap is
@@ -196,7 +210,13 @@ impl MonitorState {
     /// to a stream, decision 4). Truncates to [`MONITOR_LINE_MAX`] and
     /// delegates the cap/pause discipline to [`LiveTail::push`] with
     /// [`MONITOR_CAP`].
-    pub fn push_monitor_line(&mut self, at_ms: u64, mut raw: String) {
+    pub fn push_monitor_line(&mut self, at_ms: u64, raw: String) {
+        self.push_monitor_line_from(at_ms, raw, None);
+    }
+
+    /// [`MonitorState::push_monitor_line`], tagged with the primary it came
+    /// from on a Cluster. Still the only function that appends.
+    pub fn push_monitor_line_from(&mut self, at_ms: u64, mut raw: String, node: Option<String>) {
         let truncated = raw.len() > MONITOR_LINE_MAX;
         if truncated {
             // Cut on a char boundary: `raw` came through as a `String`
@@ -213,6 +233,7 @@ impl MonitorState {
                 at_ms,
                 raw,
                 truncated,
+                node,
             },
             MONITOR_CAP,
         );
@@ -352,6 +373,7 @@ mod tests {
             at_ms: 0,
             raw: r#"1339518083.107412 [0 127.0.0.1:60866] "set" "key" "value""#.to_string(),
             truncated: false,
+            node: None,
         };
         let cols = line.columns();
         assert_eq!(cols.time.as_deref(), Some("16:21:23.107"));
@@ -366,6 +388,7 @@ mod tests {
             at_ms: 0,
             raw: "not a monitor line at all".to_string(),
             truncated: false,
+            node: None,
         };
         let cols = line.columns();
         assert_eq!(cols.time, None);

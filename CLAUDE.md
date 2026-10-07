@@ -169,16 +169,19 @@ they are expensive to retrofit:
   on one branch of several (verified against Redis 8.4.0; ADR-0006). Any memo keyed by key-name reintroduces
   the exact RedisInsight bug this project was started over — see ADR-0006 before adding one, and
   note that "just for the first frame" is how it starts.
-- **A Cluster is browsable; the server views say so rather than read one node** (ADR-0022, which
+- **A Cluster is browsable, and the server views read every node, never one** (ADR-0022, which
   superseded the ADR-0021 refusal in M5 task 5). `connect_with` dials a `redis-cluster://` URL as a
   cluster client and redials a plain URL to any node as one. There is no refusal switch any more.
-  `State::on_cluster()` (core: `Connection::topology.is_some()`) makes Slowlog and Monitor
-  render an in-view notice and emit no `FetchSlowlog` or `OpenFeed`, because a
-  keyless command on a cluster client lands on an arbitrary node; help dims their rows with the
-  reason. Pub/Sub stays open. Any new server-view fetch must check `on_cluster()` until M5 task 8.
-  The Dashboard (M5 task 7) reads every node instead: `redis/cluster_info.rs` polls `INFO` on one
-  connection per node (never the main client, whose single router a dead node stalls), takes the
-  node list and roles from `CLUSTER NODES`, and the core aggregates (`state/cluster_dash.rs`).
+  A keyless command on a cluster client lands on an arbitrary node, so any new server-view fetch
+  must not go through the main client on a Cluster. `redis/cluster_info.rs` holds one connection per
+  node (never the main client, whose single router a dead node stalls), takes the node list and
+  roles from `CLUSTER NODES`, and serves the Dashboard's `INFO` poll (`state/cluster_dash.rs`
+  aggregates it), the Slowlog's `SLOWLOG GET` and `SLOWLOG RESET` on every node (merged, NODE column,
+  identity `(node, id)`), all closed by `Command::CloseNodeConnections` on leaving the view.
+  Monitor opens one `MONITOR` feed per primary (`feed.rs`, each a centralized config from
+  `build_config` with the primary's address) and merges them; one failing is
+  `Msg::MonitorNodeStopped`, only all of them is `Msg::FeedClosed`. `State::on_cluster()` only
+  changes wording and columns.
 - **On a Cluster the arming is pinned to the key's owner** (ADR-0022). `read.rs` builds the arming
   pipeline from a slot-pinned wrapper, and `crates/app/src/liveness.rs` records the owner `Server`
   (`OpenOwner::armed`, called wherever a read arms) and filters reconnects and topology changes by

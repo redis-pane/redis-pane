@@ -218,11 +218,11 @@ pub enum Command {
     /// overlap, and only the reply carrying the *current* token is allowed
     /// to land.
     FetchServerInfo { token: InfoToken },
-    /// Stop polling the Cluster's nodes: the Dashboard was left (M5 task 7).
-    /// The shell aborts a poll still in flight and closes the per-node
-    /// connections it opened. Only ever emitted on a Cluster, the one place
-    /// the poll holds anything.
-    CancelServerInfo,
+    /// Stop talking to the Cluster's nodes one by one: the Dashboard or the
+    /// Slowlog was left (M5 tasks 7 and 8). The shell aborts a poll or fetch
+    /// still in flight and closes the per-node connections they opened. Only
+    /// ever emitted on a Cluster, the one place anything holds them.
+    CloseNodeConnections,
     /// Open a second, dedicated connection to the same resolved target and
     /// start streaming from it (`docs/plans/m3-feed-connection.md`) — `MONITOR`
     /// today, Pub/Sub later widens [`FeedKindMsg`]. The render loop never does

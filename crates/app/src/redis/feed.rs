@@ -55,6 +55,9 @@ pub enum FeedKind {
 pub struct FeedHandle {
     cancel: CancellationToken,
     task: JoinHandle<()>,
+    /// A Cluster's Monitor has one reader per primary: the rest of them
+    /// (`task` is the first). Closed with it, all at once.
+    more_tasks: Vec<JoinHandle<()>>,
     /// Set only for `FeedKind::Subscribe` (`m3-pubsub.md` decision 5:
     /// "closing sends `QUIT`") — `Monitor`'s `monitor::run` hands back no
     /// client to quit at all (see `open_monitor`'s doc comment), so this is
@@ -89,6 +92,9 @@ impl FeedHandle {
     pub fn close(self) {
         self.cancel.cancel();
         self.task.abort();
+        for task in &self.more_tasks {
+            task.abort();
+        }
         if let Some(client) = self.subscriber {
             tokio::spawn(async move {
                 let _ = client.quit().await;
@@ -259,8 +265,8 @@ pub async fn open_feed(
 /// `docs/plans/m3-feed-connection.md`.
 ///
 /// The cost, worth recording rather than discovering later: `monitor::run`
-/// only supports `ServerConfig::Centralized` (this app's Cluster-is-not-v1
-/// scope already matches, ADR-0008), and — the real limitation — it hands
+/// only supports `ServerConfig::Centralized` (a Cluster therefore gets one
+/// feed per primary, [`open_monitor_cluster`]), and — the real limitation — it hands
 /// back a bare `Stream`, no `Client`, no connection handle. There is nothing
 /// to `.quit()` or drop to close the socket synchronously. Internally, fred
 /// spawns its own task that reads `MONITOR` lines and forwards them over an
@@ -303,11 +309,8 @@ pub async fn open_feed(
 /// `build_config` resolved them. This is deliberately not Sentinel discovery
 /// of its own for a second, short-lived connection — the main connection
 /// already paid that cost and already knows the answer. A Clustered target
-/// is refused outright with a reason that says why, rather than reaching
-/// `monitor::run`'s own generic error: Monitor is per node on a Cluster
-/// (ADR-0022, M5 task 8), so this is "not supported yet", not "temporarily
-/// unreachable". The Monitor view never asks for a feed on a Cluster, so this
-/// is the second guard behind it.
+/// is not handed to `monitor::run` at all: it takes [`open_monitor_cluster`],
+/// one feed per primary (ADR-0022, M5 task 8).
 async fn open_monitor(
     url: &str,
     credentials: &Credentials,
@@ -317,18 +320,129 @@ async fn open_monitor(
     main: &Client,
 ) -> Result<FeedHandle, ConnectError> {
     let config: Config = super::build_config(url, credentials)?;
+    if main.is_clustered() {
+        return open_monitor_cluster(config, token, tx, clock, main).await;
+    }
     let config = monitor_config(config, &main.active_connections())?;
     let stream = fred::monitor::run(config)
         .await
         .map_err(|e| ConnectError::Unreachable(super::describe(&e)))?;
 
     let cancel = CancellationToken::new();
-    let task = spawn_monitor_reader(stream, token, tx, clock, cancel.clone());
+    let task = spawn_monitor_reader(stream, token, tx, clock, cancel.clone(), None);
     Ok(FeedHandle {
         cancel,
         task,
+        more_tasks: Vec::new(),
         subscriber: None,
     })
+}
+
+/// One `MONITOR` feed per primary, merged (R6.1, R1.11, M5 task 8, ADR-0022).
+///
+/// `MONITOR` is per node, and replicas only replay what their primary already
+/// showed, so the feeds are the primaries'. **`fred::monitor::run` accepts a
+/// per-node config:** it wants `ServerConfig::Centralized` and nothing else, so
+/// each primary gets the cluster `Config` `build_config` made (credentials,
+/// TLS, timeouts: the same path every other connection takes) with its server
+/// replaced by that one primary's address. The addresses come from the main
+/// client's cached routing table, a local lookup: nothing is sent through the
+/// main client's router, so a dead node cannot stall this.
+///
+/// Every dial is concurrent and bounded, and a primary that cannot be dialed
+/// does not fail the view: the others stream, and the view is told which node
+/// stopped (`Msg::MonitorNodeStopped`). Only when no primary could be dialed
+/// is it an error. There is no reconnect policy: a feed that ends stays ended
+/// and says so.
+async fn open_monitor_cluster(
+    config: Config,
+    token: FeedToken,
+    tx: Sender<Msg>,
+    clock: Arc<dyn Clock>,
+    main: &Client,
+) -> Result<FeedHandle, ConnectError> {
+    let primaries = super::cluster_info::primary_servers(main);
+    if primaries.is_empty() {
+        return Err(ConnectError::Unreachable(
+            "the client has no routing table for this Cluster yet".into(),
+        ));
+    }
+    let dials = primaries.into_iter().map(|server| {
+        let addr = server.to_string();
+        let config = per_node_config(&config, server);
+        async move {
+            let limit = super::cluster_info::NODE_TIMEOUT;
+            let result = match tokio::time::timeout(limit, fred::monitor::run(config)).await {
+                Ok(Ok(stream)) => Ok(stream.boxed()),
+                Ok(Err(e)) => Err(super::describe(&e)),
+                Err(_) => Err(format!("no connection within {}s", limit.as_secs())),
+            };
+            (addr, result)
+        }
+    });
+    let mut streams = Vec::new();
+    let mut failed = Vec::new();
+    for (addr, result) in futures::future::join_all(dials).await {
+        match result {
+            Ok(stream) => streams.push((addr, stream)),
+            Err(why) => failed.push((addr, why)),
+        }
+    }
+    if streams.is_empty() {
+        let why: Vec<String> = failed.iter().map(|(a, e)| format!("{a}: {e}")).collect();
+        return Err(ConnectError::Unreachable(format!(
+            "MONITOR could not be opened on any primary ({})",
+            why.join("; ")
+        )));
+    }
+
+    // A primary that could not be dialed is a stopped feed from the start. The
+    // sends are spawned so they never wait on the loop that is waiting on us.
+    for (node, reason) in failed {
+        let (tx, clock) = (tx.clone(), clock.clone());
+        tokio::spawn(async move {
+            let _ = tx
+                .send(Msg::MonitorNodeStopped {
+                    token,
+                    node,
+                    reason,
+                    at_ms: clock.now_epoch_ms(),
+                })
+                .await;
+        });
+    }
+
+    let cancel = CancellationToken::new();
+    let alive = Arc::new(std::sync::atomic::AtomicUsize::new(streams.len()));
+    let mut tasks: Vec<JoinHandle<()>> = streams
+        .into_iter()
+        .map(|(node, stream)| {
+            spawn_monitor_reader(
+                stream,
+                token,
+                tx.clone(),
+                clock.clone(),
+                cancel.clone(),
+                Some((node, alive.clone())),
+            )
+        })
+        .collect();
+    let task = tasks.remove(0);
+    Ok(FeedHandle {
+        cancel,
+        task,
+        more_tasks: tasks,
+        subscriber: None,
+    })
+}
+
+/// One primary's `MONITOR` config: the cluster config `build_config` made, with
+/// its server replaced by that one node. Everything else (credentials, TLS,
+/// timeouts) is the same path every other connection takes.
+fn per_node_config(config: &Config, server: Server) -> Config {
+    let mut config = config.clone();
+    config.server = ServerConfig::Centralized { server };
+    config
 }
 
 /// Rewrite `config` into a shape `fred::monitor::run` will accept — see
@@ -337,11 +451,6 @@ async fn open_monitor(
 /// whatever `main.active_connections()` returned, passed in rather than
 /// looked up here.
 fn monitor_config(mut config: Config, active: &[Server]) -> Result<Config, ConnectError> {
-    if config.server.is_clustered() {
-        return Err(ConnectError::Unreachable(
-            "MONITOR is per node on a Cluster — coming in M5 (task 8, ADR-0022)".into(),
-        ));
-    }
     if config.server.is_sentinel() {
         let primary = active.first().cloned().ok_or_else(|| {
             ConnectError::Unreachable(
@@ -366,12 +475,19 @@ fn monitor_config(mut config: Config, active: &[Server]) -> Result<Config, Conne
 /// `select` — the same shape `Msg::ConnectionLost` already gives the main
 /// connection's watcher (`crates/app/src/terminal.rs`'s `watch_link`,
 /// `crates/core/src/update/link.rs`).
+///
+/// On a Cluster each primary has a reader of its own (`cluster`: its address,
+/// and how many readers are still running). A line is tagged with the node; a
+/// stream that ends is `Msg::MonitorNodeStopped` naming it, and only the last
+/// one to end is `Msg::FeedClosed`, so one primary dropping never closes the
+/// view while the others stream.
 fn spawn_monitor_reader(
     mut stream: impl futures::Stream<Item = fred::monitor::MonitorCommand> + Unpin + Send + 'static,
     token: FeedToken,
     tx: Sender<Msg>,
     clock: Arc<dyn Clock>,
     cancel: CancellationToken,
+    cluster: Option<(String, Arc<std::sync::atomic::AtomicUsize>)>,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
         loop {
@@ -399,12 +515,40 @@ fn spawn_monitor_reader(
                     // own job (`docs/plans/m3-monitor.md`, phase B).
                     let raw = command.to_string();
                     if tx
-                        .send(Msg::MonitorLine { token, at_ms, raw })
+                        .send(Msg::MonitorLine {
+                            token,
+                            at_ms,
+                            raw,
+                            node: cluster.as_ref().map(|(node, _)| node.clone()),
+                        })
                         .await
                         .is_err()
                     {
                         return; // the UI is gone
                     }
+                }
+                None if cluster.is_some() => {
+                    // One primary's feed ended while others may still stream.
+                    // Only the last one standing closes the view's feed.
+                    let (node, alive) = cluster.expect("guarded by is_some");
+                    let remaining = alive.fetch_sub(1, std::sync::atomic::Ordering::SeqCst) - 1;
+                    let _ = tx
+                        .send(Msg::MonitorNodeStopped {
+                            token,
+                            node,
+                            reason: "the feed connection closed".into(),
+                            at_ms: clock.now_epoch_ms(),
+                        })
+                        .await;
+                    if remaining == 0 {
+                        let _ = tx
+                            .send(Msg::FeedClosed {
+                                token,
+                                reason: Some("every primary's feed closed".into()),
+                            })
+                            .await;
+                    }
+                    return;
                 }
                 None => {
                     // The stream ended on its own: the server closed the
@@ -545,6 +689,7 @@ async fn open_subscribe(
     Ok(FeedHandle {
         cancel,
         task,
+        more_tasks: Vec::new(),
         subscriber: Some(client),
     })
 }
@@ -789,11 +934,32 @@ mod tests {
     }
 
     #[test]
-    fn a_clustered_config_is_refused_before_ever_reaching_fred() {
-        let primary = Server::new("10.0.0.5", 6379);
-        let err = monitor_config(clustered(), std::slice::from_ref(&primary)).unwrap_err();
-        let msg = err.to_string();
-        assert!(msg.contains("Cluster"), "{msg}");
+    fn a_clustered_config_becomes_one_centralized_config_per_primary_keeping_credentials() {
+        let mut config = clustered();
+        config.username = Some("ops".into());
+        config.password = Some("hunter2".into());
+        let a = per_node_config(&config, Server::new("10.0.0.5", 7000));
+        let b = per_node_config(&config, Server::new("10.0.0.6", 7001));
+        assert_eq!(
+            a.server,
+            ServerConfig::Centralized {
+                server: Server::new("10.0.0.5", 7000)
+            }
+        );
+        assert_eq!(
+            b.server,
+            ServerConfig::Centralized {
+                server: Server::new("10.0.0.6", 7001)
+            }
+        );
+        for c in [&a, &b] {
+            assert_eq!(c.username.as_deref(), Some("ops"));
+            assert_eq!(c.password.as_deref(), Some("hunter2"));
+        }
+        assert!(
+            config.server.is_clustered(),
+            "the source config is not touched"
+        );
     }
 
     // The glob matcher itself now lives in `redis_pane_core::state`

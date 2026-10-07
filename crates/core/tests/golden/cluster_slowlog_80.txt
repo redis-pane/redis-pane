@@ -1,13 +1,11 @@
 ─ redis-pane ─ ● staging · …ter://cache-01:7000 · from profile staging  ● live ─
 
- SLOWLOG
-
- ⚠ Slowlog is per node on a Cluster — coming in M5 (task 8)
- Keys, the Viewer and Pub/Sub work on a Cluster as usual.
-
-
-
-
+ SLOWLOG · 4 entries · 6 nodes · sort: recent
+ AGE       DURATION NODE                  COMMAND
+ 5s ago    185.0ms  10.0.0.1:7000         HGETALL user:8812:session
+ 9s ago    2.4ms    10.0.0.2:7001         ZRANGE leaderboard 0 -1
+ 20s ago   12.3ms   10.0.0.1:7000         SMEMBERS tags
+ 31s ago   1.25s    10.0.0.3:7002         KEYS user:*
 
 
 
@@ -19,6 +17,8 @@
 
 
 
+────────────────────────────────────────────────────────────────────────────────
+ cmd    HGETALL user:8812:session
+ node 10.0.0.1:7000  ·  at 2023-11-14 22:14:29 UTC  ·  client worker-3 (10.0.0…
 
-
- ⌃R read-only   g s slowlog   g m monitor   g p pub/sub   ? F1 help
+ s sort   r refetch   c copy command   d reset slowlog (every node)   ? F1 help

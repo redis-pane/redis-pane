@@ -1,0 +1,24 @@
+─ redis-pane ─ ● staging · from profile staging ─── ● live ─
+
+ ⚠ MONITOR on 3 primaries — costs each of them while open
+ ● live                                             3 lines
+ TIME         NODE            COMMAND
+ 16:21:23.107 10.0.0.1:7000   "GET" "user:8812:session"
+ 16:21:23.409 10.0.0.2:7001   "HSET" "order:77" "state" "…
+ 16:21:24.002 10.0.0.3:7002   "EXPIRE" "cart:1" "600"
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ p pause   / filter   c copy command   ? F1 help

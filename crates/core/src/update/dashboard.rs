@@ -38,7 +38,8 @@ fn issue_info_token(state: &mut State) -> InfoToken {
 pub(super) fn open_dashboard(mut state: State) -> (State, Vec<Command>) {
     // Leaving Monitor or Pub/Sub closes its feed first, the same rule every
     // other view-switch in this app follows (`open_slowlog`'s own comment).
-    let mut commands = leave_monitor(&mut state);
+    let mut commands = leave_slowlog(&mut state);
+    commands.extend(leave_monitor(&mut state));
     commands.extend(leave_pubsub(&mut state));
     state.screen = View::Dashboard;
     // On a Cluster the shell reads every node (M5 task 7); the cluster
@@ -144,7 +145,7 @@ pub(super) fn leave_dashboard(state: &mut State) -> Vec<Command> {
     if let Some(c) = state.dashboard.cluster.as_mut() {
         c.undrill();
     }
-    vec![Command::CancelServerInfo]
+    vec![Command::CloseNodeConnections]
 }
 
 /// `Msg::ServerInfoFailed`: the R7.4 notification naming the failing
@@ -849,7 +850,7 @@ mod cluster_tests {
         assert!(commands.is_empty(), "the poll goes on in the overview");
         let (state, commands) = key(state, KeyCode::Esc);
         assert_eq!(state.screen, View::Keys);
-        assert_eq!(commands, vec![Command::CancelServerInfo]);
+        assert_eq!(commands, vec![Command::CloseNodeConnections]);
     }
 
     #[test]
@@ -860,7 +861,7 @@ mod cluster_tests {
             let (state, _) = ch(state, 'g');
             let (state, commands) = ch(state, leave);
             assert!(
-                commands.contains(&Command::CancelServerInfo),
+                commands.contains(&Command::CloseNodeConnections),
                 "g {leave}: {commands:?}"
             );
             assert!(!state.dashboard.loading);

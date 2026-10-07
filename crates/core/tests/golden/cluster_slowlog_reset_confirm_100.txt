@@ -1,0 +1,24 @@
+─ redis-pane ─ ● staging · redis-cluster://cache-01:7000 · from profile staging ─────────── ● live ─
+
+ SLOWLOG · 4 entries · 6 nodes · sort: recent
+ AGE       DURATION NODE                  COMMAND                            CLIENT
+ 5s ago    185.0ms  10.0.0.1:7000         HGETALL user:8812:session          worker-3 (10.0.0.4:5…
+ 9s ago    2.4ms    10.0.0.2:7001         ZRANGE leaderboard 0 -1            worker-3 (10.0.0.4:5…
+ 20s ago   12.3ms   10.0.0.1:7000         SMEMBERS tags                      worker-3 (10.0.0.4:5…
+ 31s ago   1.25s    10.0.0.3:7002         KEYS user:*                        worker-3 (10.0.0.4:5…
+
+                                    ┌─ confirm ────────────────┐
+                                    │                          │
+                                    │ SLOWLOG RESET on 6 nodes │
+                                    │                          │
+                                    │ y confirm · Esc cancel   │
+                                    └──────────────────────────┘
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────────────────────────
+ cmd    HGETALL user:8812:session
+ node 10.0.0.1:7000  ·  at 2023-11-14 22:14:29 UTC  ·  client worker-3 (10.0.0.4:51820)
+
+ y confirm   Esc discard   F1 help

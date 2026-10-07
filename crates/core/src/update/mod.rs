@@ -283,7 +283,11 @@ fn step(mut state: State, msg: Msg) -> (State, Vec<Command>) {
             at_ms,
         } => mutation_settled(state, mutation, index, result, at_ms),
         Msg::Quit => quit(state),
-        Msg::SlowlogLoaded { entries } => slowlog_loaded(state, entries),
+        Msg::SlowlogLoaded {
+            entries,
+            failed,
+            at_ms,
+        } => slowlog_loaded(state, entries, failed, at_ms),
         Msg::SlowlogFailed { detail, at_ms } => slowlog_failed(state, detail, at_ms),
         Msg::ServerInfoLoaded { info, at_ms, token } => {
             server_info_loaded(state, info, at_ms, token)
@@ -303,7 +307,18 @@ fn step(mut state: State, msg: Msg) -> (State, Vec<Command>) {
         Msg::FilterRebuildDue => keys::filter_rebuild_due(state),
         Msg::FeedOpened { token } => feed_opened(state, token),
         Msg::FeedClosed { token, reason } => feed_closed(state, token, reason),
-        Msg::MonitorLine { token, at_ms, raw } => monitor_line(state, token, at_ms, raw),
+        Msg::MonitorLine {
+            token,
+            at_ms,
+            raw,
+            node,
+        } => monitor_line(state, token, at_ms, raw, node),
+        Msg::MonitorNodeStopped {
+            token,
+            node,
+            reason,
+            at_ms,
+        } => monitor_node_stopped(state, token, node, reason, at_ms),
         Msg::PubSubMessage {
             token,
             at_ms,
@@ -809,8 +824,9 @@ fn cancel(mut state: State) -> (State, Vec<Command>) {
     // "nearest thing first" rule this whole function follows, one level up
     // from the two-pane split.
     if state.screen == View::Slowlog {
+        let commands = leave_slowlog(&mut state);
         state.screen = View::Keys;
-        return (state, Vec::new());
+        return (state, commands);
     }
     // Monitor's own way back — every route out closes the feed first
     // (decision 2, `docs/plans/m3-monitor.md`).
@@ -1741,8 +1757,9 @@ mod topology_tests {
     }
 }
 
-/// M5 task 5 (ADR-0022): on a Cluster the server views that read one node's
-/// own figures open onto a notice and issue nothing.
+/// M5 tasks 5 and 8 (ADR-0022): on a Cluster the server views that read one
+/// node's own figures ask every node (Slowlog, Dashboard) or every primary
+/// (Monitor), and say so.
 #[cfg(test)]
 mod cluster_server_view_tests {
     use super::*;
@@ -1768,36 +1785,199 @@ mod cluster_server_view_tests {
     }
 
     #[test]
-    fn g_s_and_g_m_open_their_views_and_emit_no_fetch_and_no_feed() {
+    fn g_s_on_a_cluster_fetches_in_every_environment() {
         for env in [
             Environment::Local,
             Environment::Staging,
             Environment::Prod,
             Environment::Unknown,
         ] {
-            for (second, view) in [('s', View::Slowlog), ('m', View::Monitor)] {
-                let (state, commands) = chord(cluster(env), second);
-                assert_eq!(state.screen, view, "{env:?} g {second}");
-                assert!(commands.is_empty(), "{env:?} g {second}: {commands:?}");
-                assert!(state.pending_feed.is_none(), "no cost dialog for a no-op");
-                assert!(!state.slowlog.loading && !state.dashboard.loading);
-            }
+            let (state, commands) = chord(cluster(env), 's');
+            assert_eq!(state.screen, View::Slowlog, "{env:?}");
+            assert!(state.slowlog.loading, "{env:?}");
+            assert!(
+                matches!(commands.as_slice(), [Command::FetchSlowlog { .. }]),
+                "{env:?}: {commands:?}"
+            );
         }
     }
 
     #[test]
-    fn nothing_in_the_views_issues_anything_on_a_cluster() {
-        for second in ['s', 'm'] {
-            let (state, _) = chord(cluster(Environment::Staging), second);
-            for c in ['r', 'd', 'c', '/', 'p', 'j', 'k'] {
-                let (after, commands) = key(state.clone(), c);
-                assert!(commands.is_empty(), "g {second} then {c}: {commands:?}");
-                assert!(after.confirm.is_none(), "g {second} then {c} staged one");
-                assert!(!after.filtering, "g {second} then {c} opened a filter");
-            }
-            let (_, commands) = update(state, Msg::DashboardPollTick);
-            assert!(commands.is_empty());
+    fn g_m_on_a_cluster_opens_a_feed_and_prod_and_unknown_confirm_the_cost_first() {
+        for env in [Environment::Local, Environment::Staging] {
+            let (state, commands) = chord(cluster(env), 'm');
+            assert_eq!(state.screen, View::Monitor, "{env:?}");
+            assert!(state.pending_feed.is_none(), "{env:?}");
+            assert!(
+                matches!(commands.as_slice(), [Command::OpenFeed { .. }]),
+                "{env:?}: {commands:?}"
+            );
         }
+        for env in [Environment::Prod, Environment::Unknown] {
+            let (state, commands) = chord(cluster(env), 'm');
+            assert_eq!(
+                state.screen,
+                View::Keys,
+                "{env:?}: not open until confirmed"
+            );
+            assert!(state.pending_feed.is_some(), "{env:?}");
+            assert!(commands.is_empty(), "{env:?}: {commands:?}");
+            let (state, commands) = key(state, 'y');
+            assert_eq!(state.screen, View::Monitor, "{env:?}");
+            assert!(
+                matches!(commands.as_slice(), [Command::OpenFeed { .. }]),
+                "{env:?}: {commands:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn leaving_the_slowlog_on_a_cluster_closes_the_node_connections_by_every_route() {
+        // `Esc`, `g k`, and each other view's own `g` chord.
+        let routes: [&dyn Fn(State) -> (State, Vec<Command>); 5] = [
+            &|s| update(s, Msg::Key(KeyPress::plain(KeyCode::Esc))),
+            &|s| chord(s, 'k'),
+            &|s| chord(s, 'm'),
+            &|s| chord(s, 'p'),
+            &|s| chord(s, 'd'),
+        ];
+        for (i, leave) in routes.iter().enumerate() {
+            let (state, _) = chord(cluster(Environment::Staging), 's');
+            let (_, commands) = leave(state);
+            assert!(
+                commands.contains(&Command::CloseNodeConnections),
+                "route {i}: {commands:?}"
+            );
+        }
+        // Pressing `g s` again, or `r`, is not leaving.
+        let (state, _) = chord(cluster(Environment::Staging), 's');
+        let (_, commands) = chord(state.clone(), 's');
+        assert!(!commands.contains(&Command::CloseNodeConnections));
+        let (_, commands) = key(state, 'r');
+        assert!(!commands.contains(&Command::CloseNodeConnections));
+        // Off a Cluster there is nothing to close.
+        let (state, _) = chord(State::default(), 's');
+        let (_, commands) = update(state, Msg::Key(KeyPress::plain(KeyCode::Esc)));
+        assert!(commands.is_empty());
+    }
+
+    #[test]
+    fn the_reset_confirm_on_a_cluster_runs_through_the_chokepoint_for_every_environment() {
+        for env in [
+            Environment::Local,
+            Environment::Staging,
+            Environment::Prod,
+            Environment::Unknown,
+        ] {
+            let (mut state, _) = chord(cluster(env), 's');
+            state.read_only = None;
+            let (state, commands) = key(state, 'd');
+            assert!(commands.is_empty(), "{env:?}: staged, not run");
+            assert_eq!(
+                state.confirm,
+                Some(crate::state::PendingMutation::ResetSlowlog)
+            );
+            let (state, commands) = key(state, 'y');
+            assert!(
+                matches!(
+                    commands.as_slice(),
+                    [Command::Execute {
+                        mutation: Mutation::ResetSlowlog,
+                        index: None
+                    }]
+                ),
+                "{env:?}: {commands:?}"
+            );
+            assert!(state.confirm.is_none());
+        }
+    }
+
+    #[test]
+    fn a_read_only_cluster_refuses_the_reset_at_confirm() {
+        for reason in [
+            crate::state::ReadOnlyReason::Environment,
+            crate::state::ReadOnlyReason::User,
+            crate::state::ReadOnlyReason::Replica,
+        ] {
+            let (mut state, _) = chord(cluster(Environment::Prod), 's');
+            state.read_only = Some(reason);
+            let (state, _) = key(state, 'd');
+            let (_, commands) = key(state, 'y');
+            assert!(
+                !commands
+                    .iter()
+                    .any(|c| matches!(c, Command::Execute { .. })),
+                "{reason:?}: nothing reaches any node"
+            );
+        }
+    }
+
+    #[test]
+    fn a_partial_reset_failure_names_the_nodes_and_refetches_what_is_left() {
+        let (state, _) = chord(cluster(Environment::Staging), 's');
+        let (state, commands) = update(
+            state,
+            Msg::MutationSettled {
+                mutation: Mutation::ResetSlowlog,
+                index: None,
+                result: Err("reset on 5 of 6 nodes; 10.0.0.3:7002 failed: timed out".into()),
+                at_ms: 9,
+            },
+        );
+        let shown = state.error_text().expect("R7.4 notification");
+        assert!(shown.contains("SLOWLOG RESET"), "{shown}");
+        assert!(shown.contains("5 of 6 nodes"), "{shown}");
+        assert!(shown.contains("10.0.0.3:7002"), "{shown}");
+        assert!(
+            commands
+                .iter()
+                .any(|c| matches!(c, Command::FetchSlowlog { .. })),
+            "{commands:?}"
+        );
+    }
+
+    #[test]
+    fn a_stopped_primary_feed_is_named_and_the_others_stay_open() {
+        let (state, _) = chord(cluster(Environment::Staging), 'm');
+        let token = state.monitor.feed_token;
+        let (state, _) = update(state, Msg::FeedOpened { token });
+        let (state, commands) = update(
+            state,
+            Msg::MonitorNodeStopped {
+                token,
+                node: "127.0.0.1:7101".into(),
+                reason: "the feed connection closed".into(),
+                at_ms: 5,
+            },
+        );
+        assert!(commands.is_empty());
+        assert_eq!(state.monitor.status, crate::state::FeedStatus::Open);
+        assert_eq!(state.monitor.stopped.len(), 1);
+        let shown = state.error_text().expect("R7.4 notification");
+        assert!(shown.contains("MONITOR on 127.0.0.1:7101"), "{shown}");
+        // A stopped feed of an older `g m` says nothing.
+        let (state, _) = chord(state, 'm');
+        let (state, _) = update(
+            state,
+            Msg::MonitorNodeStopped {
+                token,
+                node: "x:1".into(),
+                reason: "late".into(),
+                at_ms: 6,
+            },
+        );
+        assert!(state.monitor.stopped.is_empty());
+    }
+
+    #[test]
+    fn the_views_do_their_view_scoped_work_on_a_cluster_too() {
+        let (mut state, _) = chord(cluster(Environment::Staging), 'm');
+        let token = state.monitor.feed_token;
+        state = update(state, Msg::FeedOpened { token }).0;
+        let (after, _) = key(state.clone(), 'p');
+        assert!(after.monitor.paused, "p applies to the merged stream");
+        let (after, _) = key(state, '/');
+        assert!(after.filtering, "/ applies to the merged stream");
     }
 
     #[test]

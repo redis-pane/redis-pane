@@ -689,6 +689,33 @@ screen with nothing on it to say so.
   This is not a mutation preview — opening a view is not a write — so Read-only Mode never sees it
   and never refuses it.
 
+**On a Cluster (M5 task 8, ADR-0022).** `MONITOR` is per node, so the view opens one feed per
+**primary** (replicas only replay what their primary already showed) and merges them, each line
+tagged with the node it came from:
+
+```
+│ ⚠ MONITOR on 3 primaries — costs each of them while open                      │
+│ ● live                                                              1,204 lines│
+│ TIME         NODE            CLIENT                COMMAND                      │
+│ 16:21:23.107 10.0.0.1:7000   10.0.0.4:51820        "GET" "user:8812:session"    │
+│ 16:21:23.409 10.0.0.2:7001   10.0.0.4:51822        "HSET" "order:77" "state" …  │
+```
+
+- **The banner names the count**, and `2 of 3 primaries` once a feed has stopped. The `prod`/
+  `unknown` confirm names it too (`MONITOR runs on all 3 primaries — each streams every command it
+  runs, and each pays for it …`). Leaving the view closes every feed.
+- **Columns.** DB is dropped (a Cluster has only database 0). From 100 columns: TIME, NODE, CLIENT,
+  COMMAND; CLIENT yields first (below 100), and below 70 NODE narrows to 16 columns; NODE and
+  COMMAND are never shed.
+- **One feed failing** does not close the view. The others keep streaming, a line under the status
+  names the node that stopped and why (`✕ 10.0.0.2:7001 stopped: the feed connection closed`; two
+  at most, then `+N more feeds stopped`), and an R7.4 notification carries the failing command.
+  Only when every feed has ended does the view show `feed closed`, and `r` reopens all of them.
+  A primary that cannot be dialed at the start is a stopped feed from the start.
+- **Pause (`p`) and filter (`/`) apply to the merged stream.** The filter matches the line or the
+  node it came from (`/7101`).
+- The cap, truncation, following and copy are the single-node view's, over the merged buffer.
+
 ### 6.8 Pub/Sub
 
 **Pub/Sub (`g p`, built — R6.2, M3 task 5, `docs/plans/m3-pubsub.md`).** Shares the same
@@ -808,7 +835,7 @@ in a type-aware-consistent frame"). `Esc` or `g k` returns to the Keys view exac
 left — nothing about the browser (the Open key, its scroll position, its filter) is touched by
 visiting Slowlog, and tracking on the Open key survives the round trip untouched.
 
-The list is four columns — AGE, DURATION, COMMAND, CLIENT — CLIENT sheds first below 80 columns
+The list is four columns (five on a Cluster, below) — AGE, DURATION, COMMAND, CLIENT — CLIENT sheds first below 80 columns
 and AGE second below 70, the same "shed the least essential first, never the reason the screen
 exists" rule §2's breakpoints apply to the keyspace browser's own columns. AGE is relative to the
 clock (`12s ago`, `3h ago`, `2d ago` — a bare `HH:MM:SS` would be ambiguous for an entry days
@@ -836,10 +863,31 @@ crossed the server's threshold yet) — three different reasons, three different
 placeholder standing in for all of them.
 
 `SLOWLOG` is per node ([ADR-0008](adr/0008-sentinel-in-v1-cluster-deferred.md),
-[ADR-0022](adr/0022-cluster-supported-in-stages.md)). On a Cluster the view shows an in-view
-notice ("Slowlog is per node on a Cluster — coming in M5 (task 8)") and fetches nothing, so one
-node's log is never shown as the Cluster's; `d` (reset) is inert there too. Monitor does the same.
-The Dashboard no longer does: it reads every node (§6.6).
+[ADR-0022](adr/0022-cluster-supported-in-stages.md)), so on a Cluster the view asks every node:
+
+- **One merged list with a NODE column.** `SLOWLOG GET` runs on every node, primaries and replicas
+  alike (replicas log slow reads too), concurrently, each on a connection of its own and each
+  wait bounded and naming its node (`redis/cluster_info.rs`, shared with the Dashboard, §6.6).
+  The sort keys are unchanged (`s` cycles recent and slowest; recent interleaves the nodes by
+  timestamp). Entry ids restart per node, so a row's identity is `(node, id)`, and the selection
+  follows its entry across a refetch by that identity. The summary line adds the node count
+  (`SLOWLOG · 12 entries · 6 nodes · sort: recent`) and the detail strip names the node.
+- **NODE is never shed.** At 100 columns and up: AGE, DURATION, NODE, COMMAND, CLIENT. CLIENT yields
+  first (below 100), AGE second (below 70), and below 70 the NODE column itself narrows from 22 to
+  16 columns (truncating with an `…`) rather than give way to COMMAND. Off a Cluster the columns
+  and the breakpoints above are unchanged.
+- **A node that fails** shows a line under the summary naming it, the command and the reason
+  (`✕ SLOWLOG GET on 10.0.0.3:7002 failed: no connection within 4s`; two lines at most, then
+  `+N more nodes failed`), and an R7.4 notification carries the same. The other nodes' entries
+  still render.
+- **`d` resets every node.** The confirm reads `SLOWLOG RESET on 6 nodes` and goes through the
+  same chokepoint as every other write: Read-only Mode and the Environment refuse it at `y`, for
+  every reason. If some nodes fail, the notification names them
+  (`reset on 5 of 6 nodes; 10.0.0.3:7002 failed: …`), and the view refetches to show what is left.
+  Help words the row `reset slowlog (every node)`.
+- **Leaving the view** (`Esc`, `g k`, any other `g` chord) closes the per-node connections and
+  aborts a fetch in flight.
+
 Pub/Sub stays open, because classic `PUBLISH` is cluster-wide.
 
 ## 7. Interaction details that carry the product

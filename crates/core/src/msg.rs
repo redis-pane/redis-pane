@@ -292,9 +292,14 @@ pub enum Msg {
     },
     /// The user asked to leave.
     Quit,
-    /// `Command::FetchSlowlog` answered (R6.4, M3).
+    /// `Command::FetchSlowlog` answered (R6.4, M3). On a Cluster the shell
+    /// asks every node: `entries` are the merged answers, each tagged with its
+    /// node, and `failed` names the nodes that did not answer (M5 task 8,
+    /// ADR-0022). Always empty off a Cluster.
     SlowlogLoaded {
         entries: Vec<crate::state::SlowlogEntry>,
+        failed: Vec<crate::state::NodeFailure>,
+        at_ms: u64,
     },
     /// `Command::FetchSlowlog` failed. Produces both the R7.4 notification
     /// naming the failing command and the Slowlog view's own in-screen empty
@@ -389,6 +394,20 @@ pub enum Msg {
         token: crate::command::FeedToken,
         at_ms: u64,
         raw: String,
+        /// The primary the line came from (`host:port`) on a Cluster, where
+        /// one feed per primary is merged; `None` otherwise (M5 task 8).
+        node: Option<String>,
+    },
+    /// One primary's `MONITOR` feed stopped while the others carry on (M5
+    /// task 8, ADR-0022): it could not be dialed, or its connection closed.
+    /// Only a Cluster sends this; the view names the node and the reason, and
+    /// the notification carries the failing command (R7.4). Every feed
+    /// stopping is still [`Msg::FeedClosed`]. Guarded by `token` like the rest.
+    MonitorNodeStopped {
+        token: crate::command::FeedToken,
+        node: String,
+        reason: String,
+        at_ms: u64,
     },
     /// One message from an open Pub/Sub feed (`docs/plans/m3-pubsub.md`
     /// phase A), translated by the shell's read loop — a `message` reply

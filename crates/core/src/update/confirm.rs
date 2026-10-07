@@ -63,7 +63,18 @@ pub(super) fn mutation_settled(
     at_ms: u64,
 ) -> (State, Vec<Command>) {
     match result {
-        Err(detail) => failed(state, mutation.command_label(), detail, at_ms),
+        Err(detail) => {
+            let reset = matches!(mutation, Mutation::ResetSlowlog);
+            let (state, commands) = failed(state, mutation.command_label(), detail, at_ms);
+            // A reset that reached only some of a Cluster's nodes still
+            // emptied those: show what is left rather than the old list.
+            if reset && state.on_cluster() && state.screen == crate::state::View::Slowlog {
+                let (state, mut more) = open_slowlog(state);
+                more.splice(0..0, commands);
+                return (state, more);
+            }
+            (state, commands)
+        }
         Ok(MutationOutcome::Done) => match mutation {
             Mutation::DeleteKey { key } => key_deleted(state, index, key, at_ms),
             // No key, so none of `write_landed`'s open-key guarding applies —

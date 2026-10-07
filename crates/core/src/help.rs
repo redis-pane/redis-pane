@@ -239,7 +239,7 @@ impl HelpRow {
 /// `y` itself reads differently — see `preview_only` below.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Refusal {
-    pub reason: RefusalReason,
+    pub reason: ReadOnlyReason,
     /// `true` for a row that still runs and stages a preview despite the
     /// refusal (`update::mode`'s comment: "a staged mutation is decided at
     /// confirm, not at the keypress that staged it") — the reason gets a
@@ -252,51 +252,19 @@ pub struct Refusal {
 impl Refusal {
     fn read_only(state: &State, preview_only: bool) -> Option<Refusal> {
         state.read_only.map(|reason| Refusal {
-            reason: RefusalReason::ReadOnly(reason),
+            reason,
             preview_only,
         })
     }
 
-    /// A server view's row on a Cluster: the key does nothing there until
-    /// M5 task 8 makes the view per node (ADR-0022).
-    fn per_node() -> Refusal {
-        Refusal {
-            reason: RefusalReason::PerNodeOnCluster,
-            preview_only: false,
-        }
-    }
-
     /// The reason text shown dimmed next to a refused row.
     pub fn text(&self) -> String {
-        match self.reason {
-            RefusalReason::PerNodeOnCluster => "per node on a Cluster".to_string(),
-            RefusalReason::ReadOnly(reason) if self.preview_only => {
-                format!("read-only ({}) · preview only", reason.label())
-            }
-            RefusalReason::ReadOnly(reason) => format!("read-only ({})", reason.label()),
+        if self.preview_only {
+            format!("read-only ({}) · preview only", self.reason.label())
+        } else {
+            format!("read-only ({})", self.reason.label())
         }
     }
-}
-
-/// Why a [`Refusal`] dims its row.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RefusalReason {
-    /// Read-only Mode, with the reason it is on.
-    ReadOnly(ReadOnlyReason),
-    /// A server view that reads one node's own figures, on a Cluster.
-    PerNodeOnCluster,
-}
-
-/// On a Cluster, dim every row of a server view that would read a single node
-/// (`update::{slowlog,dashboard,monitor}`'s `on_cluster` guards make each of
-/// these keys a no-op there), so help never offers a verb that does nothing.
-fn dim_on_cluster(state: &State, rows: Vec<HelpRow>) -> Vec<HelpRow> {
-    if !state.on_cluster() {
-        return rows;
-    }
-    rows.into_iter()
-        .map(|row| row.refused(Refusal::per_node()))
-        .collect()
 }
 
 /// Which [`HelpContext`] the current state is in — the same precedence
@@ -470,8 +438,8 @@ pub fn here(state: &State, ctx: HelpContext) -> Vec<HelpRow> {
         HelpContext::Editor(ectx) => editor_rows(state, ectx),
         HelpContext::Confirm => confirm_rows(state),
         HelpContext::ChordPending => chord_pending_rows(state),
-        HelpContext::Slowlog => dim_on_cluster(state, slowlog_rows(state)),
-        HelpContext::Monitor => dim_on_cluster(state, monitor_rows(state)),
+        HelpContext::Slowlog => slowlog_rows(state),
+        HelpContext::Monitor => monitor_rows(state),
         HelpContext::PubSubAdding => vec![
             HelpRow::new(keys_for(state, Action::EnterValueCursor), "subscribe"),
             HelpRow::new(keys_for(state, Action::Cancel), "cancel"),
@@ -510,7 +478,15 @@ fn slowlog_rows(state: &State) -> Vec<HelpRow> {
         // `· preview only` under Read-only Mode exactly like every other
         // mutation-starting key (`mutation_entry_row`'s own rule), even
         // though this one has no key of its own to refuse a write against.
-        mutation_entry_row(state, keys_for(state, Action::Delete), "reset slowlog"),
+        mutation_entry_row(
+            state,
+            keys_for(state, Action::Delete),
+            if state.on_cluster() {
+                "reset slowlog (every node)"
+            } else {
+                "reset slowlog"
+            },
+        ),
         HelpRow::new("↑↓ jk", "move"),
         HelpRow::new("PgUp/PgDn", "page"),
         HelpRow::new("Home/End", "top/bottom"),
@@ -1485,7 +1461,7 @@ mod tests {
     }
 
     #[test]
-    fn the_dashboard_on_a_cluster_is_not_dimmed_and_has_its_own_rows() {
+    fn the_server_views_on_a_cluster_are_not_dimmed_and_the_dashboard_has_its_own_rows() {
         use crate::state::{Topology, View};
         let mut state = State {
             screen: View::Dashboard,
@@ -1500,13 +1476,14 @@ mod tests {
         let labels: Vec<_> = rows.iter().map(|r| &*r.label).collect();
         assert_eq!(labels, ["move node", "open node", "refetch"]);
         assert!(rows.iter().all(|r| r.refused.is_none()));
-        // Slowlog and Monitor stay dimmed until task 8.
-        state.screen = View::Slowlog;
-        assert!(
-            here(&state, HelpContext::Slowlog)
-                .iter()
-                .all(|r| r.refused.is_some())
-        );
+        // Slowlog and Monitor are per node too, and nothing is dimmed there.
+        for (screen, ctx) in [
+            (View::Slowlog, HelpContext::Slowlog),
+            (View::Monitor, HelpContext::Monitor),
+        ] {
+            state.screen = screen;
+            assert!(here(&state, ctx).iter().all(|r| r.refused.is_none()));
+        }
     }
 
     #[test]
