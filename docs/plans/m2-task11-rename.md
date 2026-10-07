@@ -206,3 +206,14 @@ gone. An `Err` goes through the existing `failed()` path.
   pre-check on a task and answers `Msg::TargetChecked`; its failure is `Msg::Failed` naming
   `EXISTS <key>` plus `ConnectionLost` when `is_wedged`. The write itself goes through the
   existing `execute_settled`, so the Cluster wedge handling applies unchanged. No deviations.
+- **Phase 4 (tests).** Docker: nine tests in `crates/app/tests/integration.rs` `mod rename`
+  (lands and keeps TTL and value; taken target refused with both keys unchanged; gone source is
+  `KeyGone` and creates nothing; binary and non-ASCII names round-trip without touching decoy
+  keys; the `EXISTS` pre-check; a collection keeps its contents; the core's `key_slot` agrees with
+  `CLUSTER KEYSLOT`; a same-slot hash-tag rename lands on a Cluster and a taken target is refused
+  there; a cross-slot rename is refused at the preview with nothing sent, and the server confirms
+  it would have answered `CROSSSLOT`). The binary-name case is at the shell function, not the UI,
+  because no capture accepts byte escapes. Core: 41 tests in `update/rename.rs` plus five in
+  `slot.rs`, one in `mutation.rs`. Golden: eight new frames (capture prefilled, typed and empty;
+  confirm ok, target exists, cross-slot, read-only; the capture's hint bar) and a test that the
+  keys-pane `R` row is dimmed under Read-only Mode.

@@ -5453,3 +5453,130 @@ fn the_readout_is_a_warning_in_colour() {
     let x = line[..line.find("rebuilding").unwrap()].chars().count() as u16;
     assert_eq!(Some(buf[(x, y as u16)].fg), warn.fg);
 }
+
+// ── M2 task 11: rename a key (`docs/plans/m2-task11-rename.md`) ─────────────
+
+fn rename_capture_open() -> State {
+    let mut state = opened("user:8812:session", hash_value(), 2_537);
+    state.focus = Pane::Keys;
+    let (state, _) = update(state, Msg::Key(KeyPress::plain(KeyCode::Char('R'))));
+    assert!(state.rename.is_some(), "R opens the capture");
+    state
+}
+
+fn rename_typed(mut state: State, backspaces: usize, text: &str) -> State {
+    for _ in 0..backspaces {
+        state = update(state, Msg::Key(KeyPress::plain(KeyCode::Backspace))).0;
+    }
+    for c in text.chars() {
+        state = update(state, Msg::Key(KeyPress::plain(KeyCode::Char(c)))).0;
+    }
+    state
+}
+
+fn rename_staged(state: State, backspaces: usize, text: &str) -> State {
+    let state = rename_typed(state, backspaces, text);
+    let (state, _) = update(state, Msg::Key(KeyPress::plain(KeyCode::Enter)));
+    assert!(matches!(
+        state.confirm,
+        Some(PendingMutation::RenameKey { .. })
+    ));
+    state
+}
+
+#[test]
+fn golden_rename_capture_prefilled_with_the_current_name() {
+    assert_golden("rename_capture", &draw(&rename_capture_open(), 130, 22));
+}
+
+#[test]
+fn golden_rename_capture_with_a_typed_name() {
+    let state = rename_typed(rename_capture_open(), 7, "cart");
+    assert_golden("rename_capture_typed", &draw(&state, 130, 22));
+}
+
+#[test]
+fn golden_rename_capture_refuses_an_empty_name_inline() {
+    let state = rename_typed(rename_capture_open(), 17, "");
+    assert_golden("rename_capture_empty", &draw(&state, 130, 22));
+}
+
+#[test]
+fn golden_hint_bar_while_capturing_a_new_name() {
+    let state = rename_capture_open();
+    assert_golden("hint_bar_rename_capture", &hint_bar(&state, 130));
+}
+
+#[test]
+fn golden_confirm_rename_ok() {
+    let state = rename_staged(rename_capture_open(), 7, "cart");
+    let (state, _) = update(
+        state,
+        Msg::TargetChecked {
+            key: "user:8812:cart".into(),
+            exists: false,
+        },
+    );
+    assert_golden("confirm_rename", &draw(&state, 130, 22));
+}
+
+#[test]
+fn golden_confirm_rename_target_exists() {
+    let state = rename_staged(rename_capture_open(), 7, "cart");
+    let (state, _) = update(
+        state,
+        Msg::TargetChecked {
+            key: "user:8812:cart".into(),
+            exists: true,
+        },
+    );
+    assert_golden("confirm_rename_target_exists", &draw(&state, 130, 22));
+}
+
+#[test]
+fn golden_confirm_rename_cross_slot_on_a_cluster() {
+    let mut state = rename_capture_open();
+    state.connection.topology = Some(redis_pane_core::state::Topology {
+        primaries: 3,
+        nodes: 6,
+    });
+    let state = rename_staged(state, 7, "cart");
+    assert!(matches!(
+        state.confirm,
+        Some(PendingMutation::RenameKey {
+            cross_slot: true,
+            ..
+        })
+    ));
+    assert_golden("confirm_rename_cross_slot", &draw(&state, 130, 22));
+}
+
+#[test]
+fn golden_confirm_rename_under_read_only_shows_the_reason() {
+    let mut state = rename_capture_open();
+    state.read_only = Some(ReadOnlyReason::Environment);
+    let state = rename_staged(state, 7, "cart");
+    assert_golden("confirm_rename_read_only", &draw(&state, 130, 22));
+}
+
+#[test]
+fn the_rename_row_is_dimmed_with_the_reason_under_read_only_mode() {
+    let mut state = opened("user:8812:session", hash_value(), 2_537);
+    state.focus = Pane::Keys;
+    let row_of = |state: &State| {
+        help::here(state, help::context(state))
+            .into_iter()
+            .find(|r| r.label == "rename")
+            .expect("the keys pane lists rename")
+    };
+    let free = row_of(&state);
+    assert_eq!(free.keys, "R");
+    assert!(free.refused.is_none());
+
+    state.read_only = Some(ReadOnlyReason::Environment);
+    let dimmed = row_of(&state);
+    let refusal = dimmed.refused.expect("dimmed under read-only");
+    assert_eq!(refusal.reason, ReadOnlyReason::Environment);
+    assert!(refusal.preview_only, "the preview still opens");
+    assert_eq!(refusal.text(), "read-only (environment) · preview only");
+}
