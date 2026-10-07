@@ -159,6 +159,12 @@ pub enum Command {
     /// coalesces into one rebuild. The core owns no clock; this is the only
     /// thing it asks of one.
     ScheduleFilterRebuild,
+    /// A rebuild job is running and wants its next slice: the shell answers
+    /// with [`crate::Msg::RebuildStep`] once the frame has been drawn and any
+    /// input already waiting has been handled (M6 task 3). Appended by
+    /// `update` to every message's commands while a job runs, so the shell
+    /// never has to remember whether one is.
+    ContinueRebuild,
     /// Fetch type, TTL and memory usage for these rows of the Loaded set.
     ///
     /// Only ever the visible window (R2.4). Fetching metadata for a whole

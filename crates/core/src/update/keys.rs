@@ -141,7 +141,31 @@ pub(super) fn filter_rebuild_due(mut state: State) -> (State, Vec<Command>) {
     if !state.filter_pending {
         return (state, Vec::new());
     }
-    state.rebuild_list();
+    // A user trigger: starts a sliced job on a large keyspace, replacing any
+    // running one (M6 task 3, decision 5).
+    state.rebuild_list_async();
+    after_move(state)
+}
+
+/// `Msg::RebuildStep`: the shell answers `Command::ContinueRebuild` with one
+/// slice of the running job. A step with no job (replaced, aborted, or
+/// finished since it was asked for) is ignored. The step that finishes the job
+/// swaps its list in, and then does what every rebuild's caller does: scroll
+/// to the selection and fetch metadata for the new window.
+pub(super) fn rebuild_step(mut state: State) -> (State, Vec<Command>) {
+    let Some(covered) = state.rebuild_step() else {
+        return (state, Vec::new());
+    };
+    // Pages that landed during the job and are not in the list yet: start the
+    // follow-up job if the view has fallen far enough behind, on the same
+    // geometric schedule `scan_batch` uses; otherwise the next page decides.
+    if state.keys.len() > covered
+        && state.list.covered_len() < state.keys.len()
+        && !state.list_is_scan_flat()
+        && super::scan::grown_enough(state.keys.len(), state.scan_last_rebuild_len)
+    {
+        state.rebuild_list_coalescing();
+    }
     after_move(state)
 }
 
@@ -152,7 +176,7 @@ fn filter_key_keys_pane(mut state: State, key: KeyPress) -> (State, Vec<Command>
             // pattern nobody typed on purpose.
             state.filtering = false;
             state.list.filter.clear();
-            state.rebuild_list();
+            state.rebuild_list_async();
             after_move(state)
         }
         KeyCode::Enter => {
@@ -160,7 +184,7 @@ fn filter_key_keys_pane(mut state: State, key: KeyPress) -> (State, Vec<Command>
             // Leaving capture with rows still owed: settle now rather than
             // leave a filter on screen that the list does not obey.
             if state.filter_pending {
-                state.rebuild_list();
+                state.rebuild_list_async();
                 return after_move(state);
             }
             (state, Vec::new())
@@ -215,16 +239,20 @@ pub(super) fn open_selected(mut state: State) -> (State, Vec<Command>) {
     // standard treeview Right-arrow behavior (VS Code, macOS/Windows
     // outline views, the WAI-ARIA treeview pattern).
     if state.tree_mode
-        && let Some(crate::state::tree::Row::Group { expanded, .. }) =
-            state.tree.row(state.view.selected)
+        && let Some(crate::state::tree::Row::Group {
+            expanded: shown, ..
+        }) = state.tree.row(state.view.selected)
     {
-        if expanded {
+        let expanded = group_expanded(&state, state.view.selected, shown);
+        if expanded && shown {
             return move_selection(state, 1);
         }
-        if let Some(prefix) = group_prefix_at(&state, state.view.selected) {
+        if !expanded && let Some(prefix) = group_prefix_at(&state, state.view.selected) {
             state.tree.toggle(&prefix);
-            state.refold();
+            state.refold_async();
         }
+        // An expand already asked for and not yet drawn (`expanded && !shown`)
+        // is waiting on its rebuild job: nothing more to do.
         return after_move(state);
     }
     let Some(index) = state.selected_key() else {
@@ -260,28 +288,26 @@ pub(super) fn open_selected(mut state: State) -> (State, Vec<Command>) {
 /// the sort back to Name immediately anyway, so this is a no-op either way —
 /// guarding here just avoids advertising a key that visibly does nothing.
 pub(super) fn cycle_sort(mut state: State) -> (State, Vec<Command>) {
-    if state.tree_mode {
+    if state.target_tree_mode() {
         return (state, Vec::new());
     }
     state.list.sort = state.list.sort.next();
-    state.rebuild_list();
+    state.rebuild_list_async();
     after_move(state)
 }
 
 /// `t`: toggle tree mode.
 pub(super) fn toggle_tree(mut state: State) -> (State, Vec<Command>) {
-    state.tree_mode = !state.tree_mode;
+    // Flip the mode the list is heading for: a job still entering tree mode
+    // has not changed `tree_mode` yet.
+    let want = !state.target_tree_mode();
     state.view.selected = 0;
     state.view.offset = 0;
     // Only the mode changed: tree mode keeps the flat view Name-sorted, so
     // entering it over a current Name view is a fold, and leaving it is no
     // work at all. Each falls back to a full rebuild when the view is not
-    // current (M6 task 2).
-    if state.tree_mode {
-        state.refold();
-    } else {
-        state.leave_tree_mode();
-    }
+    // current (M6 task 2), and a large one is a sliced job (M6 task 3).
+    state.set_tree_mode_async(want);
     after_move(state)
 }
 
@@ -299,18 +325,40 @@ pub(super) fn collapse_group(mut state: State) -> (State, Vec<Command>) {
         return (state, Vec::new());
     }
     if state.tree_mode {
-        if let Some(crate::state::tree::Row::Group { expanded: true, .. }) =
-            state.tree.row(state.view.selected)
+        if let Some(crate::state::tree::Row::Group {
+            expanded: shown, ..
+        }) = state.tree.row(state.view.selected)
         {
-            if let Some(prefix) = group_prefix_at(&state, state.view.selected) {
-                state.tree.toggle(&prefix);
-                state.refold();
+            let expanded = group_expanded(&state, state.view.selected, shown);
+            if expanded {
+                if let Some(prefix) = group_prefix_at(&state, state.view.selected) {
+                    state.tree.toggle(&prefix);
+                    state.refold_async();
+                }
+            } else if !shown {
+                // Already collapsed: Left goes to the parent. (A collapse
+                // already asked for and not yet drawn, `!expanded && shown`,
+                // is waiting on its rebuild job: nothing to do.)
+                if let Some(parent) = parent_row(&state, state.view.selected) {
+                    state.view.selected = parent;
+                }
             }
         } else if let Some(parent) = parent_row(&state, state.view.selected) {
             state.view.selected = parent;
         }
     }
     after_move(state)
+}
+
+/// Whether a group is expanded as far as the reader has asked. Without a
+/// running rebuild job that is simply what its row says; while one runs, the
+/// rows are the old fold and a collapse or expand already asked for is only in
+/// the collapsed set, so a second press must read that, not the stale row.
+fn group_expanded(state: &State, row: usize, shown: bool) -> bool {
+    if !state.rebuild_running() {
+        return shown;
+    }
+    group_prefix_at(state, row).map_or(shown, |prefix| !state.tree.is_collapsed(&prefix))
 }
 
 #[cfg(test)]

@@ -452,6 +452,11 @@ impl State {
         self.job.as_ref().map_or(self.tree_mode, |j| j.want_tree)
     }
 
+    /// Flat, in scan order: the one view a scan page extends in place.
+    pub(crate) fn list_is_scan_flat(&self) -> bool {
+        !self.tree_mode && self.list.sort == SortBy::Scan
+    }
+
     /// Whether `n` keys is more than one slice of work.
     fn is_large(&self, n: usize) -> bool {
         n >= self.rebuild_slice()
@@ -626,7 +631,7 @@ impl State {
 /// collapsed sets, selections and Open keys. Deterministic PRNG, as in M4's
 /// and task 2's tests. The slice is tiny so jobs span many steps.
 #[cfg(test)]
-pub(super) mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::key::KeyName;
     use crate::state::OpenKey;

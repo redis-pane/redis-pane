@@ -35,7 +35,7 @@ const SCAN_REBUILD_GROWTH_PCT: usize = 25;
 /// `last_rebuild_len == 0` always answers true — the scan's first page, with
 /// nothing rebuilt yet, must land on screen rather than leaving the list
 /// empty until growth crosses the threshold.
-fn grown_enough(current_len: usize, last_rebuild_len: usize) -> bool {
+pub(super) fn grown_enough(current_len: usize, last_rebuild_len: usize) -> bool {
     last_rebuild_len == 0
         || current_len >= last_rebuild_len + last_rebuild_len * SCAN_REBUILD_GROWTH_PCT / 100
 }
@@ -107,7 +107,8 @@ pub(super) fn scan_batch(mut state: State, keys: Vec<Vec<u8>>) -> (State, Vec<Co
             // incremental append would otherwise be the last thing the
             // reader sees for the rest of the session.
             state.restore_key = None;
-            state.rebuild_list();
+            // Aborts any running job: the new one covers every key.
+            state.rebuild_list_async();
             return (state, vec![Command::CancelScan]);
         }
         // Only after the push succeeded: a key the cap refused has no index,
@@ -131,7 +132,14 @@ pub(super) fn scan_batch(mut state: State, keys: Vec<Vec<u8>>) -> (State, Vec<Co
         };
     }
 
-    if !state.tree_mode && state.list.sort == SortBy::Scan {
+    if state.rebuild_running() {
+        // A sliced rebuild is building a list of the keys it started with. A
+        // page never replaces it (that would starve it late in a scan): it
+        // marks the job dirty, and the swap brings the new keys level
+        // (M6 task 3, decision 5). Neither the append below nor a rebuild
+        // may touch the shown list, which is built for what it was.
+        state.mark_rebuild_dirty();
+    } else if !state.tree_mode && state.list.sort == SortBy::Scan {
         // The common case (decision 1): tree mode is the default view, but
         // a scan starts in flat/scan order and the default sort stays Scan
         // until a reader changes it, so this is what the vast majority of a
@@ -155,7 +163,7 @@ pub(super) fn scan_batch(mut state: State, keys: Vec<Vec<u8>>) -> (State, Vec<Co
         // page here is the O(n²) this task removes (decision 2); rebuilding
         // on the geometric schedule instead keeps the total rebuild cost
         // across the whole scan at O(n log n).
-        state.rebuild_list();
+        state.rebuild_list_async();
     }
 
     if let Some(index) = restore_found {
@@ -253,7 +261,7 @@ pub(super) fn scan_complete(mut state: State) -> (State, Vec<Command>) {
             total: state.keys.len() as u64,
         };
     }
-    state.rebuild_list();
+    state.rebuild_list_async();
     (state, Vec::new())
 }
 
@@ -264,14 +272,14 @@ pub(super) fn scan_cancelled(mut state: State) -> (State, Vec<Command>) {
             scanned: state.keys.len() as u64,
         };
     }
-    state.rebuild_list();
+    state.rebuild_list_async();
     (state, Vec::new())
 }
 
 pub(super) fn scan_failed(mut state: State, error: String) -> (State, Vec<Command>) {
     state.restore_key = None;
     state.scan = ScanState::Failed { error };
-    state.rebuild_list();
+    state.rebuild_list_async();
     (state, Vec::new())
 }
 
@@ -287,7 +295,7 @@ pub(super) fn scan_interrupted(
             reason,
         };
     }
-    state.rebuild_list();
+    state.rebuild_list_async();
     (state, Vec::new())
 }
 

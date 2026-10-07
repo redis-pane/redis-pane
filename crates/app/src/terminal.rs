@@ -516,6 +516,9 @@ impl Shell {
         match command {
             Command::Quit => return ControlFlow::Break(()),
             Command::StartScan { pattern } => self.start_scan(pattern),
+            // Stepping is the loop's own business (`RebuildGate`), not a
+            // handler's: it needs the draw/dirty state only the loop has.
+            Command::ContinueRebuild => {}
             Command::ScheduleFilterRebuild => self
                 .filter_debounce
                 .schedule(tokio::time::Instant::now(), FILTER_DEBOUNCE),
