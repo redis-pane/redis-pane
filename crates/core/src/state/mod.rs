@@ -15,6 +15,7 @@ pub mod open;
 pub mod pubsub;
 pub mod rebuild;
 pub mod scan;
+mod search;
 pub mod session;
 pub mod slowlog;
 mod sort;

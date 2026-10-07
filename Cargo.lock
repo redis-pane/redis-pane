@@ -2332,6 +2332,7 @@ dependencies = [
 name = "redis-pane-core"
 version = "0.1.0-beta.2"
 dependencies = [
+ "memchr",
  "ratatui",
  "ratatui-textarea",
  "serde",
