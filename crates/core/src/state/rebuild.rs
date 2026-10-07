@@ -14,6 +14,7 @@
 
 use std::cmp::Ordering;
 
+use super::sort::NameSorter;
 use super::tree::{FoldProgress, NO_ROW};
 use super::view::{has_sort_value, matches, order_cmp};
 use super::{FilterMode, KeyView, LoadedSet, SortBy, State, Tree};
@@ -103,6 +104,12 @@ pub struct RebuildJob {
     // Sort stage.
     scratch: Vec<u32>,
     sort_phase: SortPhase,
+    /// The Name sort's record sorter (M6 task 4), while it runs. The lazy
+    /// sorts keep `sort_phase` and their comparator.
+    sorter: Option<NameSorter>,
+    /// For a Name sort: each position's LCP with its predecessor, the
+    /// sorter's by-product, kept for the fold (M6 task 5).
+    lcp: Vec<u32>,
     // Inverse stage.
     inverse: Vec<u32>,
     // Fold stage.
@@ -137,6 +144,8 @@ impl RebuildJob {
             known: 0,
             scratch: Vec::new(),
             sort_phase: SortPhase::Chunks { next: 0 },
+            sorter: None,
+            lcp: Vec::new(),
             inverse: Vec::new(),
             tree: want_tree.then(|| tree.shell()),
             fold: FoldProgress::default(),
@@ -160,10 +169,19 @@ impl RebuildJob {
             known: 0,
             scratch: Vec::new(),
             sort_phase: SortPhase::Chunks { next: 0 },
+            sorter: None,
+            lcp: Vec::new(),
             inverse: Vec::new(),
             tree: Some(tree.shell()),
             fold: FoldProgress::default(),
         }
+    }
+
+    /// For a finished Name sort, how many bytes each name of the order shares
+    /// with the one before it (0 at position 0). Empty for any other sort,
+    /// and for a fold-only job.
+    pub fn name_lcp(&self) -> &[u32] {
+        &self.lcp
     }
 
     pub fn kind(&self) -> JobKind {
@@ -194,9 +212,10 @@ impl RebuildJob {
     pub fn stage_name(&self) -> &'static str {
         match self.stage {
             Stage::Filter => "filter",
-            Stage::Sort => match self.sort_phase {
-                SortPhase::Chunks { .. } => "sort chunk",
-                SortPhase::Merge(_) => "sort merge",
+            Stage::Sort => match (&self.sorter, &self.sort_phase) {
+                (Some(sorter), _) => sorter.phase_name(),
+                (None, SortPhase::Chunks { .. }) => "sort chunk",
+                (None, SortPhase::Merge(_)) => "sort merge",
             },
             Stage::Inverse => "inverse",
             Stage::Fold => "fold",
@@ -209,7 +228,10 @@ impl RebuildJob {
     pub fn heap_bytes(&self) -> usize {
         let u32s = (self.order.capacity() + self.scratch.capacity() + self.inverse.capacity())
             * std::mem::size_of::<u32>();
-        u32s + self.tree.as_ref().map_or(0, Tree::heap_bytes) + self.fold.heap_bytes()
+        u32s + self.lcp.capacity() * std::mem::size_of::<u32>()
+            + self.sorter.as_ref().map_or(0, NameSorter::heap_bytes)
+            + self.tree.as_ref().map_or(0, Tree::heap_bytes)
+            + self.fold.heap_bytes()
     }
 
     /// Stage-weighted progress, 0 to 99 (the swap is the 100).
@@ -260,6 +282,9 @@ impl RebuildJob {
     }
 
     fn sort_fraction(&self) -> f32 {
+        if let Some(sorter) = &self.sorter {
+            return sorter.fraction();
+        }
         let n = self.order.len().max(1);
         let chunks = n.div_ceil(self.slice);
         let passes = if chunks > 1 {
@@ -321,6 +346,19 @@ impl RebuildJob {
 
     fn sort_step(&mut self, keys: &LoadedSet) {
         let n = self.order.len();
+        if self.sort == SortBy::Name {
+            let slice = self.slice;
+            let sorter = self.sorter.get_or_insert_with(|| NameSorter::new(n, slice));
+            if sorter.step(keys, &mut self.order) {
+                self.lcp = self
+                    .sorter
+                    .take()
+                    .map(NameSorter::into_lcp)
+                    .unwrap_or_default();
+                self.finish_sort();
+            }
+            return;
+        }
         let (slice, sort) = (self.slice, self.sort);
         match &mut self.sort_phase {
             SortPhase::Chunks { next } => {
@@ -928,6 +966,49 @@ pub(crate) mod tests {
         assert!(jobs > 1500, "only {jobs} jobs ran");
         assert!(multi_step > 1000, "only {multi_step} multi-step jobs");
         assert!(fold_only > 100, "only {fold_only} fold-only jobs");
+    }
+
+    /// The Name sort against the original comparator, written out here and
+    /// sharing nothing with the record sort: byte order of the names, equal
+    /// names by index. Also pins the LCP by-product the fold will use.
+    #[test]
+    fn a_name_sorted_job_matches_the_original_comparator_and_lcp() {
+        let mut rng = Rng(1301);
+        for case in 0..150 {
+            let mut state = random_state(&mut rng, false);
+            state.rebuild_slice = Some(1 + rng.below(40));
+            state.list.filter = String::new();
+            state.list.sort = SortBy::Name;
+            state.rebuild_list_async();
+            if state.job.is_none() {
+                continue;
+            }
+            let n = state.keys.len();
+            let name = |i: u32| state.keys.name(i as usize).unwrap().to_vec();
+            let mut want: Vec<u32> = (0..n as u32).collect();
+            want.sort_by(|a, b| name(*a).cmp(&name(*b)).then(a.cmp(b)));
+            let want_lcp: Vec<u32> = (0..n)
+                .map(|p| {
+                    if p == 0 {
+                        return 0;
+                    }
+                    let (x, y) = (name(want[p - 1]), name(want[p]));
+                    x.iter().zip(&y).take_while(|(a, b)| a == b).count() as u32
+                })
+                .collect();
+            // Step to just past the sort, where the job still holds both.
+            while state.job.as_ref().is_some_and(|j| {
+                matches!(j.stage_name(), "filter" | "sort chunk" | "sort merge")
+                    || j.stage_name().starts_with("sort")
+            }) {
+                state.rebuild_step();
+            }
+            let job = state.job.as_ref().expect("job past the sort");
+            assert_eq!(job.order, want, "case {case}: order");
+            assert_eq!(job.name_lcp(), want_lcp, "case {case}: lcp");
+            state.run_rebuild_to_completion();
+            assert_eq!(state.list.order(), want, "case {case}: swapped order");
+        }
     }
 
     #[test]

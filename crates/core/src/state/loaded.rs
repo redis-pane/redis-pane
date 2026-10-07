@@ -90,6 +90,14 @@ const KIND_GONE: u8 = u8::MAX;
 /// the scan and says so; it does not grow until the OOM killer intervenes.
 pub const DEFAULT_CAP: usize = 2_000_000;
 
+/// Up to the first 8 bytes of `bytes`, big-endian, zero-padded.
+pub(super) fn be_prefix(bytes: &[u8]) -> u64 {
+    let mut buf = [0u8; 8];
+    let n = bytes.len().min(8);
+    buf[..n].copy_from_slice(&bytes[..n]);
+    u64::from_be_bytes(buf)
+}
+
 /// Every key the session has scanned, and what is known about each.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LoadedSet {
@@ -97,6 +105,11 @@ pub struct LoadedSet {
     arena: Vec<u8>,
     offsets: Vec<u32>,
     lens: Vec<u16>,
+    /// The first 8 bytes of each name, big-endian and zero-padded: the sort
+    /// key of the Name sort's record sort (M6 task 4). Zero padding alone
+    /// cannot tell `"ab"` from `"ab\0"`; the sort pairs it with the name's
+    /// length (`LoadedSet::len_of`) and never trusts the prefix on its own.
+    prefix: Vec<u64>,
     kinds: Vec<u8>,
     ttls: Vec<i32>,
     /// Epoch seconds when this row's TTL was read — what makes it a countdown
@@ -124,6 +137,7 @@ impl LoadedSet {
             arena: Vec::new(),
             offsets: Vec::new(),
             lens: Vec::new(),
+            prefix: Vec::new(),
             kinds: Vec::new(),
             ttls: Vec::new(),
             ttl_read_at: Vec::new(),
@@ -166,6 +180,7 @@ impl LoadedSet {
         };
         self.offsets.push(self.arena.len() as u32);
         self.lens.push(len);
+        self.prefix.push(be_prefix(name));
         self.arena.extend_from_slice(name);
         self.kinds.push(0);
         self.ttls.push(TTL_UNKNOWN);
@@ -174,10 +189,35 @@ impl LoadedSet {
         true
     }
 
+    /// The first 8 bytes of name `i`, big-endian, zero-padded.
+    pub fn prefix(&self, i: usize) -> Option<u64> {
+        self.prefix.get(i).copied()
+    }
+
+    /// The byte length of name `i`.
+    pub fn len_of(&self, i: usize) -> Option<usize> {
+        self.lens.get(i).map(|l| *l as usize)
+    }
+
     pub fn name(&self, i: usize) -> Option<&[u8]> {
         let start = *self.offsets.get(i)? as usize;
         let len = *self.lens.get(i)? as usize;
         self.arena.get(start..start + len)
+    }
+
+    /// Where name `i` lives in the arena: `(start, len)`, or `(0, 0)` for an
+    /// index out of range. The sort's gather reads this for many keys before
+    /// touching the arena, so the arena loads are independent of each other.
+    pub(super) fn span(&self, i: usize) -> (usize, usize) {
+        match (self.offsets.get(i), self.lens.get(i)) {
+            (Some(o), Some(l)) => (*o as usize, *l as usize),
+            _ => (0, 0),
+        }
+    }
+
+    /// The arena bytes at `start..start + len` (empty when out of range).
+    pub(super) fn arena_at(&self, start: usize, len: usize) -> &[u8] {
+        self.arena.get(start..start + len).unwrap_or(&[])
     }
 
     /// The key name as text. Redis keys are arbitrary bytes, so this is lossy
@@ -305,6 +345,7 @@ impl LoadedSet {
         self.arena.clear();
         self.offsets.clear();
         self.lens.clear();
+        self.prefix.clear();
         self.kinds.clear();
         self.ttls.clear();
         self.ttl_read_at.clear();
@@ -321,6 +362,7 @@ impl LoadedSet {
         self.arena.capacity()
             + self.offsets.capacity() * 4
             + self.lens.capacity() * 2
+            + self.prefix.capacity() * 8
             + self.kinds.capacity()
             + self.ttls.capacity() * 4
             + self.ttl_read_at.capacity() * 4
@@ -512,6 +554,23 @@ mod tests {
         s.clear();
         assert!(s.is_empty());
         assert!(!s.is_capped());
+    }
+
+    /// The sort-prefix column (M6 task 4) is one entry per key, reset by
+    /// `clear`, and counted in `heap_bytes`.
+    #[test]
+    fn prefix_column_follows_push_clear_and_heap_bytes() {
+        let mut s = LoadedSet::default();
+        for i in 0..100 {
+            s.push(format!("k:{i}").as_bytes());
+        }
+        assert_eq!(s.prefix.len(), s.len());
+        assert!(s.heap_bytes() >= s.prefix.capacity() * 8 + s.arena.capacity());
+        s.clear();
+        assert!(s.prefix.is_empty());
+        assert_eq!(s.prefix(0), None);
+        s.push(b"x");
+        assert_eq!(s.prefix.len(), s.len());
     }
 
     /// `clear` used to leave `ttl_read_at` out of the six arrays it reset
