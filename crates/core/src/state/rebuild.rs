@@ -189,6 +189,29 @@ impl RebuildJob {
         self.dirty
     }
 
+    /// Which stage the next step runs, for the perf suite's per-stage worst
+    /// step and the slice calibration.
+    pub fn stage_name(&self) -> &'static str {
+        match self.stage {
+            Stage::Filter => "filter",
+            Stage::Sort => match self.sort_phase {
+                SortPhase::Chunks { .. } => "sort chunk",
+                SortPhase::Merge(_) => "sort merge",
+            },
+            Stage::Inverse => "inverse",
+            Stage::Fold => "fold",
+        }
+    }
+
+    /// Heap bytes the job holds beside the shown list: its buffers (order,
+    /// merge scratch, inverse, the tree being folded and the fold's counts).
+    /// Reported by the perf suite against the 250 MB budget (decision 9).
+    pub fn heap_bytes(&self) -> usize {
+        let u32s = (self.order.capacity() + self.scratch.capacity() + self.inverse.capacity())
+            * std::mem::size_of::<u32>();
+        u32s + self.tree.as_ref().map_or(0, Tree::heap_bytes) + self.fold.heap_bytes()
+    }
+
     /// Stage-weighted progress, 0 to 99 (the swap is the 100).
     pub fn progress(&self, live: &KeyView) -> u8 {
         let n = match self.kind {

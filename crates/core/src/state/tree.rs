@@ -80,6 +80,17 @@ pub(super) struct FoldProgress {
     fixup: Option<usize>,
 }
 
+impl FoldProgress {
+    /// Heap bytes the loop state holds: chiefly the descendant counts, which
+    /// run parallel to the rows.
+    pub(super) fn heap_bytes(&self) -> usize {
+        self.counts.capacity() * std::mem::size_of::<u32>()
+            + self.open_groups.capacity() * std::mem::size_of::<usize>()
+            + (self.previous.capacity() + self.segments.capacity())
+                * std::mem::size_of::<(u32, u16)>()
+    }
+}
+
 impl Default for Tree {
     fn default() -> Self {
         // `:` is the near-universal Redis convention; it is configurable
@@ -205,8 +216,11 @@ impl Tree {
     /// Start a fold over a view of `order_len` rows: clears the rows and
     /// returns the loop state [`Tree::fold_step`] resumes.
     pub(super) fn fold_begin(&mut self, order_len: usize) -> FoldProgress {
+        // No `reserve`: the row count is unknown (groups add rows), and a
+        // reserve of the key count makes the Vec's doubling land on a
+        // capacity twice the size it otherwise would (64 MB, not 33, at 1M).
+        let _ = order_len;
         self.rows.clear();
-        self.rows.reserve(order_len);
         FoldProgress::default()
     }
 
