@@ -13,6 +13,7 @@ pub mod loaded;
 pub mod monitor;
 pub mod open;
 pub mod pubsub;
+pub mod rebuild;
 pub mod scan;
 pub mod session;
 pub mod slowlog;
@@ -41,6 +42,7 @@ pub use pubsub::{
     PUBSUB_CAP, PUBSUB_PAYLOAD_MAX, PubSubFocus, PubSubMessage, PubSubState, SHARDED_MIN_MAJOR,
     Subscription, parse_subscription, parse_subscription_with, redis_glob_match,
 };
+pub use rebuild::{JobKind, REBUILD_SLICE, RebuildJob};
 pub use scan::{InterruptReason, ScanState};
 pub use session::{SessionFile, SessionFileError, SessionState};
 pub use slowlog::{NodeFailure, SlowlogEntry, SlowlogSort, SlowlogState};
@@ -962,6 +964,12 @@ pub struct State {
     /// box is always current; only the rows lag, for one debounce window.
     /// Cleared by every rebuild, whoever runs it.
     pub filter_pending: bool,
+    /// The sliced rebuild in progress, if any (M6 task 3). `list`, `tree` and
+    /// `tree_mode` describe what is *shown* until it swaps.
+    pub job: Option<RebuildJob>,
+    /// Keys per rebuild step; `None` is [`REBUILD_SLICE`]. A test and
+    /// calibration hook, so a small keyspace can span many steps.
+    pub rebuild_slice: Option<usize>,
     /// Which numbering of `keys` is current. Bumped where indices are
     /// renumbered (`scan_started`'s clear), carried by every
     /// `Command::FetchMetadata`, and checked on the reply.
@@ -1249,6 +1257,9 @@ impl State {
     }
 
     fn rebuild_list_with(&mut self, narrow: bool) {
+        // A synchronous rebuild is current by construction: whatever sliced
+        // job was running is obsolete (M6 task 3).
+        self.job = None;
         self.filter_pending = false;
         // Bookkeeping for `scan_batch`'s geometric rebuild schedule (M4 task
         // 3, `docs/plans/m4-perf-scan.md` decision 2): *every* full rebuild,
@@ -1309,6 +1320,7 @@ impl State {
     /// Does not touch `list`, `filter_pending` or `scan_last_rebuild_len`: it
     /// adds no keys, and only the scan schedule reads the latter.
     pub fn refold(&mut self) {
+        self.job = None;
         if !self.fold_is_current() {
             self.rebuild_list();
             return;
@@ -1323,6 +1335,7 @@ impl State {
     /// there is nothing to fold: only the selection and Open key move. Falls
     /// back to [`State::rebuild_list`] when the view is not current.
     pub fn leave_tree_mode(&mut self) {
+        self.job = None;
         if self.tree_mode || !self.view_is_current() {
             self.rebuild_list();
             return;
