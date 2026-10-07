@@ -60,9 +60,8 @@ excuse.
 - **Not a multi-target workspace.** One Connection per process, one database per Connection.
   A second target means a second terminal. See
   [ADR-0005](adr/0005-one-connection-per-process.md).
-- **Cluster was not in v1 or M4; it is milestone M5.** Sentinel shipped first. Cluster browsing,
-  the Viewer and liveness work from M5 task 5; the Dashboard shows the whole Cluster from task 7,
-  and the Slowlog and Monitor show an in-view notice on a Cluster until M5 task 8 makes them per node (see
+- **Cluster was not in v1 or M4; it shipped in M5** (`0.1.0-beta.2`). Sentinel shipped first.
+  Browsing, the Viewer, liveness, mutations and every server view work on a Cluster (see
   [`plans/m5-cluster.md`](plans/m5-cluster.md)). The earlier refusal
   ([ADR-0021](adr/0021-cluster-refused-until-supported.md)) is superseded by
   [ADR-0022](adr/0022-cluster-supported-in-stages.md); see also
@@ -112,12 +111,13 @@ config file; a **Connection** is a live session, which may be **ad-hoc** (no Pro
   `--tls`/`--user`/`--password` flags, which always take precedence over a Profile's or the
   environment's credentials (ADR-0001).
 - **R1.11** Sentinel topology discovery, with failover surfacing as a reconnect to the new
-  address. Cluster is **not** in v1; it is milestone M5 (§9,
-  [`plans/m5-cluster.md`](plans/m5-cluster.md)). From M5 task 5 a Cluster target (a
-  `redis-cluster://` URL, or a plain URL to any node of a cluster-enabled server) connects as a
-  cluster client: the keyspace, the Viewer and liveness work across every primary, and the
-  Dashboard shows the whole Cluster (a health line, summed tiles, a node table; M5 task 7), and
-  Slowlog and Monitor show an in-view notice until M5 task 8. See
+  address. Cluster was **not** in v1; it shipped in milestone M5 (§9,
+  [`plans/m5-cluster.md`](plans/m5-cluster.md)). A Cluster target (a `redis-cluster://` URL, or
+  a plain URL to any node of a cluster-enabled server) connects as a cluster client: the keyspace
+  is scanned across every primary, liveness is armed on the open key's owner and follows it
+  through failovers and slot moves, mutations route to the owner, the Dashboard aggregates every
+  node with a node table, the Slowlog and Monitor merge every node with a NODE column, and Pub/Sub
+  adds sharded subscriptions. See
   [ADR-0008](adr/0008-sentinel-in-v1-cluster-deferred.md),
   [ADR-0022](adr/0022-cluster-supported-in-stages.md) (which superseded
   [ADR-0021](adr/0021-cluster-refused-until-supported.md)'s startup refusal), and §5.
@@ -298,13 +298,13 @@ config file; a **Connection** is a live session, which may be **ad-hoc** (no Pro
   (Homebrew, musl/arm64 Linux, macOS signing and notarization, Windows signing) is wanted but its
   scheduling is **decided at the end of alpha**, not in M4 — see §10. M4 ends in a beta,
   `0.1.0-beta.1`, not a 1.0.
-- **M5 — Cluster.** After the beta. Browse, view, live updates and edit across every primary
+- **M5 — Cluster.** **Done, released as `0.1.0-beta.2`.** Browse, view, live updates and edit across every primary
   (merged scan, liveness armed on the key's owner node, per-node reconnect), then the server
   views made cluster-aware (an aggregated Dashboard with a node table, merged Slowlog and Monitor,
   sharded Pub/Sub) — without a connection switcher, so ADR-0005 holds. Designed in
-  [`plans/m5-cluster.md`](plans/m5-cluster.md), tasks in [`plans/m5-planning.md`](plans/m5-planning.md); browsing a Cluster works from task 5 (the refusal,
-  [ADR-0021](adr/0021-cluster-refused-until-supported.md), is superseded by
-  [ADR-0022](adr/0022-cluster-supported-in-stages.md)) and the server views follow in tasks 7-9.
+  [`plans/m5-cluster.md`](plans/m5-cluster.md), tasks in [`plans/m5-planning.md`](plans/m5-planning.md). The M4 refusal
+  ([ADR-0021](adr/0021-cluster-refused-until-supported.md)) is superseded by
+  [ADR-0022](adr/0022-cluster-supported-in-stages.md).
 - **M6 — Rebuilds at real SCAN order.** After the beta. M4's perf harness loaded keys in name
   order; real `SCAN` order is effectively random, and at 1M keys a tree toggle, a sort change or a
   full filter rebuild then takes ~0.4–0.5 s instead of fitting in a 16 ms frame. M6 makes the

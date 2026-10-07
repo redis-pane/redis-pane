@@ -22,13 +22,13 @@ Still not built: renaming or copying a key, and bulk operations across several k
 Download the binary for your OS from the [Releases page](https://github.com/vinodsantharam/redis-pane/releases) — macOS (Intel or Apple Silicon), Linux (x86_64), and Windows are all built there. Or, on macOS/Linux, run the installer script from a release page (note: these beta releases are marked as GitHub prereleases, so the `/latest/` URL alias doesn't resolve to them — use the tagged URL, matching whatever the current beta tag is):
 
 ```bash
-curl --proto '=https' --tlsv1.2 -LsSf https://github.com/vinodsantharam/redis-pane/releases/download/v0.1.0-beta.1/redis-pane-installer.sh | sh
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/vinodsantharam/redis-pane/releases/download/v0.1.0-beta.2/redis-pane-installer.sh | sh
 ```
 
 On Windows, from PowerShell:
 
 ```powershell
-irm https://github.com/vinodsantharam/redis-pane/releases/download/v0.1.0-beta.1/redis-pane-installer.ps1 | iex
+irm https://github.com/vinodsantharam/redis-pane/releases/download/v0.1.0-beta.2/redis-pane-installer.ps1 | iex
 ```
 
 These builds are **unsigned** — expected for a beta. On first run:
@@ -185,8 +185,6 @@ redis-pane --profile mine --probe
 - No embedded Redis console — `redis-cli` is one keystroke away in the terminal you're already
   in. No command palette either: it shipped briefly and was withdrawn, since every action it
   listed already had a key.
-- On a Cluster, the Slowlog and Monitor are not there yet (they are per node and come later in M5,
-  ADR-0022).
 - Nothing older than Redis 6.0 / no RESP2 — you'll get a clear message naming the version, not a
   crash.
 - A handful of known UI gaps are already tracked in `docs/UI_TASKS.md` if you want to check

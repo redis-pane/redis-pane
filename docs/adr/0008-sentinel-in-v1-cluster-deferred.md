@@ -65,4 +65,6 @@ what this deferral has meant in practice since this ADR shipped.
 
 [ADR-0022](0022-cluster-supported-in-stages.md) (Accepted, M5 task 5) — Cluster is no longer
 deferred: the keyspace, the Viewer and liveness work on a Cluster, and the server views follow
-later in M5. ADR-0021's refusal is superseded.
+later in M5. ADR-0021's refusal is superseded. **Resolved** at the M5 close-out (`0.1.0-beta.2`):
+every surface this ADR listed — per-node dashboards, merged progress, per-node tracking — is built,
+so the Cluster deferral no longer applies.

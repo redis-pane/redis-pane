@@ -1,6 +1,6 @@
 # M5 — Cluster: task plan and per-task docs
 
-Status: **in progress — tasks 1–9 done.** The design is [`m5-cluster.md`](m5-cluster.md); this file
+Status: **done — all ten tasks built, released as `0.1.0-beta.2`.** The design is [`m5-cluster.md`](m5-cluster.md); this file
 splits it into tasks, one Sonnet subagent run each, in the M4 shape (one plan doc per task, built
 phase by phase, merged before the next starts).
 
