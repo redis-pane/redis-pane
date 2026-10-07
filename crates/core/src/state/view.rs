@@ -133,6 +133,39 @@ impl KeyView {
         self.order.len()
     }
 
+    /// The index vector itself, for a fold that reads it in place.
+    pub(super) fn order(&self) -> &[u32] {
+        &self.order
+    }
+
+    /// How many Loaded set keys the order was built or extended over (zero
+    /// before any build).
+    pub fn covered_len(&self) -> usize {
+        self.applied.as_ref().map_or(0, |a| a.covered)
+    }
+
+    /// Put a finished rebuild job's result in place: exactly the state
+    /// [`KeyView::rebuild`] leaves, built for `filter`/`mode`/`sort` over
+    /// `covered` keys (the job's snapshot, not the typed text).
+    pub(super) fn install(
+        &mut self,
+        order: Vec<u32>,
+        inverse: Vec<u32>,
+        known: usize,
+        built: (String, FilterMode, SortBy),
+        covered: usize,
+    ) {
+        self.order = order;
+        self.inverse = inverse;
+        self.known = known;
+        self.applied = Some(Applied {
+            filter: built.0,
+            mode: built.1,
+            sort: built.2,
+            covered,
+        });
+    }
+
     pub fn is_empty(&self) -> bool {
         self.order.is_empty()
     }
@@ -393,6 +426,46 @@ impl KeyView {
                 (None, None) => a.cmp(b),
             }
         });
+    }
+}
+
+/// The one comparison every sort uses when it cannot run as a single
+/// `sort_by`: the rebuild job's chunk sort and merge (M6 task 3). Same
+/// semantics as [`KeyView::apply_sort`]: `Name` is the byte order of the
+/// names; each lazy column orders what is known by value then index, with
+/// unknowns last in scan order. `Scan` is index order.
+pub(super) fn order_cmp(keys: &LoadedSet, sort: SortBy, a: u32, b: u32) -> std::cmp::Ordering {
+    fn lazy<T: Ord>(x: Option<T>, y: Option<T>, a: u32, b: u32) -> std::cmp::Ordering {
+        match (x, y) {
+            (Some(x), Some(y)) => x.cmp(&y).then(a.cmp(&b)),
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (None, None) => a.cmp(&b),
+        }
+    }
+    let (ia, ib) = (a as usize, b as usize);
+    match sort {
+        SortBy::Scan => a.cmp(&b),
+        SortBy::Name => keys.name(ia).cmp(&keys.name(ib)),
+        SortBy::Ttl => lazy(keys.ttl(ia).map(ttl_rank), keys.ttl(ib).map(ttl_rank), a, b),
+        SortBy::Size => lazy(keys.size(ia), keys.size(ib), a, b),
+        SortBy::Kind => lazy(
+            keys.kind(ia).map(|k| k as u8),
+            keys.kind(ib).map(|k| k as u8),
+            a,
+            b,
+        ),
+    }
+}
+
+/// Whether a key has a value for a lazy sort column (always true for the
+/// others): what `known` counts.
+pub(super) fn has_sort_value(keys: &LoadedSet, sort: SortBy, i: usize) -> bool {
+    match sort {
+        SortBy::Scan | SortBy::Name => true,
+        SortBy::Ttl => keys.ttl(i).is_some(),
+        SortBy::Size => keys.size(i).is_some(),
+        SortBy::Kind => keys.kind(i).is_some(),
     }
 }
 

@@ -62,6 +62,35 @@ pub struct Tree {
     pub separator: char,
 }
 
+/// Where a fold has got to: [`Tree::rebuild`]'s loop state as a value, so the
+/// rebuild job can stop after a slice and resume on the next step.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub(super) struct FoldProgress {
+    /// The next view row to place.
+    next: usize,
+    /// The previous key's prefix segments, and the current key's: two
+    /// buffers swapped per key, so the fold allocates no per-key `Vec`.
+    previous: Vec<(u32, u16)>,
+    segments: Vec<(u32, u16)>,
+    /// Row indices of the currently-open ancestor Group rows.
+    open_groups: Vec<usize>,
+    /// Descendant counts, parallel to `rows`, applied in the fix-up pass.
+    counts: Vec<u32>,
+    /// `Some(cursor)` once every key is placed: the next row to fix up.
+    fixup: Option<usize>,
+}
+
+impl FoldProgress {
+    /// Heap bytes the loop state holds: chiefly the descendant counts, which
+    /// run parallel to the rows.
+    pub(super) fn heap_bytes(&self) -> usize {
+        self.counts.capacity() * std::mem::size_of::<u32>()
+            + self.open_groups.capacity() * std::mem::size_of::<usize>()
+            + (self.previous.capacity() + self.segments.capacity())
+                * std::mem::size_of::<(u32, u16)>()
+    }
+}
+
 impl Default for Tree {
     fn default() -> Self {
         // `:` is the near-universal Redis convention; it is configurable
@@ -162,136 +191,90 @@ impl Tree {
     /// Runs in one pass over the view's order, comparing each key's prefix
     /// segments against the previous key's. That is only correct on a
     /// name-ordered view, which is why tree mode sorts by name.
+    ///
+    /// The synchronous form of the sliced fold the rebuild job steps
+    /// (`fold_begin` / `fold_step`, M6 task 3): one code path, so the two
+    /// cannot disagree.
     pub fn rebuild(&mut self, keys: &LoadedSet, view: &KeyView) {
-        self.rows.clear();
-        let sep = self.separator as u8;
-        // Two segment buffers for the whole pass, swapped per key: the
-        // rebuild allocates no per-key `Vec` (M4 task 4, decision 3).
-        let mut previous: Vec<(u32, u16)> = Vec::new();
-        let mut segments: Vec<(u32, u16)> = Vec::new();
-        // Row indices of the currently-open ancestor Group rows, kept in
-        // step with `previous` (truncated on divergence, extended on a new
-        // group) rather than recomputed from `self.rows` afterwards — that
-        // is what lets a collapsed group's count include children that
-        // never become rows of their own. `counts` is parallel to
-        // `self.rows`, filled in here and applied once at the end.
-        let mut open_groups: Vec<usize> = Vec::new();
-        let mut counts: Vec<u32> = Vec::new();
+        let order = view.order();
+        let mut progress = self.fold_begin();
+        while !self.fold_step(keys, order, keys.len(), &mut progress, usize::MAX) {}
+    }
 
-        for row in 0..view.len() {
-            let Some(index) = view.index_at(row) else {
-                continue;
-            };
-            let Some(name) = keys.name(index) else {
-                continue;
-            };
-            let Some(start) = keys.name_offset(index) else {
-                continue;
-            };
-
-            split_segments(name, sep, start, &mut segments);
-            // How many leading segments this key shares with the previous one.
-            //
-            // Compared by *bytes*, not by `(offset, len)`: the same prefix text
-            // sits at a different arena offset in every key that carries it, so
-            // comparing handles would find nothing in common and emit a fresh
-            // group header for every single key.
-            let shared = segments
-                .iter()
-                .zip(previous.iter())
-                .take_while(|((ao, al), (bo, bl))| {
-                    keys.arena_slice(*ao, *al) == keys.arena_slice(*bo, *bl)
-                })
-                .count();
-            open_groups.truncate(shared);
-
-            // `shared` is a *byte* comparison against `previous`'s full
-            // segment list, which is set below regardless of whether the
-            // matching key actually got rows for every one of those
-            // segments. If it broke early because an ancestor was collapsed,
-            // `previous` still carries every segment past that point — so
-            // the next key in a *different* branch under the same collapsed
-            // ancestor (e.g. `cache:user:…` right after `cache:page:…`, both
-            // hidden under a collapsed `cache:`) can still show `shared >= 1`
-            // purely because their leading bytes coincide, and `depth <
-            // shared` below would then `continue` straight past re-checking
-            // whether `cache:` is collapsed — walking right into creating a
-            // fresh `user:` row underneath a parent marked shut (#reported
-            // as "collapsing cache: leaves one child visible").
-            //
-            // `open_groups` does not have this problem: it only ever holds
-            // rows that were actually pushed, so if an ancestor was
-            // collapsed, its row is always the *last* entry (nothing deeper
-            // was ever opened past a `break`). Checking it directly is the
-            // fix — anything still open and collapsed hides this key's
-            // entire remaining subtree, group rows included.
-            let hidden_by_collapsed_ancestor = open_groups.last().is_some_and(|&r| {
-                matches!(
-                    self.rows[r],
-                    Row::Group {
-                        expanded: false,
-                        ..
-                    }
-                )
-            });
-
-            if !hidden_by_collapsed_ancestor {
-                for (depth, (offset, len)) in segments.iter().enumerate() {
-                    if depth < shared {
-                        continue;
-                    }
-                    // The prefix through this segment and its separator is a
-                    // slice of the key's own name — segments are contiguous.
-                    let end = (*offset - start) as usize + *len as usize + 1;
-                    let collapsed = self.prefix_is_collapsed(&name[..end]);
-                    self.rows.push(Row::Group {
-                        offset: *offset,
-                        len: *len,
-                        depth: depth as u16,
-                        descendants: 0,
-                        expanded: !collapsed,
-                    });
-                    counts.push(0);
-                    open_groups.push(self.rows.len() - 1);
-                    if collapsed {
-                        // Stop descending: every key under this prefix is
-                        // hidden. The collapsed group's own row stays in
-                        // `open_groups`, though — its count must keep
-                        // growing even though none of these keys get a row
-                        // of their own.
-                        break;
-                    }
-                }
-            }
-
-            // Every ancestor still open at this key's depth gains one
-            // descendant — the group itself if it is collapsed, same as an
-            // expanded one; folding hides rows, not the count of what they
-            // represent.
-            for &g in &open_groups {
-                counts[g] += 1;
-            }
-
-            // If any ancestor is collapsed, the key itself is not shown.
-            if !self.ancestor_collapsed(name) {
-                self.rows.push(Row::Key {
-                    index: index as u32,
-                    depth: segments.len() as u16,
-                });
-                // `counts` is indexed the same as `self.rows`, so every push
-                // to one needs a push to the other — this entry is never
-                // read back (only `Row::Group` rows are), it just keeps the
-                // two in step.
-                counts.push(0);
-            }
-            std::mem::swap(&mut previous, &mut segments);
+    /// A tree with this one's collapsed set and separator and no rows: what a
+    /// rebuild job folds into while this one stays on screen.
+    pub(super) fn shell(&self) -> Tree {
+        Tree {
+            rows: Vec::new(),
+            collapsed: self.collapsed.clone(),
+            irregular: self.irregular,
+            inverse: Vec::new(),
+            separator: self.separator,
         }
+    }
 
-        self.inverse.clear();
-        self.inverse.resize(keys.len(), NO_ROW);
-        for (i, row) in self.rows.iter_mut().enumerate() {
-            match row {
-                Row::Group { descendants, .. } => *descendants = counts[i],
+    /// Start a fold: clears the rows and
+    /// returns the loop state [`Tree::fold_step`] resumes.
+    pub(super) fn fold_begin(&mut self) -> FoldProgress {
+        // No `reserve`: the row count is unknown (groups add rows), and a
+        // reserve of the key count makes the Vec's doubling land on a
+        // capacity twice the size it otherwise would (64 MB, not 33, at 1M).
+        self.rows.clear();
+        FoldProgress::default()
+    }
+
+    /// How far a fold has got, 0.0 to 1.0: the key pass is most of the work,
+    /// the descendant-count pass the rest.
+    pub(super) fn fold_fraction(&self, p: &FoldProgress, order_len: usize) -> f32 {
+        match p.fixup {
+            None if order_len == 0 => 0.0,
+            None => 0.85 * p.next as f32 / order_len as f32,
+            Some(_) if self.rows.is_empty() => 1.0,
+            Some(c) => 0.85 + 0.15 * c as f32 / self.rows.len() as f32,
+        }
+    }
+
+    /// Advance a fold by at most `limit` view rows (then, once every key has
+    /// been placed, `limit` rows of the fix-up pass that writes descendant
+    /// counts and the inverse). Returns whether the fold is finished.
+    ///
+    /// `order` is the name-ordered view's index vector; `inverse_len` sizes
+    /// the inverse (the Loaded set's length the view covers).
+    pub(super) fn fold_step(
+        &mut self,
+        keys: &LoadedSet,
+        order: &[u32],
+        inverse_len: usize,
+        p: &mut FoldProgress,
+        limit: usize,
+    ) -> bool {
+        let sep = self.separator as u8;
+        if p.fixup.is_none() {
+            let end = p.next.saturating_add(limit).min(order.len());
+            while p.next < end {
+                let index = order[p.next] as usize;
+                p.next += 1;
+                let Some(name) = keys.name(index) else {
+                    continue;
+                };
+                let Some(start) = keys.name_offset(index) else {
+                    continue;
+                };
+                self.fold_key(keys, p, index, name, start, sep);
+            }
+            if p.next < order.len() {
+                return false;
+            }
+            p.fixup = Some(0);
+            self.inverse.clear();
+            self.inverse.resize(inverse_len, NO_ROW);
+            return false;
+        }
+        let cursor = p.fixup.unwrap_or(0);
+        let end = cursor.saturating_add(limit).min(self.rows.len());
+        for i in cursor..end {
+            match &mut self.rows[i] {
+                Row::Group { descendants, .. } => *descendants = p.counts[i],
                 Row::Key { index, .. } => {
                     if let Some(slot) = self.inverse.get_mut(*index as usize) {
                         *slot = i as u32;
@@ -299,6 +282,116 @@ impl Tree {
                 }
             }
         }
+        p.fixup = Some(end);
+        end >= self.rows.len()
+    }
+
+    /// Place one key: the body of the fold loop.
+    fn fold_key(
+        &mut self,
+        keys: &LoadedSet,
+        p: &mut FoldProgress,
+        index: usize,
+        name: &[u8],
+        start: u32,
+        sep: u8,
+    ) {
+        split_segments(name, sep, start, &mut p.segments);
+        // How many leading segments this key shares with the previous one.
+        //
+        // Compared by *bytes*, not by `(offset, len)`: the same prefix text
+        // sits at a different arena offset in every key that carries it, so
+        // comparing handles would find nothing in common and emit a fresh
+        // group header for every single key.
+        let shared = p
+            .segments
+            .iter()
+            .zip(p.previous.iter())
+            .take_while(|((ao, al), (bo, bl))| {
+                keys.arena_slice(*ao, *al) == keys.arena_slice(*bo, *bl)
+            })
+            .count();
+        p.open_groups.truncate(shared);
+
+        // `shared` is a *byte* comparison against `previous`'s full
+        // segment list, which is set below regardless of whether the
+        // matching key actually got rows for every one of those
+        // segments. If it broke early because an ancestor was collapsed,
+        // `previous` still carries every segment past that point — so
+        // the next key in a *different* branch under the same collapsed
+        // ancestor (e.g. `cache:user:…` right after `cache:page:…`, both
+        // hidden under a collapsed `cache:`) can still show `shared >= 1`
+        // purely because their leading bytes coincide, and `depth <
+        // shared` below would then `continue` straight past re-checking
+        // whether `cache:` is collapsed — walking right into creating a
+        // fresh `user:` row underneath a parent marked shut (#reported
+        // as "collapsing cache: leaves one child visible").
+        //
+        // `open_groups` does not have this problem: it only ever holds
+        // rows that were actually pushed, so if an ancestor was
+        // collapsed, its row is always the *last* entry (nothing deeper
+        // was ever opened past a `break`). Checking it directly is the
+        // fix — anything still open and collapsed hides this key's
+        // entire remaining subtree, group rows included.
+        let hidden_by_collapsed_ancestor = p.open_groups.last().is_some_and(|&r| {
+            matches!(
+                self.rows[r],
+                Row::Group {
+                    expanded: false,
+                    ..
+                }
+            )
+        });
+
+        if !hidden_by_collapsed_ancestor {
+            for (depth, (offset, len)) in p.segments.iter().enumerate() {
+                if depth < shared {
+                    continue;
+                }
+                // The prefix through this segment and its separator is a
+                // slice of the key's own name — segments are contiguous.
+                let end = (*offset - start) as usize + *len as usize + 1;
+                let collapsed = self.prefix_is_collapsed(&name[..end]);
+                self.rows.push(Row::Group {
+                    offset: *offset,
+                    len: *len,
+                    depth: depth as u16,
+                    descendants: 0,
+                    expanded: !collapsed,
+                });
+                p.counts.push(0);
+                p.open_groups.push(self.rows.len() - 1);
+                if collapsed {
+                    // Stop descending: every key under this prefix is
+                    // hidden. The collapsed group's own row stays in
+                    // `open_groups`, though — its count must keep
+                    // growing even though none of these keys get a row
+                    // of their own.
+                    break;
+                }
+            }
+        }
+
+        // Every ancestor still open at this key's depth gains one
+        // descendant — the group itself if it is collapsed, same as an
+        // expanded one; folding hides rows, not the count of what they
+        // represent.
+        for &g in &p.open_groups {
+            p.counts[g] += 1;
+        }
+
+        // If any ancestor is collapsed, the key itself is not shown.
+        if !self.ancestor_collapsed(name) {
+            self.rows.push(Row::Key {
+                index: index as u32,
+                depth: p.segments.len() as u16,
+            });
+            // `counts` is indexed the same as `rows`, so every push to one
+            // needs a push to the other — this entry is never read back
+            // (only `Row::Group` rows are), it just keeps the two in step.
+            p.counts.push(0);
+        }
+        std::mem::swap(&mut p.previous, &mut p.segments);
     }
 
     /// Whether any collapsed prefix is a prefix of `name`. One set probe per

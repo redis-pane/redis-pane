@@ -55,7 +55,7 @@ impl State {
         });
         SessionState {
             split_adjust: self.split_adjust,
-            tree_mode: self.tree_mode,
+            tree_mode: self.target_tree_mode(),
             sort: self.list.sort,
             filter: self.list.filter.clone(),
             filter_mode: self.list.mode,

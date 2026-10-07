@@ -349,6 +349,17 @@ command per key (`HLEN`/`LLEN`/`SCARD`/`ZCARD`/`XLEN`), which competes with `SCA
 connection while the list is still streaming. It stays reachable two ways: the Viewer header
 states it on open, and sorting by count surfaces it as a temporary column.
 
+**While the list is being rebuilt (M6 task 3).** A filter, sort, tree toggle or collapse over a
+large keyspace is not instant, and no frame waits on it. The rebuild runs in slices between
+frames; the list on screen is the *old* one, fully navigable (it can be scrolled, a key can be
+opened, the cursor is respected at the swap), and the status bar says so with `rebuilding N%` in
+the warning style, in place of the `sorted by …` readout (which would describe an order not on
+screen yet). N is a stage-weighted estimate (filter, sort, fold) and never reads 100: the swap
+clears the readout. Typing in the filter box still shows at once; only the rows lag. A scan page
+arriving mid-rebuild does not restart it, and a rescan abandons it. Below one slice of keys
+(32,768 by default) the rebuild is instant and the readout never appears. The readout is plain
+ASCII text, so it is identical under the Unicode and ASCII glyph sets.
+
 ### 6.3 Value viewers
 One viewer per type, each with the same frame (header: key, type, size, TTL; body: type-specific;
 footer: actions) so navigation muscle memory transfers:

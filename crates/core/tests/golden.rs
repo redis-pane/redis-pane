@@ -5391,3 +5391,65 @@ fn golden_cluster_dashboard_before_the_first_poll() {
         &cluster_dashboard_at(&mut state, 80, 24),
     );
 }
+
+// ── M6 task 3: the rebuild job's readout ────────────────────────────────────
+
+/// `many_keys()` with a sort change in flight and a two-key slice, stopped
+/// part-way: the old list on screen, the readout saying how far along.
+fn rebuilding() -> State {
+    let mut state = many_keys();
+    state.rebuild_slice = Some(2);
+    state.list.sort = SortBy::Name;
+    state.rebuild_list_async();
+    for _ in 0..4 {
+        state.rebuild_step();
+    }
+    assert!(state.rebuild_running(), "the job must still be running");
+    state
+}
+
+#[test]
+fn golden_rebuilding_readout_140() {
+    assert_golden("browser_rebuilding_140", &draw(&rebuilding(), 140, 22));
+}
+
+#[test]
+fn golden_rebuilding_readout_80() {
+    assert_golden("browser_rebuilding_80", &draw(&rebuilding(), 80, 22));
+}
+
+#[test]
+fn golden_rebuilding_readout_ascii() {
+    assert_golden(
+        "browser_rebuilding_ascii",
+        &ascii_frame(&rebuilding(), 130, 22, &CLOCK),
+    );
+}
+
+#[test]
+fn the_readout_is_gone_once_the_job_swaps() {
+    let mut state = rebuilding();
+    state.run_rebuild_to_completion();
+    assert!(!draw(&state, 140, 22).contains("rebuilding"));
+}
+
+#[test]
+fn the_readout_is_a_warning_in_colour() {
+    let state = rebuilding();
+    let buf = render::frame(
+        &state,
+        &Theme::new(ColorDepth::TrueColor),
+        &CLOCK,
+        Rect::new(0, 0, 140, 22),
+    );
+    let theme = Theme::new(ColorDepth::TrueColor);
+    let warn = theme.style(redis_pane_core::theme::Token::Warn);
+    let text = render::to_text(&buf);
+    let (y, line) = text
+        .lines()
+        .enumerate()
+        .find(|(_, l)| l.contains("rebuilding"))
+        .expect("the readout is drawn");
+    let x = line[..line.find("rebuilding").unwrap()].chars().count() as u16;
+    assert_eq!(Some(buf[(x, y as u16)].fg), warn.fg);
+}

@@ -27,6 +27,8 @@ mod link;
 mod monitor;
 mod mouse;
 mod pubsub;
+#[cfg(test)]
+mod rebuild_tests;
 mod scan;
 mod slowlog;
 mod viewer;
@@ -164,7 +166,13 @@ fn paste(mut state: State, text: String) -> (State, Vec<Command>) {
 /// (see [`Msg::ReadCompleted`]) rather than being read here, which is what
 /// keeps a frame a function of state alone (ADR-0011).
 pub fn update(state: State, msg: Msg) -> (State, Vec<Command>) {
-    let (mut state, commands) = step(state, msg);
+    let (mut state, mut commands) = step(state, msg);
+    // A running rebuild job wants its next slice, whatever this message was:
+    // the shell sends `Msg::RebuildStep` only after the next draw and behind
+    // waiting input (M6 task 3).
+    if state.rebuild_running() && !commands.contains(&Command::ContinueRebuild) {
+        commands.push(Command::ContinueRebuild);
+    }
     // The value cursor lives only in a focused value pane (issue #55). Many
     // routes move focus to the keys pane — `Tab`, a click or scroll there,
     // `Esc` while an `Enter` read is still in flight and its reply asks for
@@ -305,6 +313,7 @@ fn step(mut state: State, msg: Msg) -> (State, Vec<Command>) {
         } => cluster_info_loaded(state, nodes, health, at_ms, token),
         Msg::DashboardPollTick => dashboard_poll_tick(state),
         Msg::FilterRebuildDue => keys::filter_rebuild_due(state),
+        Msg::RebuildStep => keys::rebuild_step(state),
         Msg::FeedOpened { token } => feed_opened(state, token),
         Msg::FeedClosed { token, reason } => feed_closed(state, token, reason),
         Msg::MonitorLine {

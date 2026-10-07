@@ -157,6 +157,13 @@ they are expensive to retrofit:
   at once and defers the rebuild to the shell's 100ms debounce (`State::filter_pending`). Narrowing
   is judged against the filter the order was *built for*, never the typed text, and glob is only
   narrowable when the previous pattern has no wildcard or ends in `*` (`docs/plans/m4-perf-interaction.md`).
+- **A large rebuild is a sliced `RebuildJob`, never a frozen frame.** Filter, sort and fold over a
+  keyspace of `REBUILD_SLICE` keys or more run as a resumable job in the core (`state/rebuild.rs`)
+  that the shell steps one slice at a time (`Command::ContinueRebuild` -> `Msg::RebuildStep`, after
+  a draw and behind input). The old list, `tree` and `tree_mode` stay on screen and usable until one
+  `update` swaps the new ones in; `State::target_tree_mode()` is where the list is heading. User
+  triggers replace a job, scan pages only mark it dirty, a rescan aborts it. Below a slice the
+  rebuild stays synchronous (`docs/plans/m6-rebuild-job.md`).
 - **Metadata replies are checked against a core-minted epoch.** `State::metadata_epoch` is bumped
   where indices are renumbered (`scan_started`), rides on `Command::FetchMetadata`, is echoed in
   `Msg::MetadataBatch`, and `metadata_batch` drops any other — staleness is the core's call at

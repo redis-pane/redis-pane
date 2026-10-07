@@ -362,6 +362,11 @@ pub enum Msg {
     /// decides whether anything is owed ([`crate::State::filter_pending`]);
     /// a stale or duplicate one is a no-op.
     FilterRebuildDue,
+    /// The shell's answer to [`crate::Command::ContinueRebuild`]: advance the
+    /// running rebuild job by one slice (M6 task 3). Sent only after a draw
+    /// and behind any input already waiting; carries no data, because the job
+    /// lives in the core. With no job running it is ignored.
+    RebuildStep,
     /// A feed connection (`Command::OpenFeed`) finished dialing and is
     /// streaming (`docs/plans/m3-feed-connection.md`). `token` is the one the
     /// `OpenFeed` that started it carried; a token that does not name the feed
