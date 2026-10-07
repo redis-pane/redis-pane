@@ -325,7 +325,8 @@ fn step(mut state: State, msg: Msg) -> (State, Vec<Command>) {
             channel,
             via,
             payload,
-        } => pubsub_message(state, token, at_ms, channel, via, payload),
+            sharded,
+        } => pubsub_message(state, token, at_ms, channel, via, payload, sharded),
         Msg::SubscriptionFailed {
             command,
             detail,

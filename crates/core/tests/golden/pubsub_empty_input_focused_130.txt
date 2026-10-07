@@ -1,6 +1,6 @@
 ─ redis-pane ─ ● staging · cache-01:6379/0 · from profile staging ─────────────────────────────────────────────────────── ● live ─
 
- add: user:*▏
+ add: user:*▏                                                                                                   Tab · [ ] sharded
  not subscribed                                                                                                        0 messages
  no subscriptions yet — a to add one
 
@@ -23,4 +23,4 @@
 
 
 
- ⏎ subscribe   Esc cancel   F1 help
+ ⏎ subscribe   Tab sharded   Esc cancel   F1 help

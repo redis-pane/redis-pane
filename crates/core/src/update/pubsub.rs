@@ -11,7 +11,7 @@
 
 use super::*;
 use crate::command::FeedKindMsg;
-use crate::state::{FeedStatus, PubSubFocus, Subscription, View, parse_subscription};
+use crate::state::{FeedStatus, PubSubFocus, Subscription, View, parse_subscription_with};
 
 /// How many messages one `PageUp`/`PageDown` moves the selection — the same
 /// fixed figure Monitor's own `MONITOR_PAGE_ROWS` uses, for the same reason
@@ -184,6 +184,7 @@ pub(super) fn pubsub_dispatch(mut state: State, action: Action) -> (State, Vec<C
         Action::Add => {
             state.pubsub.adding = true;
             state.pubsub.input.clear();
+            state.pubsub.sharded = false;
             (state, Vec::new())
         }
         // `d`: unsubscribe the selected chip, strip-scoped.
@@ -278,16 +279,28 @@ pub(super) fn pubsub_add_key(mut state: State, key: KeyPress) -> (State, Vec<Com
         KeyCode::Esc => {
             state.pubsub.adding = false;
             state.pubsub.input.clear();
+            state.pubsub.sharded = false;
+            (state, Vec::new())
+        }
+        // `Tab`: the form's sharded toggle (M5 task 9, decision 1) — a field
+        // of this form, not a key of the view, so the keymap growth rule is
+        // untouched. Refused below Redis 7 (decision 4); the form says why.
+        KeyCode::Tab => {
+            if state.sharded_available() {
+                state.pubsub.sharded = !state.pubsub.sharded;
+            }
             (state, Vec::new())
         }
         KeyCode::Enter => {
             let text = state.pubsub.input.trim().to_string();
+            let sharded = state.pubsub.sharded && state.sharded_available();
             state.pubsub.adding = false;
             state.pubsub.input.clear();
+            state.pubsub.sharded = false;
             if text.is_empty() {
                 return (state, Vec::new());
             }
-            let sub = parse_subscription(&text);
+            let sub = parse_subscription_with(&text, sharded);
             let commands = add_subscription(&mut state, sub);
             (state, commands)
         }
@@ -346,11 +359,12 @@ pub(super) fn pubsub_message(
     channel: Vec<u8>,
     via: Option<Vec<u8>>,
     payload: Vec<u8>,
+    sharded: bool,
 ) -> (State, Vec<Command>) {
     if token == state.pubsub.feed_token && state.screen == View::PubSub {
         state
             .pubsub
-            .push_pubsub_message(at_ms, channel, via, payload);
+            .push_message(at_ms, channel, via, payload, sharded);
     }
     (state, Vec::new())
 }
@@ -510,6 +524,150 @@ mod tests {
         let (state, cmds) = press_g(state, 'p');
         assert_eq!(state.screen, View::PubSub);
         assert!(cmds.contains(&Command::CloseFeed));
+    }
+
+    // ── Sharded subscriptions (M5 task 9) ───────────────────────────────
+
+    fn on_version(version: &str) -> State {
+        let mut state = State::default();
+        state.link = crate::state::Link::Up {
+            version: version.into(),
+            tracking: crate::state::Tracking::Available,
+        };
+        state
+    }
+
+    fn type_text(mut state: State, text: &str) -> State {
+        for c in text.chars() {
+            state = press(state, c).0;
+        }
+        state
+    }
+
+    #[test]
+    fn tab_in_the_add_form_toggles_sharded_and_submits_a_sharded_channel() {
+        let (state, _) = press_g(on_version("8.4.0"), 'p');
+        let state = type_text(state, "orders");
+        let (state, _) = press_key(state, KeyCode::Tab);
+        assert!(state.pubsub.sharded);
+        let (state, cmds) = press_key(state, KeyCode::Enter);
+        assert_eq!(
+            state.pubsub.subscriptions,
+            vec![Subscription::Sharded("orders".into())]
+        );
+        assert!(
+            !state.pubsub.sharded,
+            "the toggle does not outlive the form"
+        );
+        assert!(matches!(
+            cmds.as_slice(),
+            [Command::OpenFeed { kind: FeedKindMsg::Subscribe(subs), .. }]
+                if subs == &[Subscription::Sharded("orders".into())]
+        ));
+    }
+
+    #[test]
+    fn a_second_tab_turns_sharded_back_off() {
+        let (state, _) = press_g(on_version("7.0.0"), 'p');
+        let (state, _) = press_key(state, KeyCode::Tab);
+        let (state, _) = press_key(state, KeyCode::Tab);
+        assert!(!state.pubsub.sharded);
+    }
+
+    #[test]
+    fn sharded_excludes_pattern_so_a_glob_is_a_literal_sharded_channel() {
+        let (state, _) = press_g(on_version("8.4.0"), 'p');
+        let state = type_text(state, "user:*");
+        let (state, _) = press_key(state, KeyCode::Tab);
+        let (state, _) = press_key(state, KeyCode::Enter);
+        assert_eq!(
+            state.pubsub.subscriptions,
+            vec![Subscription::Sharded("user:*".into())],
+            "there is no sharded pattern, so the text is one channel name"
+        );
+    }
+
+    #[test]
+    fn a_leading_equals_is_stripped_from_a_sharded_channel_too() {
+        assert_eq!(
+            parse_subscription_with("=orders", true),
+            Subscription::Sharded("orders".into())
+        );
+        assert_eq!(
+            parse_subscription_with("user:*", false),
+            Subscription::Pattern("user:*".into())
+        );
+    }
+
+    #[test]
+    fn below_redis_7_the_toggle_refuses_and_the_text_stays_a_classic_subscription() {
+        let (state, _) = press_g(on_version("6.2.14"), 'p');
+        assert!(!state.sharded_available());
+        let state = type_text(state, "orders");
+        let (state, _) = press_key(state, KeyCode::Tab);
+        assert!(!state.pubsub.sharded, "needs Redis 7");
+        let (state, _) = press_key(state, KeyCode::Enter);
+        assert_eq!(
+            state.pubsub.subscriptions,
+            vec![Subscription::Channel("orders".into())]
+        );
+    }
+
+    #[test]
+    fn an_unknown_version_does_not_refuse_sharded() {
+        assert!(State::default().sharded_available());
+        assert!(on_version("7.0.0").sharded_available());
+        assert!(!on_version("6.0.0").sharded_available());
+    }
+
+    #[test]
+    fn a_rearm_that_reports_no_version_keeps_the_real_one() {
+        let state = on_version("6.2.14");
+        let (state, _) = update(
+            state,
+            Msg::Connected {
+                version: String::new(),
+                tracking_supported: true,
+            },
+        );
+        assert!(!state.sharded_available(), "still Redis 6");
+    }
+
+    #[test]
+    fn a_sharded_chip_beside_a_classic_one_of_the_same_name_is_a_different_subscription() {
+        let mut state = on_version("8.4.0");
+        state.pubsub.subscriptions = vec![Subscription::Channel("orders".into())];
+        state.screen = View::PubSub;
+        state.pubsub.status = FeedStatus::Open;
+        let state = type_text(press(state, 'a').0, "orders");
+        let (state, _) = press_key(state, KeyCode::Tab);
+        let (state, cmds) = press_key(state, KeyCode::Enter);
+        assert_eq!(state.pubsub.subscriptions.len(), 2);
+        assert!(matches!(
+            cmds.as_slice(),
+            [Command::UpdateSubscription { add, .. }] if add == &[Subscription::Sharded("orders".into())]
+        ));
+    }
+
+    #[test]
+    fn a_sharded_message_is_folded_into_the_tail_marked_sharded() {
+        let mut state = State {
+            screen: View::PubSub,
+            ..State::default()
+        };
+        state.pubsub.feed_token = crate::command::FeedToken::default();
+        let (state, _) = update(
+            state,
+            Msg::PubSubMessage {
+                token: crate::command::FeedToken::default(),
+                at_ms: 1,
+                channel: b"orders".to_vec(),
+                via: None,
+                payload: b"x".to_vec(),
+                sharded: true,
+            },
+        );
+        assert!(state.pubsub.messages().back().unwrap().sharded);
     }
 
     // ── The add-input ───────────────────────────────────────────────────
@@ -746,6 +904,7 @@ mod tests {
                 channel: b"orders".to_vec(),
                 via: None,
                 payload: b"one".to_vec(),
+                sharded: false,
             },
         );
         let (state, _) = press(state, 'p');
@@ -771,6 +930,7 @@ mod tests {
                 channel: b"orders".to_vec(),
                 via: None,
                 payload: b"hello".to_vec(),
+                sharded: false,
             },
         );
         let (_, cmds) = press(state, 'c');
@@ -794,6 +954,7 @@ mod tests {
                 channel: b"orders".to_vec(),
                 via: None,
                 payload: b"one".to_vec(),
+                sharded: false,
             },
         );
         for c in ['x', 'y', 'z'] {
@@ -843,6 +1004,7 @@ mod tests {
                 channel: b"orders".to_vec(),
                 via: None,
                 payload: b"hi".to_vec(),
+                sharded: false,
             },
         );
         assert_eq!(state.pubsub.messages().len(), 1);
@@ -862,6 +1024,7 @@ mod tests {
                 channel: b"orders".to_vec(),
                 via: None,
                 payload: b"arrived too late".to_vec(),
+                sharded: false,
             },
         );
         assert!(state.pubsub.messages().is_empty());
@@ -883,6 +1046,7 @@ mod tests {
                 channel: b"orders".to_vec(),
                 via: None,
                 payload: b"stale".to_vec(),
+                sharded: false,
             },
         );
         assert!(state.pubsub.messages().is_empty());
@@ -900,6 +1064,7 @@ mod tests {
                 channel: b"user:42".to_vec(),
                 via: Some(b"user:*".to_vec()),
                 payload: b"hi".to_vec(),
+                sharded: false,
             },
         );
         let msg = state.pubsub.messages().back().unwrap();

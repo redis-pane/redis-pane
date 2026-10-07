@@ -1,0 +1,19 @@
+─ redis-pane ─ ● staging · from profile staging ─── ● live ─
+
+ ⟡ [orders] [user:* ⁎] [orders §]                     a add
+ ● live                                          4 messages
+ PAYLOAD
+ [orders] {"id":8812,"total":41.5}
+ [user:42] login
+ [orders] {"id":8813}
+ [§ orders] {"id":8814,"shard":true}
+
+
+────────────────────────────────────────────────────────────
+ channel orders  ·  sharded §
+ {
+   "id": 8814,
+   "shard": true
+ }
+
+

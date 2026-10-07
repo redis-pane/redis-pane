@@ -20,7 +20,7 @@
 use std::sync::Arc;
 
 use fred::clients::SubscriberClient;
-use fred::interfaces::{ClientLike, EventInterface, PubsubInterface};
+use fred::interfaces::{ClientLike, ClusterInterface, EventInterface, PubsubInterface};
 use fred::prelude::Client;
 use fred::types::config::{Config, Server, ServerConfig};
 use futures::StreamExt;
@@ -65,6 +65,130 @@ pub struct FeedHandle {
     /// the live connection to issue `SUBSCRIBE`/`PSUBSCRIBE`/`UNSUBSCRIBE`/
     /// `PUNSUBSCRIBE` without tearing it down.
     subscriber: Option<SubscriberClient>,
+    /// The sharded channels this connection holds and the node that owned
+    /// each when it was subscribed (M5 task 9): what the owner-change watcher
+    /// compares against, and what `close` unsubscribes.
+    sharded: Sharded,
+}
+
+/// The sharded subscriptions of one feed connection, each with the node that
+/// owned its slot when it was last subscribed (`None` off a Cluster).
+///
+/// Kept in the shell because `fred` 10.1.0 does not move a sharded
+/// subscription when its slot changes owner (M5 task 9 spike, recorded in
+/// `docs/plans/m5-sharded-pubsub.md`): the old owner drops it on demotion and
+/// nothing re-issues it, so [`spawn_sharded_watcher`] does.
+#[derive(Clone, Default)]
+struct Sharded(Arc<std::sync::Mutex<std::collections::BTreeMap<String, Option<Server>>>>);
+
+impl Sharded {
+    fn lock(
+        &self,
+    ) -> std::sync::MutexGuard<'_, std::collections::BTreeMap<String, Option<Server>>> {
+        self.0.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn track(&self, channel: &str, owner: Option<Server>) {
+        self.lock().insert(channel.to_string(), owner);
+    }
+
+    fn untrack(&self, channel: &str) {
+        self.lock().remove(channel);
+    }
+
+    fn snapshot(&self) -> Vec<(String, Option<Server>)> {
+        self.lock()
+            .iter()
+            .map(|(c, o)| (c.clone(), o.clone()))
+            .collect()
+    }
+}
+
+/// The primary that owns `channel`'s slot in `client`'s cached routing table;
+/// `None` when the client is not clustered or has no table yet.
+fn channel_owner(client: &SubscriberClient, channel: &str) -> Option<Server> {
+    if !client.is_clustered() {
+        return None;
+    }
+    let slot = fred::util::redis_keyslot(channel.as_bytes());
+    client.cached_cluster_state()?.get_server(slot).cloned()
+}
+
+/// `SSUBSCRIBE` one channel and remember where it landed. One channel per
+/// call, never a batch: a batch whose channels hash to different slots is
+/// refused with `CROSSSLOT`.
+async fn ssubscribe_one(
+    client: &SubscriberClient,
+    sharded: &Sharded,
+    channel: &str,
+) -> Result<(), fred::error::Error> {
+    client.ssubscribe(channel.to_string()).await?;
+    sharded.track(channel, channel_owner(client, channel));
+    Ok(())
+}
+
+/// How often a Cluster feed with sharded subscriptions refreshes its routing
+/// table. `fred` learns of a failover only from traffic that reaches it, and
+/// a feed that is only listening sends none (the same reason as
+/// `liveness::watch_topology`, whose cadence this matches).
+const SHARDED_SYNC_EVERY: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// Re-issue every sharded subscription whose slot has changed owner.
+///
+/// Wakes on `cluster_change_rx()` and on a timer; the timer also forces
+/// `sync_cluster()`, since `fred` otherwise notices a failover late. Does
+/// nothing while no sharded channel is held. A failed re-subscribe is
+/// reported (R7.4) and retried on the next wake: the owner is only recorded
+/// once the `SSUBSCRIBE` succeeded. No reconnect policy is added anywhere
+/// (ADR-0022).
+fn spawn_sharded_watcher(
+    client: SubscriberClient,
+    sharded: Sharded,
+    tx: Sender<Msg>,
+    clock: Arc<dyn Clock>,
+    cancel: CancellationToken,
+) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut changes = client.cluster_change_rx();
+        let mut tick = tokio::time::interval(SHARDED_SYNC_EVERY);
+        loop {
+            let synced = tokio::select! {
+                biased;
+                () = cancel.cancelled() => return,
+                change = changes.recv() => match change {
+                    Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => false,
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
+                },
+                _ = tick.tick() => true,
+            };
+            let held = sharded.snapshot();
+            if held.is_empty() {
+                continue;
+            }
+            if synced {
+                // Ignored on purpose: the same trouble fails the next
+                // SSUBSCRIBE, which reports it.
+                let _ =
+                    tokio::time::timeout(std::time::Duration::from_secs(5), client.sync_cluster())
+                        .await;
+            }
+            for (channel, last) in held {
+                let now = channel_owner(&client, &channel);
+                if now.is_none() || now == last {
+                    continue;
+                }
+                if let Err(e) = ssubscribe_one(&client, &sharded, &channel).await {
+                    let _ = tx
+                        .send(Msg::Failed {
+                            command: format!("SSUBSCRIBE {channel}"),
+                            detail: super::describe(&e),
+                            at_ms: clock.now_epoch_ms(),
+                        })
+                        .await;
+                }
+            }
+        }
+    })
 }
 
 impl FeedHandle {
@@ -96,7 +220,18 @@ impl FeedHandle {
             task.abort();
         }
         if let Some(client) = self.subscriber {
+            let held = self.sharded.snapshot();
             tokio::spawn(async move {
+                // Sharded channels are unsubscribed explicitly (M5 task 9,
+                // decision 5), bounded so a dead node cannot hold the quit;
+                // the disconnect drops anything this misses.
+                for (channel, _) in held {
+                    let _ = tokio::time::timeout(
+                        std::time::Duration::from_secs(2),
+                        client.sunsubscribe(channel),
+                    )
+                    .await;
+                }
                 let _ = client.quit().await;
             });
         }
@@ -127,33 +262,47 @@ impl FeedHandle {
         let Some(client) = self.subscriber.clone() else {
             return;
         };
+        let sharded = self.sharded.clone();
         tokio::spawn(async move {
-            let (add_channels, add_patterns) = split_subscriptions(&add);
-            let (remove_channels, remove_patterns) = split_subscriptions(&remove);
+            let (add_channels, add_patterns, add_sharded) = split_subscriptions(&add);
+            let (remove_channels, remove_patterns, remove_sharded) = split_subscriptions(&remove);
 
             if !add_channels.is_empty()
                 && let Err(e) = client.subscribe(add_channels).await
             {
-                let failed = subs_where(&add, false);
+                let failed = subs_of(&add, Kind::Channel);
                 report_subscription_failure(&tx, &clock, "SUBSCRIBE", &e, failed).await;
             }
             if !add_patterns.is_empty()
                 && let Err(e) = client.psubscribe(add_patterns).await
             {
-                let failed = subs_where(&add, true);
+                let failed = subs_of(&add, Kind::Pattern);
                 report_subscription_failure(&tx, &clock, "PSUBSCRIBE", &e, failed).await;
+            }
+            for channel in add_sharded {
+                if let Err(e) = ssubscribe_one(&client, &sharded, &channel).await {
+                    let failed = vec![Subscription::Sharded(channel)];
+                    report_subscription_failure(&tx, &clock, "SSUBSCRIBE", &e, failed).await;
+                }
             }
             if !remove_channels.is_empty()
                 && let Err(e) = client.unsubscribe(remove_channels).await
             {
-                let failed = subs_where(&remove, false);
+                let failed = subs_of(&remove, Kind::Channel);
                 report_subscription_failure(&tx, &clock, "UNSUBSCRIBE", &e, failed).await;
             }
             if !remove_patterns.is_empty()
                 && let Err(e) = client.punsubscribe(remove_patterns).await
             {
-                let failed = subs_where(&remove, true);
+                let failed = subs_of(&remove, Kind::Pattern);
                 report_subscription_failure(&tx, &clock, "PUNSUBSCRIBE", &e, failed).await;
+            }
+            for channel in remove_sharded {
+                sharded.untrack(&channel);
+                if let Err(e) = client.sunsubscribe(channel.clone()).await {
+                    let failed = vec![Subscription::Sharded(channel)];
+                    report_subscription_failure(&tx, &clock, "SUNSUBSCRIBE", &e, failed).await;
+                }
             }
             // The same synchronizing round trip `open_subscribe` does after
             // its own initial SUBSCRIBE/PSUBSCRIBE, and for the identical
@@ -168,15 +317,29 @@ impl FeedHandle {
     }
 }
 
-/// The entries of `subs` that are patterns (`is_pattern == true`) or
-/// channels (`is_pattern == false`) — used to report exactly which
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Kind {
+    Channel,
+    Pattern,
+    Sharded,
+}
+
+fn kind_of(sub: &Subscription) -> Kind {
+    match sub {
+        Subscription::Channel(_) => Kind::Channel,
+        Subscription::Pattern(_) => Kind::Pattern,
+        Subscription::Sharded(_) => Kind::Sharded,
+    }
+}
+
+/// The entries of `subs` of one kind — used to report exactly which
 /// [`Subscription`]s a failed `SUBSCRIBE`/`PSUBSCRIBE`/`UNSUBSCRIBE`/
 /// `PUNSUBSCRIBE` applied to, since [`split_subscriptions`] already threw
 /// that distinction away to build the plain-string argument lists the fred
 /// call itself wants.
-fn subs_where(subs: &[Subscription], is_pattern: bool) -> Vec<Subscription> {
+fn subs_of(subs: &[Subscription], kind: Kind) -> Vec<Subscription> {
     subs.iter()
-        .filter(|s| s.is_pattern() == is_pattern)
+        .filter(|s| kind_of(s) == kind)
         .cloned()
         .collect()
 }
@@ -202,19 +365,22 @@ async fn report_subscription_failure(
         .await;
 }
 
-/// Split a subscription list into channel names and pattern names, in the
-/// shape `SUBSCRIBE`/`PSUBSCRIBE` (or their `UN`-prefixed counterparts) want.
-fn split_subscriptions(subs: &[Subscription]) -> (Vec<String>, Vec<String>) {
+/// Split a subscription list into channel, pattern and sharded-channel names,
+/// in the shape `SUBSCRIBE`/`PSUBSCRIBE`/`SSUBSCRIBE` (or their
+/// `UN`-prefixed counterparts) want.
+fn split_subscriptions(subs: &[Subscription]) -> (Vec<String>, Vec<String>, Vec<String>) {
     let mut channels = Vec::new();
     let mut patterns = Vec::new();
+    let mut sharded = Vec::new();
     for sub in subs {
-        if sub.is_pattern() {
-            patterns.push(sub.name().to_string());
-        } else {
-            channels.push(sub.name().to_string());
+        let name = sub.name().to_string();
+        match kind_of(sub) {
+            Kind::Channel => channels.push(name),
+            Kind::Pattern => patterns.push(name),
+            Kind::Sharded => sharded.push(name),
         }
     }
-    (channels, patterns)
+    (channels, patterns, sharded)
 }
 
 /// Dial a second connection to the same resolved target [`super::connect_with`]
@@ -335,6 +501,7 @@ async fn open_monitor(
         task,
         more_tasks: Vec::new(),
         subscriber: None,
+        sharded: Sharded::default(),
     })
 }
 
@@ -433,6 +600,7 @@ async fn open_monitor_cluster(
         task,
         more_tasks: tasks,
         subscriber: None,
+        sharded: Sharded::default(),
     })
 }
 
@@ -643,7 +811,8 @@ async fn open_subscribe(
     let message_rx = client.message_rx();
     let error_rx = client.error_rx();
 
-    let (channels, patterns) = split_subscriptions(&subs);
+    let (channels, patterns, sharded_channels) = split_subscriptions(&subs);
+    let sharded = Sharded::default();
     if !channels.is_empty() {
         client
             .subscribe(channels)
@@ -653,6 +822,11 @@ async fn open_subscribe(
     if !patterns.is_empty() {
         client
             .psubscribe(patterns)
+            .await
+            .map_err(|e| ConnectError::Unreachable(super::describe(&e)))?;
+    }
+    for channel in &sharded_channels {
+        ssubscribe_one(&client, &sharded, channel)
             .await
             .map_err(|e| ConnectError::Unreachable(super::describe(&e)))?;
     }
@@ -676,6 +850,7 @@ async fn open_subscribe(
         let _: Result<String, _> = client.ping(None).await;
     }
 
+    let clock_for_watcher = clock.clone();
     let task = spawn_subscribe_reader(
         message_rx,
         subs,
@@ -685,12 +860,26 @@ async fn open_subscribe(
         cancel.clone(),
         reported.clone(),
     );
-    spawn_subscribe_error_watcher(error_rx, token, tx, cancel.clone(), reported);
+    spawn_subscribe_error_watcher(error_rx, token, tx.clone(), cancel.clone(), reported);
+    // Only a Cluster can move a slot to another owner; off one there is
+    // nothing to watch and sharded behaves like a classic channel.
+    let more_tasks = if client.is_clustered() {
+        vec![spawn_sharded_watcher(
+            client.clone(),
+            sharded.clone(),
+            tx,
+            clock_for_watcher,
+            cancel.clone(),
+        )]
+    } else {
+        Vec::new()
+    };
     Ok(FeedHandle {
         cancel,
         task,
-        more_tasks: Vec::new(),
+        more_tasks,
         subscriber: Some(client),
+        sharded,
     })
 }
 
@@ -737,16 +926,7 @@ fn spawn_subscribe_reader(
             };
             match next {
                 Ok(message) => {
-                    if message.kind == fred::types::MessageKind::SMessage {
-                        // Sharded Pub/Sub is out of scope
-                        // (`docs/plans/m3-pubsub.md`'s "Out of scope":
-                        // `SSUBSCRIBE` is Cluster-only, and Cluster is not a
-                        // v1 target, ADR-0008) — this app never `SSUBSCRIBE`s,
-                        // so this should be unreachable, but a message of a
-                        // kind we did not ask for is dropped rather than
-                        // mis-attributed.
-                        continue;
-                    }
+                    let sharded = message.kind == fred::types::MessageKind::SMessage;
                     let at_ms = clock.now_epoch_ms();
                     let channel = message.channel.as_bytes().to_vec();
                     let via = if message.kind == fred::types::MessageKind::PMessage {
@@ -762,6 +942,7 @@ fn spawn_subscribe_reader(
                             channel,
                             via,
                             payload,
+                            sharded,
                         })
                         .await
                         .is_err()

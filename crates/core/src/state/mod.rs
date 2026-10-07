@@ -38,8 +38,8 @@ pub use monitor::{
 };
 pub use open::{Attachment, EditPhase, OpenKey, PendingRead, ReadOutcome};
 pub use pubsub::{
-    PUBSUB_CAP, PUBSUB_PAYLOAD_MAX, PubSubFocus, PubSubMessage, PubSubState, Subscription,
-    parse_subscription, redis_glob_match,
+    PUBSUB_CAP, PUBSUB_PAYLOAD_MAX, PubSubFocus, PubSubMessage, PubSubState, SHARDED_MIN_MAJOR,
+    Subscription, parse_subscription, parse_subscription_with, redis_glob_match,
 };
 pub use scan::{InterruptReason, ScanState};
 pub use session::{SessionFile, SessionFileError, SessionState};
@@ -1349,6 +1349,25 @@ impl State {
                 ..
             }
         )
+    }
+
+    /// The server's `redis_version`, as probed at connect; `None` before the
+    /// first connect, while reconnecting, or if it did not parse.
+    pub fn server_version(&self) -> Option<crate::server::Version> {
+        match &self.link {
+            Link::Up { version, .. } => crate::server::Version::parse(version),
+            _ => None,
+        }
+    }
+
+    /// Whether a sharded Pub/Sub subscription may be offered (M5 task 9,
+    /// decision 4): `SSUBSCRIBE` needs Redis 7. An unknown version is
+    /// allowed rather than refused — the gate exists to explain a known
+    /// refusal, and a server that does refuse reports it as a failed command
+    /// (R7.4) either way.
+    pub fn sharded_available(&self) -> bool {
+        self.server_version()
+            .is_none_or(|v| v.major >= pubsub::SHARDED_MIN_MAJOR)
     }
 
     /// What the header may claim about currency.
