@@ -179,3 +179,26 @@ lookahead loses. No `unsafe`, no arch intrinsics. The fold lands 12 ms above its
 After phase 3 (local): fold alone 207 -> 27 ms (target 60); collapse time-to-swap 183 -> 19 ms;
 tree toggle time-to-swap 309 -> 108 ms (target 250); toggle from a Name-sorted flat view 225 -> 30 ms;
 worst fold step at slice 32768: 8 ms -> 1.05 ms.
+
+### Phase 4: slice and calibration
+
+`rebuild_slice_calibration_random_deep`, local, tree toggle from scan order at 1M random_deep
+(worst single update / trigger to swap):
+
+| Slice | Worst update | Fold step | Steps | To swap |
+|---|---|---|---|---|
+| 8192 | 0.44 ms | 0.39 ms | 2981 | 123 ms |
+| 16384 | 0.65 ms | 0.65 ms | 1376 | 117 ms |
+| 24576 | 0.86 ms | 0.86 ms | 874 | 116 ms |
+| **32768** | 1.40 ms | 1.17 ms (sort refine 1.27 ms) | 647 | 116 ms |
+| 49152 | 1.53 ms | 1.53 ms | 405 | 110 ms |
+| 65536 | 2.39 ms | 1.92 ms | 314 | 109 ms |
+
+(Before: 2.3 / 4.2 / 5.8 / 8.1 / 11.0 / 14.8 ms at the same slices; time to swap ~290 ms.)
+
+**Decision: keep 32768.** The fold is no longer the longest stage (the Name sort's refine step
+ties it), the worst step is ~1.3 ms local (about 2.5 ms on a 1.9x slower CI run, against the 16 ms
+gate), and going to 65536 saves 6 ms of a 116 ms rebuild (5%). The cost of raising it is not on the
+step but on the threshold: `is_large(n)` is `n >= slice`, so a larger slice makes a rebuild of up
+to 65535 keys synchronous, and the lazy sorts (Size, TTL, Kind) still use a comparison sort there.
+Not worth it for 5%. Only the comment on `REBUILD_SLICE` changes.

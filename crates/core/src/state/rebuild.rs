@@ -21,9 +21,12 @@ use super::{FilterMode, KeyView, LoadedSet, SortBy, State, Tree};
 
 /// Keys (or output positions) one step of a rebuild job handles.
 ///
-/// Calibrated so the slowest step, a fold step over random-order deep names
-/// at 1M keys, stays comfortably inside a 16ms frame on CI
-/// (`docs/plans/m6-rebuild-job.md` Outcome).
+/// Calibrated so the slowest step stays comfortably inside a 16ms frame on
+/// CI (`docs/plans/m6-rebuild-job.md` Outcome). Since M6 task 5 the slowest
+/// steps at 1M random-order deep names are the Name sort's refine and the
+/// fold, both about 1.2ms locally; raising the slice to 65536 would save
+/// only ~6ms of a ~115ms rebuild and move the threshold below which a
+/// rebuild is synchronous (`docs/plans/m6-fast-fold.md` Outcome).
 pub const REBUILD_SLICE: usize = 32_768;
 
 /// What a job rebuilds.
