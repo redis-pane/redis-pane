@@ -550,6 +550,12 @@ fn sort_recs(recs: &mut [Rec], tmp: &mut Vec<Rec>) {
         recs.sort_unstable();
         return;
     }
+    // Already in order (pdqsort's best case, which radix would otherwise
+    // lose on): a keyspace pushed in name order stays one pass per level.
+    // Random data exits at the first descent.
+    if recs.is_sorted() {
+        return;
+    }
     // Which bytes vary: one cheap pass.
     let (first_key, first_rem) = (recs[0].key, recs[0].rem());
     let (mut diff, mut rem_diff) = (0u64, 0u32);
