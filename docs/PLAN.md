@@ -295,9 +295,9 @@ in PRD §10.
 harness pushes `user:00000000`, `user:00000001`, … in order; real `SCAN` order is effectively
 random, which defeats the sort and the tree fold's memory locality. Measured on 2026-10-04 at 1M
 random-order keys, a tree toggle (sort plus fold) takes ~373 ms, or ~482 ms with deep names, against
-~42 ms in the harness. Fixing that — an honest harness, a name order maintained as keys arrive, and
-large rebuilds sliced across frames — is milestone M6, after the beta:
-[`m6-perf-rebuild.md`](plans/m6-perf-rebuild.md).
+~42 ms in the harness. Fixing that — an honest harness, fold-only collapse, large rebuilds sliced
+across frames, then a faster sort and fold — is milestone M6, after the beta:
+[`m6-perf-rebuild.md`](plans/m6-perf-rebuild.md), tasks in [`m6-planning.md`](plans/m6-planning.md).
 
 Still unbuilt after M4 and not part of it: rename, copy, bulk operations and Hash field rename (M2
 tasks 11–14, §5); rebuild cost at real `SCAN` order (M6). Cluster support shipped in M5 (§7.2).
@@ -366,7 +366,8 @@ Palette, Console, dashboard, monitor, pub/sub, slowlog (M3) — Console cut, Pal
 withdrawn (ADR-0020), see §6 above. Cluster shipped in M5 (§7.2,
 [ADR-0022](adr/0022-cluster-supported-in-stages.md), which superseded the M4 refusal in
 [ADR-0021](adr/0021-cluster-refused-until-supported.md)). Rebuild cost at real `SCAN` order is
-milestone M6 — [`m6-perf-rebuild.md`](plans/m6-perf-rebuild.md). Themes beyond the two M0 defaults, the ASCII glyph
+milestone M6 — [`m6-perf-rebuild.md`](plans/m6-perf-rebuild.md), tasks in
+[`m6-planning.md`](plans/m6-planning.md). Themes beyond the two M0 defaults, the ASCII glyph
 fallback, session restore, and the million-key performance work are M4 (§7). Packaging and
 distribution beyond the alpha's raw GitHub Release archives is a decision parked to the end of
 alpha (PRD §9, §10) — M4 ships no official packages. Keybinding overrides from config are
