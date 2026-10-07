@@ -171,6 +171,7 @@ recomputed each frame from which tile is focused, never a persisted scroll posit
 | `t` | Edit TTL (set / persist / extend) | value pane, focused |
 | `c` / `C` | Copy key or value / copy `redis-cli` command | key list, value pane |
 | `d` | Stage delete of the Selected key (`DEL`), (Hash, cursor on a field) of that field (`HDEL`), or (Slowlog view) `SLOWLOG RESET` | key list, value pane, slowlog view |
+| `R` | Rename the Selected key — opens a name capture prefilled with the current name, then stages `RENAMENX old new`. A group row, a gone row or a binary name shows a notice and stages nothing. The value pane's `R` (rename a field or member) is task 14's | key list |
 | `y` | Confirm a staged mutation (`Esc` dismisses) | global, only while one is staged |
 | `p` | Pause / resume consuming the `MONITOR` or Pub/Sub feed (the socket stays open; paused lines/messages are counted, not buffered) | Monitor view, Pub/Sub tail |
 | `a` | Add a subscription (`Tab` in the form: sharded, Redis 7+) | Pub/Sub view, either half |
@@ -548,6 +549,26 @@ whatever was on screen. That is a known class of bug in other terminal apps, and
 SSH, where the round trip is slower. The inline editor removes the terminal handoff — and the
 race with it — from the default path entirely; the escape hatch keeps `$EDITOR` available,
 hardened, for the reader who wants it.
+
+**Rename (`R`, keys pane).** `R` on a key row opens a small `rename` dialog: `from <name>`,
+`to <name>▏` prefilled with the current name and the cursor at the end (typing and `⌫` edit it;
+there is no mid-text cursor, as in the filter), and an inline reason when it cannot be staged
+yet — `name can't be empty`, `same as the current name`. `Enter` stages, `Esc` discards. No
+capture takes byte escapes, so a key whose name is not valid UTF-8 is refused with a notice, as
+List edit is (ADR-0017). Staging shows the ordinary confirm dialog: `RENAMENX old new`, the guard
+line *only if the new name is free · keeps its TTL*, and `old → new`. Staging also sends one
+`EXISTS new`; if the answer says the name is taken, the dialog warns ahead of time (*already
+exists — y will be refused, nothing is overwritten*). That answer is advice only: `y` still runs
+`RENAMENX`, which refuses a taken target atomically (`a key with the new name already exists —
+nothing written`, naming the command), and an answer that arrives after `y` or `Esc` is dropped.
+Overwriting an existing key is out of scope; it would be the destructive variant and needs its own
+decision. **On a Cluster**, if the two names hash to different slots the dialog says `RENAME
+across slots fails with CROSSSLOT` and suggests a shared `{tag}`; `y` does nothing and only `Esc`
+leaves, so nothing is sent. Read-only Mode refuses at confirm, like delete. After a successful
+rename the old row is badged gone, the new name enters the Loaded set through the scan path
+(so the cap is still enforced in one place; a full list says the key is *not listed*), the
+selection moves to the new row, and an open key follows to the new name and re-reads through the
+ordinary read path, which re-arms liveness.
 
 ### 6.6 Dashboard
 

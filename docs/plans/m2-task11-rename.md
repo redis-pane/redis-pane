@@ -1,6 +1,6 @@
 # M2 task 11: Rename a key
 
-Status: **planned.**
+Status: **done.**
 
 ## Context
 
@@ -217,3 +217,56 @@ gone. An `Err` goes through the existing `failed()` path.
   `slot.rs`, one in `mutation.rs`. Golden: eight new frames (capture prefilled, typed and empty;
   confirm ok, target exists, cross-slot, read-only; the capture's hint bar) and a test that the
   keys-pane `R` row is dimmed under Read-only Mode.
+
+## Outcome
+
+Status: **done.** `R` in the keys pane renames the Selected key through the one mutation path.
+
+**Delivered, as designed:** the capture and its inline reasons; `Mutation::RenameKey` /
+`PendingMutation::RenameKey` / `NotWritten::TargetExists`; the `EXISTS` pre-check as
+`Command::CheckTarget` -> `Msg::TargetChecked` (dropped when nothing matching is staged, so a
+late answer after `y` or `Esc` is harmless); the pure `slot::key_slot` and the Cluster cross-slot
+refusal (`y` does nothing, nothing sent); Read-only refusal at confirm; the old row badged gone,
+the new name inserted through `scan_batch` (cap still enforced there alone), selection and Open
+key following; help and hint-bar rows, dimmed under Read-only Mode.
+
+**Deviations from the plan text:**
+- **Six help goldens moved** (plus the two `help_disconnected_*`): the help overlay lists every
+  keys-pane binding, so the new `R rename` row necessarily appears in it. No browser, dialog or
+  hint-bar frame moved; the row is ranked after `copy redis-cli command` so an 80-column bar stops
+  before it.
+- **Binary names are refused, not accepted:** no existing capture takes byte escapes, so `R` on a
+  non-UTF-8 name shows a notice (decision 1's fallback). The Docker binary-name test therefore
+  exercises the shell function directly.
+- **No mid-text cursor in the capture:** like the filter, it has typing and `⌫` only, with the
+  cursor always at the end. The plan said "cursor at the end"; it did not promise more.
+- **The Open key is retargeted in place rather than reopened:** `open.name` becomes the new name
+  and a normal `refetch()` follows. A fresh open read would be superseded by the nameless
+  `Msg::Invalidated` the old key's disappearance produces (its refetch reads `open.name`), which
+  would tombstone a key that was only renamed. There is a core test for exactly this ordering.
+- **`State::follow`** (a Loaded set index) is new: with a sliced rebuild job the new row does not
+  exist when the reply lands, so the selection waits for the swap. Cleared by any Normal-mode
+  keypress and by `scan_started`.
+- **`Msg::Mouse` is ignored while the capture is open**, so a click cannot retarget it.
+- **A rescan between `R` and `Enter`** drops the staging with a notice (the row's name no longer
+  matches), the same guard `key_deleted` applies at the other end.
+
+**Known limits:** a scan still running when the rename lands may deliver the new name again and
+produce a second row (`SCAN` already tolerates duplicates; no dedup was added). A new name hidden
+by the filter or by a collapsed group is loaded but not selected.
+
+**Numbers:** core lib tests 1026 -> 1066, golden 258 -> 267, Docker suite 153 -> 162 (all pass,
+322s); fmt, clippy `-D warnings`, `cargo test --workspace` and the core/shell boundary check are
+clean.
+
+**For task 12 (copy):** reuse `RenameCapture` (`state/rename.rs`; add a `kind` or a sibling
+struct and a second `Action`), `stage_rename`'s shape in `update/rename.rs`, `TargetCheck` with
+`Command::CheckTarget` / `Msg::TargetChecked` (the reply is matched by the staged `to`, so copy
+can share it), `NotWritten::TargetExists` (its wording says "a key with the new name already
+exists", fine for copy), `slot::key_slot` for the cross-slot decision (copy falls back instead of
+refusing, so `cross_slot` should become an enum or gain a `fallback` flag), and
+`key_renamed`'s tail for inserting the new name: factor out "insert through `scan_batch`, then
+`State::follow` + `settle_follow`" (copy does not retarget the Open key or mark anything gone).
+`failed()` clears `open_pending`, so a failed pre-check clears a loading indicator; harmless, but
+note it. `Mode::Renaming` and `HelpContext::Rename` are named for rename; copy needs the capture's
+title and help rows to say `duplicate`.
