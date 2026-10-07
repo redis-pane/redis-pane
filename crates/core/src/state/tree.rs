@@ -197,7 +197,7 @@ impl Tree {
     /// cannot disagree.
     pub fn rebuild(&mut self, keys: &LoadedSet, view: &KeyView) {
         let order = view.order();
-        let mut progress = self.fold_begin(order.len());
+        let mut progress = self.fold_begin();
         while !self.fold_step(keys, order, keys.len(), &mut progress, usize::MAX) {}
     }
 
@@ -213,13 +213,12 @@ impl Tree {
         }
     }
 
-    /// Start a fold over a view of `order_len` rows: clears the rows and
+    /// Start a fold: clears the rows and
     /// returns the loop state [`Tree::fold_step`] resumes.
-    pub(super) fn fold_begin(&mut self, order_len: usize) -> FoldProgress {
+    pub(super) fn fold_begin(&mut self) -> FoldProgress {
         // No `reserve`: the row count is unknown (groups add rows), and a
         // reserve of the key count makes the Vec's doubling land on a
         // capacity twice the size it otherwise would (64 MB, not 33, at 1M).
-        let _ = order_len;
         self.rows.clear();
         FoldProgress::default()
     }

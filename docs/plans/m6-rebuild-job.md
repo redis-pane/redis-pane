@@ -1,6 +1,6 @@
 # M6 task 3: Sliced rebuild job
 
-Status: **planned.** This task delivers M6's main promise: no frame waits on a rebuild, at any
+Status: **done.** This task delivers M6's main promise: no frame waits on a rebuild, at any
 size.
 
 ## Context
@@ -252,3 +252,154 @@ clears `pending`. The select loop gets a last, lowest-priority arm
 `yield_now(), if gate.ready()` producing `Msg::RebuildStep`, so input, replies and timers are
 polled first, and a step is never sent before the frame that shows `rebuilding N%` has been
 drawn. Steps run back to back between draws (a draw still happens at most once per `FRAME`).
+
+## Outcome
+
+Done in `crates/core/src/state/{rebuild,tree,view,mod}.rs`, `update/{keys,scan,mod}.rs`,
+`render/mod.rs`, `crates/app/src/terminal.rs` and `crates/core/tests/perf.rs`. Decisions 1-9 hold,
+with the deviations listed below.
+
+### What was built
+
+- **`RebuildJob`** (`state/rebuild.rs`): stages `Filter` -> `Sort` -> `Inverse` -> `Fold`, each
+  advancing at most `REBUILD_SLICE` keys or output positions per step, into buffers separate from
+  `self.list` / `self.tree`. `FoldOnly` jobs start at `Fold` over the live view. The sort stage is a
+  stable chunk sort plus bottom-up merge with `order_cmp` (same semantics as `apply_sort`). The fold is
+  `Tree::rebuild`'s loop made a value (`FoldProgress`); `Tree::rebuild` itself now runs the same
+  `fold_step`, so the synchronous and the sliced fold are one code path.
+- **`State`** gains `job` and `rebuild_slice` (a test and calibration hook), and
+  `rebuild_list_async` / `rebuild_list_coalescing` / `refold_async` / `set_tree_mode_async` /
+  `rebuild_step` / `run_rebuild_to_completion` / `target_tree_mode`. `State::tree_mode` stays the
+  *shown* mode until the swap; the job's target is `target_tree_mode()`.
+- **Shell:** `Msg::RebuildStep`, `Command::ContinueRebuild` (appended by `update` whenever a job is
+  running), `RebuildGate` and a last, lowest-priority `select!` arm in `terminal.rs`.
+- **Readout:** `rebuilding N%` in the status bar, Warn style, in place of `sorted by ...` while it runs.
+
+### Per-call-site table
+
+| Call site | Path |
+|---|---|
+| `filter_edited` narrowing | synchronous; cancels a running job |
+| `filter_rebuild_due`; filter `Esc`; filter `Enter` with a rebuild owed | `rebuild_list_async` (job when `keys.len() >= slice`; replaces) |
+| `cycle_sort` | `rebuild_list_async` (no-op while the *target* is tree mode) |
+| `toggle_tree` | `set_tree_mode_async`: fold-only job when the view is current, full job otherwise; leaving tree mode is the synchronous `leave_tree_mode` when current, else a full job |
+| `collapse_group`, expand in `open_selected` | `refold_async` (fold-only job when `fold_is_current`, else full job; replaces) |
+| `scan_batch` while a job runs | marks it dirty; no `extend`, no rebuild |
+| `scan_batch` scheduled rebuild (no job) | `rebuild_list_async` |
+| `scan_batch` cap | `rebuild_list_async` (replaces the job so the new one covers every key) |
+| `scan_batch` restored selection | synchronous (once per session start; cancels any job) |
+| `scan_started` | synchronous on the emptied set; aborts the job (epoch bumped) |
+| `scan_complete` / `cancelled` / `failed` / `interrupted` | `rebuild_list_async` (so completing a 1M-key scan in tree mode does not freeze) |
+| `apply_session` | synchronous (before the first frame) |
+| `refold` / `leave_tree_mode` fallbacks | synchronous; cancel any job |
+
+### Deviations
+
+1. **Scan-end rebuilds are async** (spec decision 4 said every other caller stays synchronous).
+   A 1M-key scan ending in tree mode would otherwise freeze for ~0.5 s once; this is the
+   one place the whole-scan acceptance figure needed it.
+2. **The follow-up job after a dirty swap is gated by `grown_enough`** (the existing 25%
+   geometric schedule) rather than unconditional. A flat scan-order view is brought level by
+   `extend` at the swap. Otherwise an unconditional chain of jobs would run for the whole scan.
+   Scan end always levels the list.
+3. **The cap replaces the job** (a fresh one over every key) rather than only aborting it, so
+   the list is whole when the scan stops.
+4. **`rebuilding N%` is in the status bar**, not the title bar, beside the readouts it replaces
+   (`sorted by ...`, which would describe an order not on screen). The title bar is full
+   (DESIGN §2 priority).
+5. **Selection at the swap** is captured at the swap (so a move made on the old list is respected,
+   as decision 7 intends), not at job start. When the swap flips tree mode with the cursor still on
+   row 0 (what `t` leaves), it is read exactly as the synchronous toggle reads it, so `t` lands
+   the cursor where it always did.
+6. **Collapse/expand during a job read the collapsed set, not the stale row flag**, so a second
+   press while the first is still rebuilding is not an un-collapse (`group_expanded`).
+7. **`Esc` does not cancel a running job.** The decisions do not give it that meaning (the
+   typed settings are already applied); the old list is fully usable meanwhile. Flagged for
+   task 7's review.
+8. **Session snapshot saves the target tree mode.**
+9. **Tree rows are not pre-reserved** (a `reserve(keys)` makes `Vec` doubling land on 64 MB
+   instead of 33 MB at 1M keys; found by the memory test).
+
+### Slice calibration (`REBUILD_SLICE = 32,768`)
+
+`rebuild_slice_calibration_random_deep` (tree toggle from scan order at 1M `random_deep`, the heaviest
+job, median of 3 runs; worst step per stage; ms; local / CI):
+
+| Slice | Steps | Fold | Sort chunk | Sort merge | Filter | Inverse | Trigger to swap |
+|---|---|---|---|---|---|---|---|
+| 16,384 | 743 | 4.3-8.2 / 5.1 | 2.0-2.3 / 3.5 | 1.2-1.4 / 1.9 | 0.02 | 0.1 / 0.4 | 530-550 / 778 |
+| 24,576 | 492 | 5.6-6.0 / 8.1 | 2.7-3.1 / 5.5 | 1.9-2.1 / 2.8 | 0.02 | 0.1 / 0.5 | 527-554 / 824 |
+| **32,768** | **341** | **7.4-8.5 / 9.0** | **3.9-4.2 / 7.7** | **2.2-2.5 / 3.6** | **0.03** | **0.1 / 0.4** | **503-550 / 784** |
+| 49,152 | 230 | 11.6-12.5 / 13.8 | 5.8-6.0 / 12.4 | 3.3-3.8 / 5.9 | 0.04 | 0.1 / 0.5 | 522-547 / 838 |
+| 65,536 | 159 | 15.2 / 15.2 | 8.2-8.9 / 16.9 | 4.2-5.0 / 6.5 | 0.06 | 0.2 / 0.5 | 496-512 / 719 |
+
+The fold step is the slowest at every slice locally (~0.25 ms per 1,000 keys); on CI the sort chunk
+catches it from 49k up. 32,768 puts the slowest step at 7.4-8.5 ms locally and 9.0 ms on CI, with
+about 1.8x headroom to 16 ms on CI (task 1 saw CI up to 1.9x slower on a bad run). Filter and inverse
+steps are 100x cheaper than the slice implies; they could take a larger share, but they are a few
+dozen steps in total and are left uniform for simplicity.
+
+### Perf: before and after (ms, 1M keys, `random_deep`; local / CI)
+
+"Before" is the single synchronous `update` (tasks 1-2 figures); "after" is the worst single
+`update` (the trigger or one step) and, beside it, trigger to swap.
+
+| Trigger | Before: worst update | After: worst update | After: trigger to swap |
+|---|---|---|---|
+| sort change (scan -> name) | 278 / 225 | 3.9-4.0 / 7.8 | 311-323 / 558 |
+| tree toggle from scan order | 501 / 386 | 8.4-9.0 / 8.2 | 541-569 / 765 |
+| tree toggle, Name-sorted flat view | 224 / 211 | 8.0-8.4 / 8.5 | 208-223 / 208 |
+| collapse one group | 196 / 198 | 7.1-8.0 / 8.6 | 149-195 / 193 |
+| expand one group | 223 / 222 | 6.7-8.2 / 7.6 | 158-210 / 160 |
+| debounced filter rebuild | 40 / 37 | 1.45-1.5 / 2.0 | 40.5 / 58 |
+| whole scan in tree mode: worst update | 411 / 327 | 9.0-9.4 / 9.2 | scan end to level list 503-536 / 795 |
+| whole scan: updates over 16 ms | 12 of 2000 | **0** / **0** | |
+| whole scan: total | 1829 / 1285 | 2.3-2.5 s / 3.6 s | |
+
+Sorted control: worst update 0.3 ms (sort), 1.7-3.5 ms (tree toggle), 0.8 ms (filter), whole-scan
+worst 2.3 / 3.9 ms.
+
+Trigger to swap is about today's total locally for the fold paths and 1.1-1.4x for sort (the merge
+passes cost 5 extra passes over the order). On CI it is 1.5-2.5x for sort and toggle, where the
+single `sort_by` had been unusually fast; tasks 4 and 5 shorten it. The perf ceilings are set per the
+harness rule from this PR's CI run: every worst-update test is held at 16 ms (AT TARGET: the 1.5x
+rule lands below it); the time-to-swap ceilings are 1.5x the slowest figure observed, rounded up
+(collapse 290, filter 88, sort 812, toggle 1126); whole-scan total gate 6 s (sorted 10 s).
+
+### Memory (decision 9)
+
+Peak heap during the heaviest job (tree toggle from scan order): the shown list 61.5 MB plus the
+job's buffers 51.4 MB (order, merge scratch, inverse, the new tree's rows and inverse, the fold's
+counts) = **112.9 MB**, against the 250 MB budget; 97.3 MB after the swap. (`job_memory_peak_*`;
+arithmetic over capacities, not RSS.)
+
+### Tests
+
+- `state::rebuild::tests`: 1,200 randomised cases x 3 triggers (filter, sort with partly-known
+  metadata, tree on/off, collapse, redo) where the job run to completion equals `rebuild_list`
+  (list, tree, selection, offset, Open-key row), the shown list is untouched until the swap, the
+  selection moved mid-job is respected, and progress is monotonic and below 100.
+- `update::rebuild_tests` (16): which triggers start, replace, coalesce and abort; the cap; scan
+  end; a collapse during a job (and a second press); `t` twice; scan pages between steps ending
+  where a synchronous rebuild does; a job replaced mid-stage; a collapse during a full job.
+- Shell: `RebuildGate` is unit-tested (when a step may run). The `select!` loop itself is not
+  unit-testable without a terminal and a runtime; its rule is the gate plus arm order.
+- Goldens: `browser_rebuilding_{140,80,ascii}`; no existing golden moved.
+- Counts: core lib 999, golden 258, app 94 (default run); perf 47 `--ignored`; Docker 153
+  `--ignored`.
+
+### For tasks 4 and 5
+
+- **Sort stage (task 4):** replace `order_cmp` and the `sort_by` of one chunk (`sort_step`'s
+  `Chunks` arm) and keep the shape: a step sorts at most `slice` positions of `order` in place, then
+  merge passes move `order` <-> `scratch` at most `slice` output positions per step with
+  `Merge{width,out,mid,hi,i,j}` resumable state. A prefix-record sort must still produce the
+  identical stable order (ties by index) and the `known` count is computed in the *filter* stage.
+  Today's merge is 5 passes at 1M; a 4-way merge or fewer, larger runs would cut time to swap.
+- **Fold stage (task 5):** `Tree::fold_step(keys, order, inverse_len, progress, limit)` handles
+  `limit` view rows, then `limit` fix-up rows. An LCP column would replace the per-key byte
+  comparison `shared` in `fold_key`; carry the LCP in `order` order (a parallel `Vec<u16>` produced by
+  the sort) and thread it through `FoldProgress`. The fold is the slowest step, so any speed-up there
+  lets `REBUILD_SLICE` rise and the step count fall.
+- `REBUILD_SLICE` is a per-key constant tuned to the slowest stage; if a stage gets faster,
+  re-run `rebuild_slice_calibration_random_deep`.

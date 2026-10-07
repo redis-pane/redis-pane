@@ -415,7 +415,7 @@ impl RebuildJob {
         };
         if self.cursor == 0 {
             // First fold step: clear the shell and size its rows.
-            self.fold = tree.fold_begin(order.len());
+            self.fold = tree.fold_begin();
             self.cursor = 1;
         }
         tree.fold_step(keys, order, self.covered, &mut self.fold, self.slice)
