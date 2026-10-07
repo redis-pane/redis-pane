@@ -137,3 +137,8 @@ disambiguates with one `EXISTS src` before reporting.
     row (the help overlay lists every keys-pane binding). The row is ranked after `rename`, so
     no hint-bar or browser frame moved.
   - The shell has a stub (`CopyKey` errors) so the workspace compiles at this commit.
+- **Phase 3 (shell).** `redis::mutate::copy_key` (`COPY` / `DUMP`+`PTTL`+`RESTORE`) and the pure
+  `restore_ttl`, wired into `execute`; the existing `execute_settled` wedge handling and the
+  `CheckTarget` shell path apply unchanged. A `COPY` reply of `0` is disambiguated with one
+  `EXISTS src` (target taken vs source gone). `restore_ttl` also maps any `PTTL` below -2 to `0`
+  (defensive; the server never sends it). No deviations.
