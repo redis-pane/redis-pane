@@ -300,7 +300,8 @@ across frames, then a faster sort and fold — is milestone M6, after the beta:
 [`m6-perf-rebuild.md`](plans/m6-perf-rebuild.md), tasks in [`m6-planning.md`](plans/m6-planning.md).
 
 Still unbuilt after M4 and not part of it: rename, copy, bulk operations and Hash field rename (M2
-tasks 11–14, §5); rebuild cost at real `SCAN` order (M6). Cluster support shipped in M5 (§7.2).
+tasks 11–14, §5). Cluster support shipped in M5 (§7.2), rebuild cost at real `SCAN` order in M6
+(§7.3).
 
 | # | Task | Proves |
 |---|---|---|
@@ -360,14 +361,47 @@ until a redial; a failover is noticed only on traffic (`sync_cluster()` forces i
 policy makes the router spin on a dead node, so none is set; sharded subscriptions are not moved
 on failover.
 
+### 7.3 M6 — Rebuilds at real SCAN order
+
+**Progress: done**, released as `0.1.0-beta.3`. Seven tasks, planned in
+[`m6-planning.md`](plans/m6-planning.md) from the analysis in
+[`m6-perf-rebuild.md`](plans/m6-perf-rebuild.md): the cost was the access pattern (name-order
+passes over an arena stored in arrival order), not the algorithm. User decisions: never freeze
+first; the old list stays usable during a rebuild.
+
+| # | Task | Shipped |
+|---|---|---|
+| 1 | Honest harness ([`m6-harness.md`](plans/m6-harness.md)) | Shuffled and deep-name fixtures, collapse/expand, whole-scan, time-to-new-list and memory measurements; ceilings at 1.5× the slowest CI run |
+| 2 | Fold-only rebuild ([`m6-fold-only.md`](plans/m6-fold-only.md)) | Collapse, expand and tree toggle from a Name-ordered view re-fold without re-filtering or re-sorting |
+| 3 | Sliced rebuild job ([`m6-rebuild-job.md`](plans/m6-rebuild-job.md)) | `RebuildJob` (filter → sort → fold → swap) in key-counted slices (`REBUILD_SLICE` 32,768); `rebuilding N%`; user actions replace a job, scan pages mark it dirty |
+| 4 | Fast name sort ([`m6-fast-sort.md`](plans/m6-fast-sort.md)) | An 8-byte prefix column and a record sort with gathered tie refinement; emits the LCP. Persistent name order: not needed |
+| 5 | Fast fold ([`m6-fast-fold.md`](plans/m6-fast-fold.md)) | LCP-driven shared-segment count, a chunked touch pass, leaner bookkeeping |
+| 6 | Filter fast path ([`m6-filter-fast-path.md`](plans/m6-filter-fast-path.md)) | A case-insensitive substring search over the arena for wildcard-free globs, also used by narrowing |
+| 7 | Close-out ([`m6-close-out.md`](plans/m6-close-out.md)) | These docs, `0.1.0-beta.3` |
+
+At 1M keys, deep names, random order (local / CI), before → after:
+
+| | Before | After |
+|---|---|---|
+| Worst single update, any trigger or scan page | 411 / 327 ms | ~1.4–1.8 / ~3 ms |
+| Tree toggle until the new list | 501 / 386 ms | 108–115 / 147–194 ms |
+| Sort change until the new list | 278 / 225 ms | 88–109 / 145–154 ms |
+| Collapse until the new list | 473 / 372 ms | 19 / 28–36 ms |
+| Filter rebuild until the new list | 40 / 37 ms | 13 / 14–18 ms |
+| First filter character | 22 / 20–35 ms | 6 / 9.5 ms |
+| Memory (shown list + job peak) | — | 116 MB of 250 MB |
+
+Known gaps, recorded rather than fixed: restoring a saved tree-mode session rebuilds once
+synchronously at startup; `Esc` does not cancel a running job; wildcard and fuzzy filters stay on
+the per-key matcher.
+
 ## 8. Explicitly not in M0–M3
 
 Palette, Console, dashboard, monitor, pub/sub, slowlog (M3) — Console cut, Palette shipped then
 withdrawn (ADR-0020), see §6 above. Cluster shipped in M5 (§7.2,
 [ADR-0022](adr/0022-cluster-supported-in-stages.md), which superseded the M4 refusal in
-[ADR-0021](adr/0021-cluster-refused-until-supported.md)). Rebuild cost at real `SCAN` order is
-milestone M6 — [`m6-perf-rebuild.md`](plans/m6-perf-rebuild.md), tasks in
-[`m6-planning.md`](plans/m6-planning.md). Themes beyond the two M0 defaults, the ASCII glyph
+[ADR-0021](adr/0021-cluster-refused-until-supported.md)). Rebuild cost at real `SCAN` order was
+fixed in M6 (§7.3). Themes beyond the two M0 defaults, the ASCII glyph
 fallback, session restore, and the million-key performance work are M4 (§7). Packaging and
 distribution beyond the alpha's raw GitHub Release archives is a decision parked to the end of
 alpha (PRD §9, §10) — M4 ships no official packages. Keybinding overrides from config are

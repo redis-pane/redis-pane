@@ -286,8 +286,8 @@ config file; a **Connection** is a live session, which may be **ad-hoc** (no Pro
   help took over discovery.)
 - **M4 — Scale & polish.** Million-key performance work (release binary <20MB, 16ms interaction
   and 250MB RSS budgets measured and held at 1M keys — though the 16ms figures for tree toggle,
-  sort and filter rebuilds hold only for keys arriving in name order; at real `SCAN` order they
-  are ~0.4–0.5 s at 1M, which is M6), themes (light and high-contrast built-ins
+  sort and filter rebuilds held only for keys arriving in name order; at real `SCAN` order they
+  were ~0.4–0.5 s at 1M until M6 fixed it), themes (light and high-contrast built-ins
   alongside today's dark default, plus user themes as config data), an ASCII glyph fallback for
   non-Nerd-Font and non-UTF-8 terminals, and session restore (pane split, tree/flat, sort, filter
   and selected key, keyed per target, under `$XDG_STATE_HOME`). **Cluster support moves to M5**;
@@ -305,13 +305,15 @@ config file; a **Connection** is a live session, which may be **ad-hoc** (no Pro
   [`plans/m5-cluster.md`](plans/m5-cluster.md), tasks in [`plans/m5-planning.md`](plans/m5-planning.md). The M4 refusal
   ([ADR-0021](adr/0021-cluster-refused-until-supported.md)) is superseded by
   [ADR-0022](adr/0022-cluster-supported-in-stages.md).
-- **M6 — Rebuilds at real SCAN order.** After the beta. M4's perf harness loaded keys in name
+- **M6 — Rebuilds at real SCAN order.** **Done, released as `0.1.0-beta.3`.** M4's perf harness loaded keys in name
   order; real `SCAN` order is effectively random, and at 1M keys a tree toggle, a sort change or a
   full filter rebuild then takes ~0.4–0.5 s instead of fitting in a 16 ms frame (and a scan in
   tree mode, the default, pays that repeatedly). M6 makes the harness measure the real case,
   folds collapse/expand without re-sorting, runs large rebuilds as a resumable job sliced across
   frames (the old list stays usable under a `rebuilding N%` readout until the new one swaps in),
-  then shortens the job with a record sort over a cached name prefix and an LCP-driven fold.
+  then shortens the job with a record sort over a cached name prefix, an LCP-driven fold and a
+  substring fast path for the filter. At 1M random-order keys no update exceeds a few ms on CI,
+  and a tree toggle shows its new list in ~0.1–0.2 s.
   Designed in [`plans/m6-perf-rebuild.md`](plans/m6-perf-rebuild.md), tasks in
   [`plans/m6-planning.md`](plans/m6-planning.md).
 

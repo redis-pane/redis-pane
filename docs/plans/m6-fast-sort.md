@@ -1,6 +1,6 @@
 # M6 task 4: Fast name sort
 
-Status: **done** (PR #81, pending merge).
+Status: **done** (PR #81).
 
 ## Context
 

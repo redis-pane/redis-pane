@@ -22,13 +22,13 @@ Still not built: renaming or copying a key, and bulk operations across several k
 Download the binary for your OS from the [Releases page](https://github.com/vinodsantharam/redis-pane/releases) — macOS (Intel or Apple Silicon), Linux (x86_64), and Windows are all built there. Or, on macOS/Linux, run the installer script from a release page (note: these beta releases are marked as GitHub prereleases, so the `/latest/` URL alias doesn't resolve to them — use the tagged URL, matching whatever the current beta tag is):
 
 ```bash
-curl --proto '=https' --tlsv1.2 -LsSf https://github.com/vinodsantharam/redis-pane/releases/download/v0.1.0-beta.2/redis-pane-installer.sh | sh
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/vinodsantharam/redis-pane/releases/download/v0.1.0-beta.3/redis-pane-installer.sh | sh
 ```
 
 On Windows, from PowerShell:
 
 ```powershell
-irm https://github.com/vinodsantharam/redis-pane/releases/download/v0.1.0-beta.2/redis-pane-installer.ps1 | iex
+irm https://github.com/vinodsantharam/redis-pane/releases/download/v0.1.0-beta.3/redis-pane-installer.ps1 | iex
 ```
 
 These builds are **unsigned** — expected for a beta. On first run:
@@ -155,9 +155,11 @@ redis-pane --profile mine --probe
   costing. Kill a primary and watch the stopped-node line appear while the others keep going.
   Pub/Sub works. If the title bar says a node is gone or a redial happens
   mid-session, that is worth reporting with the steps that led to it.
-- **A very large keyspace.** Scrolling and typing into the filter stay quick at a million keys.
-  Toggling the tree, changing the sort or fully rebuilding the filter takes about half a second
-  there when keys arrive in real `SCAN` order. That is a known limitation, planned as M6.
+- **A very large keyspace.** `python3 scripts/fixtures.py --flush -n 1000000` loads a million keys
+  in real `SCAN` order. Nothing should freeze: not the scan in tree mode, not `t`, `s`, collapsing
+  a group (`←`) or editing the filter. A large rebuild runs between frames; the old list stays
+  usable and the status bar says `rebuilding N%` until the new one swaps in (about a tenth of a
+  second for a tree toggle). A visible stall at this size is worth reporting.
 - **Resize the terminal.** Columns drop in order above 70 wide; below 70, opening a key pushes
   into a full-width view with a breadcrumb back to the list.
 - **If your server supports `CLIENT TRACKING`**, open a key and change it from another terminal
@@ -181,7 +183,10 @@ redis-pane --profile mine --probe
 ## What's not there yet, on purpose
 
 - No renaming or copying keys, and no bulk operations across several keys — coming next.
-- Large keyspaces: the half-second rebuilds above are known, not something to report as new.
+- Large keyspaces, two small known gaps: restoring a saved session in tree mode at a million keys
+  rebuilds once synchronously at startup, so it can pause briefly; and `Esc` does not cancel a
+  running rebuild (the old list stays usable meanwhile). Filters with `*`/`?` and fuzzy filters
+  are not on the fast filter path, and case-insensitive matching folds ASCII only.
 - No embedded Redis console — `redis-cli` is one keystroke away in the terminal you're already
   in. No command palette either: it shipped briefly and was withdrawn, since every action it
   listed already had a key.

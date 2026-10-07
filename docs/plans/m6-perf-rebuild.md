@@ -1,6 +1,6 @@
 # M6: Rebuilds at real SCAN order
 
-Status: **planned, not started.** The tasks are listed in [`m6-planning.md`](m6-planning.md). M6
+Status: **done** — released as `0.1.0-beta.3`; close-out in [`m6-close-out.md`](m6-close-out.md). The tasks are listed in [`m6-planning.md`](m6-planning.md). M6
 is its own milestone, after the beta (PRD §9). It was found on 2026-10-04 while planning an M4
 follow-up, deferred so M4 and then M5 could ship, and analysed in depth on 2026-10-07.
 
