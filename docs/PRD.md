@@ -307,11 +307,13 @@ config file; a **Connection** is a live session, which may be **ad-hoc** (no Pro
   [ADR-0022](adr/0022-cluster-supported-in-stages.md).
 - **M6 — Rebuilds at real SCAN order.** After the beta. M4's perf harness loaded keys in name
   order; real `SCAN` order is effectively random, and at 1M keys a tree toggle, a sort change or a
-  full filter rebuild then takes ~0.4–0.5 s instead of fitting in a 16 ms frame. M6 makes the
-  harness measure the real case, keeps a name order up to date as keys arrive instead of sorting
-  at rebuild time, and runs large rebuilds as a resumable job sliced across frames, with the old
-  list on screen and a visible rebuilding readout until the new one is ready. Designed in
-  [`plans/m6-perf-rebuild.md`](plans/m6-perf-rebuild.md).
+  full filter rebuild then takes ~0.4–0.5 s instead of fitting in a 16 ms frame (and a scan in
+  tree mode, the default, pays that repeatedly). M6 makes the harness measure the real case,
+  folds collapse/expand without re-sorting, runs large rebuilds as a resumable job sliced across
+  frames (the old list stays usable under a `rebuilding N%` readout until the new one swaps in),
+  then shortens the job with a record sort over a cached name prefix and an LCP-driven fold.
+  Designed in [`plans/m6-perf-rebuild.md`](plans/m6-perf-rebuild.md), tasks in
+  [`plans/m6-planning.md`](plans/m6-planning.md).
 
 ## 10. Open questions
 
