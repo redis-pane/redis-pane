@@ -179,6 +179,10 @@ pub async fn execute(client: &Client, mutation: &Mutation) -> Result<MutationOut
             KeyRename::TargetExists => MutationOutcome::NotWritten(NotWritten::TargetExists),
             KeyRename::KeyGone => MutationOutcome::NotWritten(NotWritten::KeyGone),
         },
+        // Phase 3 wires this; until then a copy fails loudly.
+        Mutation::CopyKey { .. } => {
+            return Err(Error::new(ErrorKind::Unknown, "copy is not wired yet"));
+        }
         // Handled above, before `key` was ever computed — never reached.
         Mutation::ResetSlowlog => unreachable!("returned above"),
     })

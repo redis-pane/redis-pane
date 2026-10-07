@@ -46,7 +46,7 @@ pub use pubsub::{
     Subscription, parse_subscription, parse_subscription_with, redis_glob_match,
 };
 pub use rebuild::{JobKind, REBUILD_SLICE, RebuildJob};
-pub use rename::{RenameCapture, RenameProblem, TargetCheck};
+pub use rename::{NameKind, RenameCapture, RenameProblem, SlotPath, TargetCheck};
 pub use scan::{InterruptReason, ScanState};
 pub use session::{SessionFile, SessionFileError, SessionState};
 pub use slowlog::{NodeFailure, SlowlogEntry, SlowlogSort, SlowlogState};
@@ -461,15 +461,26 @@ pub enum PendingMutation {
     /// Rename a key (`RENAMENX`, M2 task 11, `docs/plans/m2-task11-rename.md`).
     /// `index` is the Loaded set row it came from, as `DeleteKey` carries one.
     /// `target` is the `EXISTS` pre-check's answer, filled in by
-    /// `Msg::TargetChecked` after staging; `cross_slot` is fixed at staging,
-    /// on a Cluster only, and means `y` does nothing (`RENAME` across slots
-    /// fails with `CROSSSLOT`).
+    /// `Msg::TargetChecked` after staging; `slots` is fixed at staging, and
+    /// is [`SlotPath::CrossSlotRefused`] only on a Cluster across slots, which
+    /// means `y` does nothing (`RENAME` fails with `CROSSSLOT`).
     RenameKey {
         index: usize,
         name: crate::key::KeyName,
         to: crate::key::KeyName,
         target: TargetCheck,
-        cross_slot: bool,
+        slots: SlotPath,
+    },
+    /// Duplicate a key (`COPY`, M2 task 12, `docs/plans/m2-task12-copy.md`).
+    /// Same fields as `RenameKey`; `slots` is [`SlotPath::CrossSlotFallback`]
+    /// on a Cluster across slots, where the shell runs `DUMP` + `PTTL` +
+    /// `RESTORE` instead and the dialog lists those commands.
+    CopyKey {
+        index: usize,
+        name: crate::key::KeyName,
+        to: crate::key::KeyName,
+        target: TargetCheck,
+        slots: SlotPath,
     },
 }
 
@@ -558,6 +569,47 @@ impl PendingMutation {
             // (D8).
             PendingMutation::ResetSlowlog => "SLOWLOG RESET".to_string(),
             PendingMutation::RenameKey { name, to, .. } => format!("RENAMENX {name} {to}"),
+            PendingMutation::CopyKey { name, to, .. } => format!("COPY {name} {to}"),
+        }
+    }
+
+    /// The commands the shell will actually send, one per line, for the
+    /// dialog. One line for everything except a Cluster copy across slots,
+    /// which runs as three; its payload is the literal `<payload>`, never
+    /// bytes (decision 3, `docs/plans/m2-task12-copy.md`).
+    pub fn command_lines(&self) -> Vec<String> {
+        match self {
+            PendingMutation::CopyKey {
+                name,
+                to,
+                slots: SlotPath::CrossSlotFallback,
+                ..
+            } => vec![
+                format!("DUMP {name}"),
+                format!("PTTL {name}"),
+                format!("RESTORE {to} <ttl> <payload>"),
+            ],
+            other => vec![other.command_text()],
+        }
+    }
+
+    /// Whether `y` can never run this: a rename across slots on a Cluster.
+    pub fn blocks_confirm(&self) -> bool {
+        matches!(
+            self,
+            PendingMutation::RenameKey {
+                slots: SlotPath::CrossSlotRefused,
+                ..
+            }
+        )
+    }
+
+    /// The target name and `EXISTS` answer of a staged rename or copy.
+    pub fn target_mut(&mut self) -> Option<(&crate::key::KeyName, &mut TargetCheck)> {
+        match self {
+            PendingMutation::RenameKey { to, target, .. }
+            | PendingMutation::CopyKey { to, target, .. } => Some((&*to, target)),
+            _ => None,
         }
     }
 
@@ -655,6 +707,9 @@ impl PendingMutation {
             PendingMutation::ResetSlowlog => None,
             PendingMutation::RenameKey { .. } => {
                 Some("only if the new name is free · keeps its TTL".to_string())
+            }
+            PendingMutation::CopyKey { .. } => {
+                Some("only if the new name is free · carries its TTL".to_string())
             }
         }
     }
@@ -818,6 +873,9 @@ impl PendingMutation {
             PendingMutation::RenameKey {
                 index, name, to, ..
             } => (Mutation::RenameKey { key: name, to }, Some(index)),
+            PendingMutation::CopyKey {
+                index, name, to, ..
+            } => (Mutation::CopyKey { key: name, to }, Some(index)),
         };
         crate::Command::Execute { mutation, index }
     }
@@ -1459,6 +1517,15 @@ impl State {
             Link::Up { version, .. } => crate::server::Version::parse(version),
             _ => None,
         }
+    }
+
+    /// Whether `COPY` may be offered (M2 task 12): it needs Redis 6.2, one
+    /// minor above the 6.0 floor (ADR-0007). An unknown version is allowed,
+    /// as in [`State::sharded_available`]: the gate explains a known
+    /// refusal, and a server that refuses reports it as a failed command.
+    pub fn copy_available(&self) -> bool {
+        self.server_version()
+            .is_none_or(|v| v >= crate::server::COPY_MIN)
     }
 
     /// Whether a sharded Pub/Sub subscription may be offered (M5 task 9,

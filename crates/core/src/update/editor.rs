@@ -839,6 +839,7 @@ pub(super) fn staged_edit_found_key_gone(state: &mut State, name: &KeyName, at_m
         Some(
             PendingMutation::DeleteKey { .. }
             | PendingMutation::RenameKey { .. }
+            | PendingMutation::CopyKey { .. }
             | PendingMutation::ResetSlowlog,
         )
         | None => false,

@@ -38,9 +38,9 @@ pub enum HelpContext {
     /// ordinary character is text here, not a command — see `update::mode`'s
     /// own comment for why this outranks Normal mode.
     Filter,
-    /// `R` is capturing a new key name (M2 task 11): the `Filter`-shaped
-    /// sibling for `State::rename`.
-    Rename,
+    /// `R` or `D` is capturing a new key name (M2 tasks 11, 12): the
+    /// `Filter`-shaped sibling for `State::rename`.
+    Rename(crate::state::NameKind),
     /// The Viewer, focused, with `open` describing what's in it — `None`
     /// while nothing has been read yet (freshly opened, or read pending).
     Value(Option<ValueContext>),
@@ -242,7 +242,11 @@ impl HelpRow {
 /// `y` itself reads differently — see `preview_only` below.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Refusal {
-    pub reason: ReadOnlyReason,
+    /// `Some` when Read-only Mode is why; `None` when `needs` is.
+    pub reason: Option<ReadOnlyReason>,
+    /// `Some` when the server is too old for the row (`D` needs Redis 6.2):
+    /// the row does nothing at all, so `preview_only` does not apply.
+    pub needs: Option<&'static str>,
     /// `true` for a row that still runs and stages a preview despite the
     /// refusal (`update::mode`'s comment: "a staged mutation is decided at
     /// confirm, not at the keypress that staged it") — the reason gets a
@@ -255,17 +259,31 @@ pub struct Refusal {
 impl Refusal {
     fn read_only(state: &State, preview_only: bool) -> Option<Refusal> {
         state.read_only.map(|reason| Refusal {
-            reason,
+            reason: Some(reason),
+            needs: None,
             preview_only,
         })
     }
 
+    /// A row the connected server cannot run.
+    fn needs(what: &'static str) -> Refusal {
+        Refusal {
+            reason: None,
+            needs: Some(what),
+            preview_only: false,
+        }
+    }
+
     /// The reason text shown dimmed next to a refused row.
     pub fn text(&self) -> String {
+        if let Some(needs) = self.needs {
+            return needs.to_string();
+        }
+        let label = self.reason.map(|r| r.label()).unwrap_or_default();
         if self.preview_only {
-            format!("read-only ({}) · preview only", self.reason.label())
+            format!("read-only ({label}) · preview only")
         } else {
-            format!("read-only ({})", self.reason.label())
+            format!("read-only ({label})")
         }
     }
 }
@@ -279,7 +297,12 @@ pub fn context(state: &State) -> HelpContext {
         Mode::Confirm => HelpContext::Confirm,
         Mode::Editing => HelpContext::Editor(editor_context(state)),
         Mode::Filtering => HelpContext::Filter,
-        Mode::Renaming => HelpContext::Rename,
+        Mode::Renaming => HelpContext::Rename(
+            state
+                .rename
+                .as_ref()
+                .map_or(crate::state::NameKind::Rename, |c| c.kind),
+        ),
         Mode::PubSubAdding => HelpContext::PubSubAdding,
         Mode::Normal => {
             // A pending chord outranks everything else in Normal mode — the
@@ -444,8 +467,11 @@ pub fn here(state: &State, ctx: HelpContext) -> Vec<HelpRow> {
         HelpContext::ChordPending => chord_pending_rows(state),
         HelpContext::Slowlog => slowlog_rows(state),
         HelpContext::Monitor => monitor_rows(state),
-        HelpContext::Rename => vec![
-            HelpRow::new(keys_for(state, Action::EnterValueCursor), "stage rename"),
+        HelpContext::Rename(kind) => vec![
+            HelpRow::new(
+                keys_for(state, Action::EnterValueCursor),
+                format!("stage {}", kind.verb()),
+            ),
             HelpRow::new(keys_for(state, Action::Cancel), "cancel"),
         ],
         HelpContext::PubSubAdding => vec![
@@ -686,6 +712,21 @@ fn keys_rows(state: &State, tree: bool, filtered: bool) -> Vec<HelpRow> {
         keys_for(state, Action::Rename),
         "rename",
     ));
+    // After `R`, for the same reason. The version gate outranks Read-only
+    // dimming: below 6.2 the key does nothing at all, not even a preview.
+    rows.push(if state.copy_available() {
+        mutation_entry_row(
+            state,
+            keys_for(state, Action::Duplicate),
+            Action::Duplicate.label(),
+        )
+    } else {
+        HelpRow::new(
+            keys_for(state, Action::Duplicate),
+            Action::Duplicate.label(),
+        )
+        .refused(Refusal::needs("needs Redis 6.2"))
+    });
     rows.push(HelpRow::new("↑↓ jk", "move"));
     rows.push(HelpRow::new("PgUp/PgDn", "page"));
     rows.push(HelpRow::new("Home/End", "top/bottom"));

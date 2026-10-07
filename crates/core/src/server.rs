@@ -17,6 +17,14 @@ pub const FLOOR: Version = Version {
     patch: 0,
 };
 
+/// The oldest Redis that has `COPY` (M2 task 12). The floor is one minor
+/// lower, so `D` is gated on the probed version.
+pub const COPY_MIN: Version = Version {
+    major: 6,
+    minor: 2,
+    patch: 0,
+};
+
 impl Version {
     /// Parse the `redis_version` field of `INFO server`.
     ///

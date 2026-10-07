@@ -126,4 +126,14 @@ disambiguates with one `EXISTS src` before reporting.
 
 ### Phase log
 
-(Appended as the phases land.)
+- **Phase 2 (core).** Landed as designed (`NameKind`, `SlotPath`, `insert_loaded_key`,
+  `key_copied`, `State::copy_available`, `Action::Duplicate` on `D`, `Refusal` gained a `needs`
+  cause). Deviations:
+  - `HelpContext::Rename` became `Rename(NameKind)` so help and the border title say
+    "duplicate key (COPY)" for a copy; the type names `RenameCapture`/`Mode::Renaming` stayed.
+  - Error lines for a Cluster cross-slot copy name `DUMP/RESTORE src dst` rather than `COPY`
+    (`settled_label`), since that is what ran.
+  - Six `help_*` goldens plus the two `help_disconnected_*` gained the `D duplicate key (COPY)`
+    row (the help overlay lists every keys-pane binding). The row is ranked after `rename`, so
+    no hint-bar or browser frame moved.
+  - The shell has a stub (`CopyKey` errors) so the workspace compiles at this commit.

@@ -1,6 +1,5 @@
 ─ redis-pane ─ ● staging · from profile staging  ✕ disconnected · read 14s ago ─
 
- KEY                      TYPE      TTL │ → to open
 ┌─ help · keys pane ───────────────────────────────────────────────────────────┐
 │ →         open / expand                                                      │
 │ /         filter                                                             │
@@ -11,6 +10,7 @@
 │ r         reconnect                                                          │
 │ C         copy redis-cli command                                             │
 │ R         rename                                                             │
+│ D         duplicate key (COPY)                                               │
 │ ↑↓ jk     move                                                               │
 │ PgUp/PgDn page                                                               │
 │ Home/End  top/bottom                                                         │

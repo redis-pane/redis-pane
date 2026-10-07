@@ -5544,7 +5544,7 @@ fn golden_confirm_rename_cross_slot_on_a_cluster() {
     assert!(matches!(
         state.confirm,
         Some(PendingMutation::RenameKey {
-            cross_slot: true,
+            slots: redis_pane_core::state::SlotPath::CrossSlotRefused,
             ..
         })
     ));
@@ -5576,7 +5576,7 @@ fn the_rename_row_is_dimmed_with_the_reason_under_read_only_mode() {
     state.read_only = Some(ReadOnlyReason::Environment);
     let dimmed = row_of(&state);
     let refusal = dimmed.refused.expect("dimmed under read-only");
-    assert_eq!(refusal.reason, ReadOnlyReason::Environment);
+    assert_eq!(refusal.reason, Some(ReadOnlyReason::Environment));
     assert!(refusal.preview_only, "the preview still opens");
     assert_eq!(refusal.text(), "read-only (environment) · preview only");
 }

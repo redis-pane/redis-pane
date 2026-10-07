@@ -84,6 +84,10 @@ pub enum Action {
     /// capture, then stages `RENAMENX`. Keys-pane scoped, on a key row; the
     /// value pane's `R` (renaming a field or member) is task 14's.
     Rename,
+    /// Duplicate the Selected key under a new name (`D`, M2 task 12, DESIGN
+    /// §4): opens the same name capture, prefilled with `:copy`, then stages
+    /// `COPY`. Keys-pane scoped, key rows only. `Copy` is the clipboard.
+    Duplicate,
     /// Confirm whatever mutation is currently staged and run it, or say why
     /// not if Read-only Mode refuses it. No-op with nothing staged.
     ConfirmMutation,
@@ -207,7 +211,12 @@ impl Action {
             // exactly the same shape — not "is the value pane merely drawn",
             // which `open_ttl_editor`'s own ladder checks again for the same
             // reason `open_editor`'s does.
-            Action::Delete | Action::Rename | Action::Edit | Action::Add | Action::ToggleTree => {
+            Action::Delete
+            | Action::Rename
+            | Action::Duplicate
+            | Action::Edit
+            | Action::Add
+            | Action::ToggleTree => {
                 if state.keys_pane_focused() {
                     state.pane_visible(Pane::Keys)
                 } else {
@@ -260,6 +269,7 @@ impl Action {
             Action::NarrowKeysPane => "narrow keys",
             Action::Delete => "delete",
             Action::Rename => "rename",
+            Action::Duplicate => "duplicate key (COPY)",
             Action::ConfirmMutation => "confirm",
             Action::Edit => "edit",
             Action::Add => "add",
@@ -516,6 +526,10 @@ impl Default for Keymap {
                 Binding {
                     key: KeyPress::plain(KeyCode::Char('R')),
                     action: Action::Rename,
+                },
+                Binding {
+                    key: KeyPress::plain(KeyCode::Char('D')),
+                    action: Action::Duplicate,
                 },
                 Binding {
                     key: KeyPress::plain(KeyCode::Char('y')),
@@ -812,6 +826,7 @@ mod tests {
             Action::CopyCommand,
             Action::Delete,
             Action::Rename,
+            Action::Duplicate,
             Action::ConfirmMutation,
             Action::Edit,
             Action::Add,

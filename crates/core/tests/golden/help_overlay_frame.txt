@@ -8,7 +8,7 @@
 │ r         rescan                                                                                 │
 │ C         copy redis-cli command                                                                 │
 │ R         rename                                                                                 │
+│ D         duplicate key (COPY)                                                                   │
 │ ↑↓ jk     move                                                                                   │
 │ PgUp/PgDn page                                                                                   │
-│ Home/End  top/bottom                                                                             │
 └──────────────────────────────────────────────────────────────────────────────────────────────────┘

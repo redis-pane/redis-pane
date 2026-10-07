@@ -8382,7 +8382,7 @@ mod rename {
         assert!(matches!(
             state.confirm,
             Some(PendingMutation::RenameKey {
-                cross_slot: true,
+                slots: redis_pane_core::state::SlotPath::CrossSlotRefused,
                 ..
             })
         ));

@@ -3,40 +3,58 @@
 //! outcome means once the server has answered.
 
 use super::*;
-use crate::state::{RenameCapture, TargetCheck};
+use crate::state::{NameKind, RenameCapture, SlotPath, TargetCheck};
 
 /// `R` with the keys pane focused: open the name capture for the Selected key.
-///
-/// A group row, or nothing selected, has no key to rename; a gone row has
-/// nothing left to rename; a name that is not valid UTF-8 cannot be edited
-/// in a text capture without being rewritten, so it is refused (ADR-0017's
-/// rule for List edit). Each says so rather than doing nothing silently.
-pub(super) fn begin_rename(mut state: State) -> (State, Vec<Command>) {
-    let notify = |state: State, text: &str| {
-        (
+pub(super) fn begin_rename(state: State) -> (State, Vec<Command>) {
+    begin_name_capture(state, NameKind::Rename)
+}
+
+/// `D` with the keys pane focused (M2 task 12): the same capture, prefilled
+/// with the name plus `:copy`. Gated on the probed server version, since
+/// `COPY` is Redis 6.2 and the floor is 6.0 (ADR-0007).
+pub(super) fn begin_copy(state: State) -> (State, Vec<Command>) {
+    if !state.copy_available() {
+        let version = state
+            .server_version()
+            .map(|v| format!(" (this server is {v})"))
+            .unwrap_or_default();
+        return (
             state,
             vec![Command::Notify {
-                text: text.to_string(),
+                text: format!("duplicate: needs Redis 6.2{version}"),
             }],
-        )
-    };
+        );
+    }
+    begin_name_capture(state, NameKind::Copy)
+}
+
+/// Open the name capture for the Selected key.
+///
+/// A group row, or nothing selected, has no key to act on; a gone row has
+/// nothing left; a name that is not valid UTF-8 cannot be edited in a text
+/// capture without being rewritten, so it is refused (ADR-0017's rule for
+/// List edit). Each says so rather than doing nothing silently.
+fn begin_name_capture(mut state: State, kind: NameKind) -> (State, Vec<Command>) {
+    let verb = kind.verb();
+    let notify = |state: State, text: String| (state, vec![Command::Notify { text }]);
     let Some(index) = state.selected_key() else {
-        return notify(state, "rename: select a key first");
+        return notify(state, format!("{verb}: select a key first"));
     };
     if state.keys.is_gone(index) {
-        return notify(state, "rename: that key is gone");
+        return notify(state, format!("{verb}: that key is gone"));
     }
     let Some(from) = state.keys.name(index).map(KeyName::from) else {
-        return notify(state, "rename: select a key first");
+        return notify(state, format!("{verb}: select a key first"));
     };
-    match RenameCapture::new(index, from) {
+    match RenameCapture::new(kind, index, from) {
         Some(capture) => {
             state.rename = Some(capture);
             (state, Vec::new())
         }
         None => notify(
             state,
-            "rename: this key's name is binary (not valid UTF-8) and can't be typed",
+            format!("{verb}: this key's name is binary (not valid UTF-8) and can't be typed"),
         ),
     }
 }
@@ -53,7 +71,7 @@ pub(super) fn rename_key(mut state: State, key: KeyPress) -> (State, Vec<Command
             state.rename = None;
             (state, Vec::new())
         }
-        KeyCode::Enter => stage_rename(state),
+        KeyCode::Enter => stage_name(state),
         KeyCode::Backspace => {
             capture.text.pop();
             (state, Vec::new())
@@ -77,11 +95,12 @@ pub(super) fn rename_paste(mut state: State, text: &str) -> (State, Vec<Command>
 }
 
 /// `Enter` in the capture: refuse an empty or unchanged name (the reason is
-/// already on screen), otherwise stage the rename and ask for the pre-check.
+/// already on screen), otherwise stage the rename or copy and ask for the
+/// pre-check.
 ///
 /// Nothing is sent that writes. The `EXISTS` is advice for the preview, and
 /// is not sent at all when the rename can never run (cross-slot).
-fn stage_rename(mut state: State) -> (State, Vec<Command>) {
+fn stage_name(mut state: State) -> (State, Vec<Command>) {
     let Some(capture) = state.rename.take() else {
         return (state, Vec::new());
     };
@@ -95,37 +114,69 @@ fn stage_rename(mut state: State) -> (State, Vec<Command>) {
         return (
             state,
             vec![Command::Notify {
-                text: "rename: the key list changed — press R again".to_string(),
+                text: format!(
+                    "{}: the key list changed — press {} again",
+                    capture.kind.verb(),
+                    capture.kind.key_label()
+                ),
             }],
         );
     }
     let to = KeyName::from(capture.text.as_str());
-    let cross_slot = state.on_cluster()
+    let apart = state.on_cluster()
         && crate::slot::key_slot(capture.from.as_bytes()) != crate::slot::key_slot(to.as_bytes());
-    let commands = if cross_slot {
-        Vec::new()
-    } else {
-        vec![Command::CheckTarget { key: to.clone() }]
+    let (index, name) = (capture.index, capture.from);
+    let (pending, check) = match capture.kind {
+        NameKind::Rename => {
+            let slots = if apart {
+                SlotPath::CrossSlotRefused
+            } else {
+                SlotPath::SameSlot
+            };
+            let pending = PendingMutation::RenameKey {
+                index,
+                name,
+                to: to.clone(),
+                target: TargetCheck::Unchecked,
+                slots,
+            };
+            (pending, !apart)
+        }
+        NameKind::Copy => {
+            let slots = if apart {
+                SlotPath::CrossSlotFallback
+            } else {
+                SlotPath::SameSlot
+            };
+            let pending = PendingMutation::CopyKey {
+                index,
+                name,
+                to: to.clone(),
+                target: TargetCheck::Unchecked,
+                slots,
+            };
+            // A copy always runs, so it always gets the pre-check.
+            (pending, true)
+        }
     };
-    state.confirm = Some(PendingMutation::RenameKey {
-        index: capture.index,
-        name: capture.from,
-        to,
-        target: TargetCheck::Unchecked,
-        cross_slot,
-    });
+    state.confirm = Some(pending);
+    let commands = if check {
+        vec![Command::CheckTarget { key: to }]
+    } else {
+        Vec::new()
+    };
     (state, commands)
 }
 
-/// `Msg::TargetChecked`: fold the `EXISTS` answer into the staged rename it
-/// was asked for. Dropped if nothing like it is staged any more — after `Esc`,
-/// or after `y`, when `RENAMENX` is already the guard.
+/// `Msg::TargetChecked`: fold the `EXISTS` answer into the staged rename or
+/// copy it was asked for. Dropped if nothing like it is staged any more —
+/// after `Esc`, or after `y`, when `RENAMENX` / `COPY` is already the guard.
 pub(super) fn target_checked(
     mut state: State,
     key: KeyName,
     exists: bool,
 ) -> (State, Vec<Command>) {
-    if let Some(PendingMutation::RenameKey { to, target, .. }) = &mut state.confirm
+    if let Some((to, target)) = state.confirm.as_mut().and_then(PendingMutation::target_mut)
         && *to == key
     {
         *target = if exists {
@@ -157,22 +208,17 @@ pub(super) fn key_renamed(
     if let Some(i) = from_index {
         state.keys.set_gone(i);
     }
-    let before = state.keys.len();
-    let (mut state, mut commands) = scan_batch(state, vec![to.as_bytes().to_vec()]);
-    let new_index = (state.keys.len() > before).then_some(before);
+    let (mut state, mut commands, new_index) = insert_loaded_key(state, &to);
 
-    if let Some(ni) = new_index {
-        if state.row_of(ni).is_none() && !state.rebuild_running() {
-            state.rebuild_list_async();
-        }
-        if was_selected {
-            state.follow = Some(ni);
-            settle_follow(&mut state);
-            // No row and no job coming to make one: the filter or a collapsed
-            // group hides the new key, so there is nothing to follow.
-            if !state.rebuild_running() {
-                state.follow = None;
-            }
+    if let Some(ni) = new_index
+        && was_selected
+    {
+        state.follow = Some(ni);
+        settle_follow(&mut state);
+        // No row and no job coming to make one: the filter or a collapsed
+        // group hides the new key, so there is nothing to follow.
+        if !state.rebuild_running() {
+            state.follow = None;
         }
     }
 
@@ -201,8 +247,48 @@ pub(super) fn key_renamed(
     (state, commands)
 }
 
-/// A guard refused the rename and nothing was written. Always raised as an
-/// error naming `RENAMENX old new` — unlike the value edits it does not
+/// Put a key that just came into being on the server into the Loaded set,
+/// through [`scan_batch`] like a scanned one, so the cap is enforced in that
+/// one place. Returns its Loaded set index, or `None` when the set is full
+/// and the key was not listed. A key with no row yet (a sorted or tree view
+/// does not rebuild for a one-key batch) gets a rebuild started, which keeps
+/// the selection on its key. Shared by rename and copy.
+fn insert_loaded_key(state: State, name: &KeyName) -> (State, Vec<Command>, Option<usize>) {
+    let before = state.keys.len();
+    let (mut state, commands) = scan_batch(state, vec![name.as_bytes().to_vec()]);
+    let new_index = (state.keys.len() > before).then_some(before);
+    if let Some(ni) = new_index
+        && state.row_of(ni).is_none()
+        && !state.rebuild_running()
+    {
+        state.rebuild_list_async();
+    }
+    (state, commands, new_index)
+}
+
+/// A copy completed: the new key exists with the source's value and TTL.
+///
+/// Only the new name is inserted. The selection and the Open key stay on the
+/// source (decision 4): a duplicate is a side effect, not a move, so nothing
+/// follows, nothing is marked gone, and the Open key is not retargeted.
+pub(super) fn key_copied(
+    state: State,
+    from: KeyName,
+    to: KeyName,
+    at_ms: u64,
+) -> (State, Vec<Command>) {
+    let (mut state, commands, new_index) = insert_loaded_key(state, &to);
+    let tail = if new_index.is_none() {
+        " (not listed: the key list is full)"
+    } else {
+        ""
+    };
+    state.notice = Some((format!("copied {from} → {to}{tail}"), at_ms));
+    (state, commands)
+}
+
+/// A guard refused the rename or copy and nothing was written. Always raised as an
+/// error naming `RENAMENX old new` / `COPY src dst` — unlike the value edits it does not
 /// depend on the key being open, because the Selected key is what `R` renames.
 pub(super) fn rename_not_written(
     mut state: State,
@@ -212,7 +298,7 @@ pub(super) fn rename_not_written(
     at_ms: u64,
 ) -> (State, Vec<Command>) {
     if why == NotWritten::KeyGone
-        && let Mutation::RenameKey { key, .. } = mutation
+        && let Mutation::RenameKey { key, .. } | Mutation::CopyKey { key, .. } = mutation
     {
         if let Some(i) = index.filter(|&i| state.keys.name(i) == Some(key.as_bytes())) {
             state.keys.set_gone(i);
@@ -225,7 +311,7 @@ pub(super) fn rename_not_written(
     state.error = Some((
         format!(
             "{}: {} — nothing written",
-            mutation.command_label(),
+            settled_label(&state, mutation),
             why.reason()
         ),
         at_ms,
@@ -474,7 +560,7 @@ mod tests {
         assert!(s.help.is_some());
         assert_eq!(
             crate::help::context(&s),
-            crate::help::HelpContext::Rename,
+            crate::help::HelpContext::Rename(NameKind::Rename),
             "help describes the capture beneath it"
         );
         let (s, _) = named(s, KeyCode::Esc);
@@ -494,12 +580,12 @@ mod tests {
             PendingMutation::RenameKey {
                 index,
                 target,
-                cross_slot,
+                slots,
                 ..
             } => {
                 assert_eq!(*index, 0);
                 assert_eq!(*target, TargetCheck::Unchecked);
-                assert!(!cross_slot);
+                assert_eq!(*slots, SlotPath::SameSlot);
             }
             other => panic!("{other:?}"),
         }
@@ -647,7 +733,7 @@ mod tests {
         assert!(matches!(
             s.confirm,
             Some(PendingMutation::RenameKey {
-                cross_slot: true,
+                slots: SlotPath::CrossSlotRefused,
                 ..
             })
         ));
@@ -675,7 +761,7 @@ mod tests {
         assert!(matches!(
             s.confirm,
             Some(PendingMutation::RenameKey {
-                cross_slot: false,
+                slots: SlotPath::SameSlot,
                 ..
             })
         ));
@@ -690,7 +776,7 @@ mod tests {
         assert!(matches!(
             s.confirm,
             Some(PendingMutation::RenameKey {
-                cross_slot: false,
+                slots: SlotPath::SameSlot,
                 ..
             })
         ));
@@ -1004,5 +1090,399 @@ mod tests {
     fn type_text_enter(state: State) -> (State, Vec<Command>) {
         let s = type_text(state, "x");
         named(s, KeyCode::Enter)
+    }
+
+    // ---- duplicate (M2 task 12) ------------------------------------------
+
+    fn on_version(mut state: State, version: &str) -> State {
+        state.link = Link::Up {
+            version: version.into(),
+            tracking: Tracking::Armed,
+        };
+        state
+    }
+
+    fn copy_mutation(from: &str, to: &str) -> Mutation {
+        Mutation::CopyKey {
+            key: from.into(),
+            to: to.into(),
+        }
+    }
+
+    /// `D`, retype the whole name, `Enter`: a staged copy of key 0.
+    fn staged_copy(state: State, new_name: &str) -> (State, Vec<Command>) {
+        let (mut s, _) = press(state, 'D');
+        let n = s
+            .rename
+            .as_ref()
+            .expect("capture open")
+            .text
+            .chars()
+            .count();
+        for _ in 0..n {
+            s = named(s, KeyCode::Backspace).0;
+        }
+        let s = type_text(s, new_name);
+        named(s, KeyCode::Enter)
+    }
+
+    #[test]
+    fn d_opens_a_capture_prefilled_with_the_name_and_a_copy_suffix() {
+        let (s, cmds) = press(with_keys(&["user:1"]), 'D');
+        assert!(cmds.is_empty());
+        let capture = s.rename.as_ref().expect("capture open");
+        assert_eq!(capture.text, "user:1:copy");
+        assert_eq!(capture.kind, NameKind::Copy);
+        assert_eq!(mode(&s), Mode::Renaming);
+        assert_eq!(
+            crate::help::context(&s),
+            crate::help::HelpContext::Rename(NameKind::Copy)
+        );
+    }
+
+    #[test]
+    fn the_copy_prefill_is_not_flagged_as_unchanged() {
+        let (s, _) = press(with_keys(&["k"]), 'D');
+        assert_eq!(s.rename.as_ref().unwrap().problem(), None);
+    }
+
+    #[test]
+    fn deleting_the_suffix_leaves_an_unchanged_name_refused_inline() {
+        let (mut s, _) = press(with_keys(&["k"]), 'D');
+        for _ in 0..COPY_SUFFIX_LEN {
+            s = named(s, KeyCode::Backspace).0;
+        }
+        let capture = s.rename.as_ref().unwrap();
+        assert_eq!(
+            capture.problem(),
+            Some(crate::state::RenameProblem::Unchanged)
+        );
+        assert_eq!(
+            capture.problem().unwrap().reason(capture.kind),
+            "same as the source name"
+        );
+        let (s, cmds) = named(s, KeyCode::Enter);
+        assert!(s.confirm.is_none() && s.rename.is_some() && cmds.is_empty());
+    }
+
+    const COPY_SUFFIX_LEN: usize = crate::state::rename::COPY_SUFFIX.len();
+
+    #[test]
+    fn d_on_nothing_or_a_binary_name_says_so_and_stages_nothing() {
+        let (s, cmds) = press(State::default(), 'D');
+        assert!(s.rename.is_none());
+        assert!(matches!(&cmds[..], [Command::Notify { text }] if text.starts_with("duplicate:")));
+        let (s, _) = update(
+            State::default(),
+            Msg::ScanBatch {
+                keys: vec![vec![0xff, 0xfe]],
+            },
+        );
+        let (s, cmds) = press(s, 'D');
+        assert!(s.rename.is_none());
+        assert!(matches!(&cmds[..], [Command::Notify { text }] if text.contains("binary")));
+    }
+
+    #[test]
+    fn d_in_the_value_pane_does_nothing() {
+        let mut s = with_keys(&["k"]);
+        s.focus = Pane::Value;
+        let (s, cmds) = press(s, 'D');
+        assert!(s.rename.is_none() && s.confirm.is_none() && cmds.is_empty());
+    }
+
+    #[test]
+    fn enter_stages_copy_and_asks_for_the_precheck() {
+        let (s, cmds) = staged_copy(with_keys(&["src"]), "dst");
+        assert!(s.rename.is_none());
+        let pending = s.confirm.as_ref().expect("staged");
+        assert_eq!(pending.command_text(), "COPY src dst");
+        assert_eq!(pending.command_lines(), vec!["COPY src dst".to_string()]);
+        assert_eq!(cmds, vec![Command::CheckTarget { key: "dst".into() }]);
+        assert!(matches!(
+            pending,
+            PendingMutation::CopyKey {
+                index: 0,
+                target: TargetCheck::Unchecked,
+                slots: SlotPath::SameSlot,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn the_precheck_answer_lands_on_a_staged_copy_and_late_ones_are_dropped() {
+        let (s, _) = staged_copy(with_keys(&["src"]), "dst");
+        let (s, _) = update(
+            s,
+            Msg::TargetChecked {
+                key: "dst".into(),
+                exists: true,
+            },
+        );
+        assert!(matches!(
+            s.confirm,
+            Some(PendingMutation::CopyKey {
+                target: TargetCheck::Taken,
+                ..
+            })
+        ));
+        let (s, _) = update(
+            s,
+            Msg::TargetChecked {
+                key: "other".into(),
+                exists: false,
+            },
+        );
+        assert!(matches!(
+            s.confirm,
+            Some(PendingMutation::CopyKey {
+                target: TargetCheck::Taken,
+                ..
+            })
+        ));
+        // `y` is never blocked by Taken: COPY is the atomic guard.
+        let (_, cmds) = press(s, 'y');
+        assert!(matches!(
+            &cmds[..],
+            [Command::Execute {
+                mutation: Mutation::CopyKey { .. },
+                index: Some(0)
+            }]
+        ));
+        let (s, _) = staged_copy(with_keys(&["src"]), "dst");
+        let (s, _) = named(s, KeyCode::Esc);
+        let (s, _) = update(
+            s,
+            Msg::TargetChecked {
+                key: "dst".into(),
+                exists: true,
+            },
+        );
+        assert!(s.confirm.is_none());
+    }
+
+    #[test]
+    fn copy_across_slots_falls_back_and_y_still_runs() {
+        let s = cluster(with_keys(&["a"]));
+        let (s, cmds) = staged_copy(s, "b");
+        assert_eq!(cmds, vec![Command::CheckTarget { key: "b".into() }]);
+        let pending = s.confirm.as_ref().unwrap();
+        assert!(matches!(
+            pending,
+            PendingMutation::CopyKey {
+                slots: SlotPath::CrossSlotFallback,
+                ..
+            }
+        ));
+        assert!(!pending.blocks_confirm());
+        assert_eq!(
+            pending.command_lines(),
+            vec![
+                "DUMP a".to_string(),
+                "PTTL a".to_string(),
+                "RESTORE b <ttl> <payload>".to_string()
+            ]
+        );
+        let (_, cmds) = press(s, 'y');
+        assert!(cmds.iter().any(|c| matches!(c, Command::Execute { .. })));
+    }
+
+    #[test]
+    fn copy_within_a_hash_tag_slot_on_a_cluster_is_a_plain_copy() {
+        let (s, _) = staged_copy(cluster(with_keys(&["{x}a"])), "{x}b");
+        assert!(matches!(
+            s.confirm,
+            Some(PendingMutation::CopyKey {
+                slots: SlotPath::SameSlot,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn read_only_refuses_a_copy_at_confirm_after_the_preview() {
+        let mut s = with_keys(&["src"]);
+        s.read_only = Some(crate::state::ReadOnlyReason::Environment);
+        let (s, _) = staged_copy(s, "dst");
+        assert!(s.confirm.is_some(), "the preview still opens");
+        let (s, cmds) = press(s, 'y');
+        assert!(s.confirm.is_none());
+        assert!(matches!(&cmds[..], [Command::Notify { text }] if text.contains("read-only")));
+    }
+
+    #[test]
+    fn below_redis_6_2_d_is_refused_with_the_reason_and_stages_nothing() {
+        for v in ["6.0.20", "6.1.9"] {
+            let s = on_version(with_keys(&["k"]), v);
+            assert!(!s.copy_available());
+            let (s, cmds) = press(s, 'D');
+            assert!(s.rename.is_none(), "{v}");
+            assert!(
+                matches!(&cmds[..], [Command::Notify { text }] if text.contains("needs Redis 6.2") && text.contains(v)),
+                "{cmds:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn from_6_2_and_with_an_unknown_version_d_is_available() {
+        for v in ["6.2.0", "7.0.0", "8.4.0"] {
+            assert!(on_version(State::default(), v).copy_available(), "{v}");
+        }
+        assert!(State::default().copy_available(), "unknown is allowed");
+        let mut s = with_keys(&["k"]);
+        s.link = Link::Connecting;
+        assert!(s.copy_available());
+    }
+
+    #[test]
+    fn the_help_row_is_dimmed_with_the_version_reason_below_6_2() {
+        let row = |s: &State| {
+            crate::help::here(s, crate::help::context(s))
+                .into_iter()
+                .find(|r| r.label == "duplicate key (COPY)")
+                .expect("the keys pane lists duplicate")
+        };
+        let ok = with_keys(&["k"]);
+        assert_eq!(row(&ok).keys, "D");
+        assert!(row(&ok).refused.is_none());
+        let old = on_version(with_keys(&["k"]), "6.0.9");
+        assert_eq!(
+            row(&old).refused.map(|r| r.text()).as_deref(),
+            Some("needs Redis 6.2")
+        );
+        // The version gate outranks Read-only dimming.
+        let mut both = old;
+        both.read_only = Some(crate::state::ReadOnlyReason::Environment);
+        assert_eq!(
+            row(&both).refused.map(|r| r.text()).as_deref(),
+            Some("needs Redis 6.2")
+        );
+        let mut ro = with_keys(&["k"]);
+        ro.read_only = Some(crate::state::ReadOnlyReason::Environment);
+        assert_eq!(
+            row(&ro).refused.map(|r| r.text()).as_deref(),
+            Some("read-only (environment) · preview only")
+        );
+    }
+
+    #[test]
+    fn a_completed_copy_lists_the_new_key_and_leaves_everything_else_alone() {
+        let mut s = with_keys(&["a", "b"]);
+        s.view.selected = 1;
+        let mut open = OpenKey::new(
+            Some(1),
+            "b".into(),
+            Value::Str(StringValue::new("v", 1)),
+            -1,
+            1,
+            0,
+        );
+        open.row = Some(1);
+        s.open = Some(open);
+        let token = s.read_token;
+        let (s, cmds) = update(
+            s,
+            Msg::MutationSettled {
+                mutation: copy_mutation("b", "z"),
+                index: Some(1),
+                result: Ok(MutationOutcome::Done),
+                at_ms: 5_000,
+            },
+        );
+        assert_eq!(s.keys.len(), 3, "the new key entered through scan_batch");
+        assert_eq!(s.keys.name(2), Some(&b"z"[..]));
+        assert!(!s.keys.is_gone(1), "the source is not marked gone");
+        assert_eq!(s.view.selected, 1, "the selection stays on the source");
+        assert_eq!(s.selected_key(), Some(1));
+        assert!(s.follow.is_none());
+        let open = s.open.as_ref().unwrap();
+        assert_eq!(open.name, KeyName::from("b"), "the Open key stays put");
+        assert_eq!(s.read_token, token, "no re-read of the Open key");
+        assert!(
+            !cmds.iter().any(|c| matches!(c, Command::ReadKey { .. })),
+            "{cmds:?}"
+        );
+        assert!(s.notice.as_ref().unwrap().0.contains("copied b"));
+    }
+
+    #[test]
+    fn a_copy_in_a_sorted_view_keeps_the_selection_on_the_source() {
+        let mut s = with_keys(&["b", "c", "d"]);
+        s.list.filter = String::new();
+        s.view.selected = 2;
+        assert_eq!(s.selected_key(), Some(2));
+        let (s, _) = settle(s, copy_mutation("d", "a"), MutationOutcome::Done);
+        let selected = s.selected_key().expect("still selected");
+        assert_eq!(s.keys.name(selected), Some(&b"d"[..]));
+    }
+
+    #[test]
+    fn a_copy_when_the_loaded_set_is_full_says_it_is_not_listed() {
+        let mut s = with_keys(&["a"]);
+        s.keys = LoadedSet::with_cap(1);
+        let (s, _) = update(
+            s,
+            Msg::ScanBatch {
+                keys: vec![b"a".to_vec()],
+            },
+        );
+        let (s, _) = settle(s, copy_mutation("a", "z"), MutationOutcome::Done);
+        assert_eq!(s.keys.len(), 1);
+        assert!(s.notice.as_ref().unwrap().0.contains("not listed"));
+    }
+
+    #[test]
+    fn a_taken_target_is_an_error_naming_copy_and_marks_nothing() {
+        let s = with_keys(&["a"]);
+        let (s, _) = settle(
+            s,
+            copy_mutation("a", "b"),
+            MutationOutcome::NotWritten(NotWritten::TargetExists),
+        );
+        let (text, _) = s.error.as_ref().unwrap();
+        assert!(
+            text.starts_with("COPY a b:") && text.contains("nothing written"),
+            "{text}"
+        );
+        assert!(!s.keys.is_gone(0));
+    }
+
+    #[test]
+    fn a_gone_source_marks_the_source_row_gone_and_creates_nothing() {
+        let mut s = with_keys(&["a"]);
+        s.open = Some(OpenKey::new(
+            Some(0),
+            "a".into(),
+            Value::Str(StringValue::new("v", 1)),
+            -1,
+            1,
+            0,
+        ));
+        let (s, _) = settle(
+            s,
+            copy_mutation("a", "b"),
+            MutationOutcome::NotWritten(NotWritten::KeyGone),
+        );
+        assert!(s.keys.is_gone(0));
+        assert_eq!(s.keys.len(), 1, "no new key");
+        assert!(s.open.as_ref().unwrap().deleted_at_ms.is_some());
+        assert!(s.error.as_ref().unwrap().0.contains("COPY a b"));
+    }
+
+    #[test]
+    fn a_failed_cross_slot_copy_names_dump_restore() {
+        let s = cluster(with_keys(&["a"]));
+        let (s, _) = update(
+            s,
+            Msg::MutationSettled {
+                mutation: copy_mutation("a", "b"),
+                index: Some(0),
+                result: Err("boom".into()),
+                at_ms: 5_000,
+            },
+        );
+        assert!(s.error.as_ref().unwrap().0.contains("DUMP/RESTORE a b"));
     }
 }
