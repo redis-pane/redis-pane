@@ -261,9 +261,15 @@ impl NameSorter {
         NameSorter {
             n,
             slice: slice.max(1),
-            recs: vec![Rec::default(); n],
+            // Reserved, not filled: the buffers grow a slice per Fill step, so
+            // no single step pays for faulting in 20MB of fresh pages.
+            recs: Vec::with_capacity(n),
             scratch: Vec::new(),
-            lcp: vec![0; n],
+            lcp: if n < 2 {
+                vec![0; n]
+            } else {
+                Vec::with_capacity(n)
+            },
             work: Vec::new(),
             next_work: Vec::new(),
             carry: None,
@@ -348,6 +354,11 @@ impl NameSorter {
         match &mut self.phase {
             Phase::Fill { next } => {
                 let (lo, hi) = (*next, next.saturating_add(slice).min(n));
+                self.recs.resize(hi, Rec::default());
+                self.lcp.resize(hi, 0);
+                if n > slice {
+                    self.scratch.resize(hi, Rec::default());
+                }
                 for (rec, idx) in self.recs[lo..hi].iter_mut().zip(&order[lo..hi]) {
                     let idx = *idx;
                     let len = keys.len_of(idx as usize).unwrap_or(0);
@@ -362,7 +373,6 @@ impl NameSorter {
                     if n <= slice {
                         self.phase = Phase::Seed { next: 1 };
                     } else {
-                        self.scratch.resize(n, Rec::default());
                         self.phase = Phase::Merge(RangeSort::merging(0, n, slice));
                     }
                 } else {
@@ -371,7 +381,6 @@ impl NameSorter {
             }
             Phase::Merge(r) => {
                 if r.step(&mut self.recs, &mut self.scratch, slice) {
-                    self.scratch = Vec::new();
                     self.phase = Phase::Seed { next: 1 };
                 }
             }
@@ -399,6 +408,7 @@ impl NameSorter {
                 }
                 if hi >= n {
                     self.recs = Vec::new();
+                    self.scratch = Vec::new();
                     self.work = Vec::new();
                     self.next_work = Vec::new();
                     self.phase = Phase::Done;
@@ -451,7 +461,6 @@ impl NameSorter {
             let Run { lo, hi, depth } = b.run;
             if let Some(sort) = &mut b.sort {
                 if sort.step(&mut self.recs, &mut self.scratch, slice) {
-                    self.scratch = Vec::new();
                     self.finish_run(lo as usize, hi as usize, depth);
                     return;
                 }
@@ -460,6 +469,8 @@ impl NameSorter {
                 gather(keys, &mut self.recs[b.gathered..end], depth as usize);
                 b.gathered = end;
                 if end >= hi as usize {
+                    // The scratch from the merge is still here; in the
+                    // single-step (unbounded) mode it is grown on demand.
                     if self.scratch.len() < self.n {
                         self.scratch.resize(self.n, Rec::default());
                     }
