@@ -38,6 +38,9 @@ pub enum HelpContext {
     /// ordinary character is text here, not a command — see `update::mode`'s
     /// own comment for why this outranks Normal mode.
     Filter,
+    /// `R` is capturing a new key name (M2 task 11): the `Filter`-shaped
+    /// sibling for `State::rename`.
+    Rename,
     /// The Viewer, focused, with `open` describing what's in it — `None`
     /// while nothing has been read yet (freshly opened, or read pending).
     Value(Option<ValueContext>),
@@ -276,6 +279,7 @@ pub fn context(state: &State) -> HelpContext {
         Mode::Confirm => HelpContext::Confirm,
         Mode::Editing => HelpContext::Editor(editor_context(state)),
         Mode::Filtering => HelpContext::Filter,
+        Mode::Renaming => HelpContext::Rename,
         Mode::PubSubAdding => HelpContext::PubSubAdding,
         Mode::Normal => {
             // A pending chord outranks everything else in Normal mode — the
@@ -440,6 +444,10 @@ pub fn here(state: &State, ctx: HelpContext) -> Vec<HelpRow> {
         HelpContext::ChordPending => chord_pending_rows(state),
         HelpContext::Slowlog => slowlog_rows(state),
         HelpContext::Monitor => monitor_rows(state),
+        HelpContext::Rename => vec![
+            HelpRow::new(keys_for(state, Action::EnterValueCursor), "stage rename"),
+            HelpRow::new(keys_for(state, Action::Cancel), "cancel"),
+        ],
         HelpContext::PubSubAdding => vec![
             HelpRow::new(keys_for(state, Action::EnterValueCursor), "subscribe"),
             HelpRow::new(
@@ -670,6 +678,13 @@ fn keys_rows(state: &State, tree: bool, filtered: bool) -> Vec<HelpRow> {
     rows.push(HelpRow::new(
         keys_for(state, Action::CopyCommand),
         "copy redis-cli command",
+    ));
+    // Ranked last among the verbs, for the same reason: a new row must not push
+    // `r` or `t` off an 80-column bar. Dimmed under Read-only Mode like delete.
+    rows.push(mutation_entry_row(
+        state,
+        keys_for(state, Action::Rename),
+        "rename",
     ));
     rows.push(HelpRow::new("↑↓ jk", "move"));
     rows.push(HelpRow::new("PgUp/PgDn", "page"));
@@ -1047,7 +1062,7 @@ pub fn everywhere(state: &State) -> Vec<HelpRow> {
         // `filter_key`/`editor_key` all handle `Esc` themselves, so a second
         // `Action::Cancel`-labelled row here would just repeat it. `F1` is
         // the only thing genuinely global left in these three modes.
-        Mode::Confirm | Mode::Editing | Mode::Filtering | Mode::PubSubAdding => {
+        Mode::Confirm | Mode::Editing | Mode::Filtering | Mode::Renaming | Mode::PubSubAdding => {
             vec![HelpRow::new(f1_help_keys(state), "help")]
         }
     }

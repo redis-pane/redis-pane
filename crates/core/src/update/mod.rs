@@ -29,6 +29,7 @@ mod mouse;
 mod pubsub;
 #[cfg(test)]
 mod rebuild_tests;
+mod rename;
 mod scan;
 mod slowlog;
 mod viewer;
@@ -48,6 +49,7 @@ use self::link::*;
 use self::monitor::*;
 use self::mouse::*;
 use self::pubsub::*;
+use self::rename::*;
 use self::scan::*;
 use self::slowlog::*;
 use self::viewer::*;
@@ -151,6 +153,8 @@ fn paste(mut state: State, text: String) -> (State, Vec<Command>) {
             editor.insert_str(&text);
         }
         (state, Vec::new())
+    } else if state.rename.is_some() {
+        rename_paste(state, &text)
     } else if state.filtering {
         let stripped: String = text.chars().filter(|c| *c != '\n' && *c != '\r').collect();
         state.list.filter.push_str(&stripped);
@@ -193,6 +197,9 @@ pub fn update(state: State, msg: Msg) -> (State, Vec<Command>) {
 fn step(mut state: State, msg: Msg) -> (State, Vec<Command>) {
     match msg {
         Msg::Key(key) => key_press(state, key),
+        // A modal capture owns the pointer too: a click moving the selection
+        // under an open rename would aim it at a different key.
+        Msg::Mouse(_) if state.rename.is_some() => (state, Vec::new()),
         Msg::Mouse(action) => mouse_action(state, action),
         Msg::Resized { cols, rows } => {
             state.cols = cols;
@@ -230,6 +237,7 @@ fn step(mut state: State, msg: Msg) -> (State, Vec<Command>) {
         Msg::Invalidated => invalidated(state),
         Msg::ScanStarted { estimated_total } => scan_started(state, estimated_total),
         Msg::ScanBatch { keys } => scan_batch(state, keys),
+        Msg::TargetChecked { key, exists } => target_checked(state, key, exists),
         Msg::MetadataBatch {
             entries,
             gone,
@@ -360,6 +368,9 @@ pub(crate) enum Mode {
     Confirm,
     Editing,
     Filtering,
+    /// `R` is capturing a new key name (M2 task 11). The filter's shape,
+    /// aimed at `State::rename`.
+    Renaming,
     /// The Pub/Sub view's add-input is capturing text (`a`, or opened
     /// automatically by decision 6's lazy open). A distinct mode from
     /// `Filtering`: different key (`a` vs `/`), different target
@@ -411,6 +422,9 @@ pub(crate) fn mode_beneath_help(state: &State) -> Mode {
     if state.filtering {
         return Mode::Filtering;
     }
+    if state.rename.is_some() {
+        return Mode::Renaming;
+    }
     // The Pub/Sub add-input, ranked with the same "captures ordinary
     // characters as text" precedence as Filtering — checked after it since
     // the two can never coexist (`state.filtering` is tail-scoped, `adding`
@@ -441,7 +455,7 @@ fn key_press(mut state: State, key: KeyPress) -> (State, Vec<Command>) {
     // resolves to `Action::Help` there through the ordinary path below.
     if matches!(
         current_mode,
-        Mode::Confirm | Mode::Editing | Mode::Filtering | Mode::PubSubAdding
+        Mode::Confirm | Mode::Editing | Mode::Filtering | Mode::Renaming | Mode::PubSubAdding
     ) && matches!(key.code, KeyCode::F(_))
         && state.keymap.action_for(&key) == Some(Action::Help)
     {
@@ -465,6 +479,7 @@ fn key_press(mut state: State, key: KeyPress) -> (State, Vec<Command>) {
         }
         Mode::Editing => return editor_key(state, key),
         Mode::Filtering => return filter_key(state, key),
+        Mode::Renaming => return rename_key(state, key),
         Mode::PubSubAdding => return pubsub_add_key(state, key),
         Mode::Normal => {}
     }
@@ -555,6 +570,9 @@ fn help_key(mut state: State, key: KeyPress) -> (State, Vec<Command>) {
 /// both passed, kept separate from `key_press` itself so a resolved `Action`
 /// has exactly one place that decides what it does.
 fn dispatch_action(mut state: State, action: Action) -> (State, Vec<Command>) {
+    // Any deliberate keypress abandons a selection still waiting on a rebuild
+    // (`State::follow`): the reader has taken the cursor back.
+    state.follow = None;
     // The Slowlog view is a full screen, not the two-pane browser: only the
     // actions it gives its own meaning to (movement, sort, refetch, copy,
     // `d` staging `RESET` — PLAN decision 3) and the handful that are the
@@ -738,6 +756,10 @@ fn dispatch_action(mut state: State, action: Action) -> (State, Vec<Command>) {
         // which tells the three apart itself.
         Action::Delete if state.keys_pane_focused() => delete_selected_key(state),
         Action::Delete => delete_value_row(state),
+        // `R` renames a key from the keys pane. In the Viewer it will rename
+        // a field or member (task 14); until then it does nothing there.
+        Action::Rename if state.keys_pane_focused() => begin_rename(state),
+        Action::Rename => (state, Vec::new()),
         // Nothing is staged — `key_press` intercepts every keypress before
         // this match while `state.confirm` is `Some`, so `y` only ever
         // reaches here with nothing to confirm.

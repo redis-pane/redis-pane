@@ -174,6 +174,11 @@ pub async fn execute(client: &Client, mutation: &Mutation) -> Result<MutationOut
                 ShiftTtlWrite::KeyGone => MutationOutcome::NotWritten(NotWritten::KeyGone),
             }
         }
+        Mutation::RenameKey { to, .. } => match rename_key(client, key, to.as_bytes()).await? {
+            KeyRename::Renamed => MutationOutcome::Done,
+            KeyRename::TargetExists => MutationOutcome::NotWritten(NotWritten::TargetExists),
+            KeyRename::KeyGone => MutationOutcome::NotWritten(NotWritten::KeyGone),
+        },
         // Handled above, before `key` was ever computed — never reached.
         Mutation::ResetSlowlog => unreachable!("returned above"),
     })
@@ -202,6 +207,49 @@ pub async fn delete_key(client: &Client, name: &[u8]) -> Result<(), Error> {
     let key = fred::types::Key::from(name);
     let _: i64 = client.del(key).await?;
     Ok(())
+}
+
+/// What a rename did on the server ([`rename_key`], M2 task 11).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyRename {
+    /// The key now has the new name, with its value and TTL.
+    Renamed,
+    /// A key with the new name already existed; nothing was written.
+    TargetExists,
+    /// The source key was already gone; nothing was written, nothing created.
+    KeyGone,
+}
+
+/// Rename a key without overwriting (`RENAMENX`, M2 task 11,
+/// `docs/plans/m2-task11-rename.md`).
+///
+/// Atomic on the server: `RENAMENX` replies `0` when the target exists and
+/// writes nothing, so the pre-check [`key_exists`] is advice and this is the
+/// guard. Redis keeps the TTL itself. A source that is gone is an
+/// `ERR no such key` error, which is a refusal (`KeyGone`), not a failure;
+/// every other error propagates.
+///
+/// Both names are built as single binary-safe `Key`s, as [`delete_key`]
+/// explains.
+pub async fn rename_key(client: &Client, from: &[u8], to: &[u8]) -> Result<KeyRename, Error> {
+    let (from, to) = (fred::types::Key::from(from), fred::types::Key::from(to));
+    match client.renamenx::<i64, _, _>(from, to).await {
+        Ok(1) => Ok(KeyRename::Renamed),
+        Ok(_) => Ok(KeyRename::TargetExists),
+        Err(e) if e.details().to_ascii_lowercase().contains("no such key") => {
+            Ok(KeyRename::KeyGone)
+        }
+        Err(e) => Err(e),
+    }
+}
+
+/// Whether a key named `name` exists (`EXISTS`): the advice behind a staged
+/// rename's preview (M2 task 11). Built as a single `Key`, since
+/// `exists` takes `Into<MultipleKeys>` and a bare `Vec<u8>` would be one key
+/// per byte (the trap [`delete_key`] documents).
+pub async fn key_exists(client: &Client, name: &[u8]) -> Result<bool, Error> {
+    let n: i64 = client.exists(fred::types::Key::from(name)).await?;
+    Ok(n > 0)
 }
 
 /// Overwrite a String value (`SET`, R4.1, PLAN M2 task 4).

@@ -194,6 +194,11 @@ pub enum Command {
         /// the reply so the tombstone lands on it. `None` for every other write.
         index: Option<usize>,
     },
+    /// Ask whether a key named `key` exists (`EXISTS`), for a staged rename's
+    /// preview (M2 task 11). The core does no I/O; the shell answers with
+    /// [`crate::Msg::TargetChecked`]. Advice only — the atomic `RENAMENX` is
+    /// the guard.
+    CheckTarget { key: KeyName },
     /// Put text on the clipboard.
     ///
     /// The core builds the text; how it reaches a clipboard is the shell's

@@ -137,6 +137,11 @@ pub enum Mutation {
     /// destructiveness" already covers this with a single `y`), and there is
     /// no gone-key hazard to guard against since there is no key.
     ResetSlowlog,
+    /// `RENAMENX key to` (M2 task 11, `docs/plans/m2-task11-rename.md`): the
+    /// atomic rename that refuses a taken target instead of overwriting it.
+    /// Redis keeps the TTL itself. `ERR no such key` is `NotWritten::KeyGone`;
+    /// a `0` reply is `NotWritten::TargetExists`.
+    RenameKey { key: KeyName, to: KeyName },
 }
 
 impl Eq for Mutation {}
@@ -165,7 +170,8 @@ impl Mutation {
             | Mutation::DeleteZSetMember { key, .. }
             | Mutation::SetTtl { key, .. }
             | Mutation::PersistTtl { key }
-            | Mutation::ShiftTtl { key, .. } => Some(key),
+            | Mutation::ShiftTtl { key, .. }
+            | Mutation::RenameKey { key, .. } => Some(key),
             Mutation::ResetSlowlog => None,
         }
     }
@@ -217,6 +223,9 @@ impl Mutation {
             // No key to interpolate — the literal command, exactly as
             // `PendingMutation::command_text`'s `ResetSlowlog` arm shows it.
             Mutation::ResetSlowlog => "SLOWLOG RESET".to_string(),
+            // Both names: they are key names, not values, and the failing
+            // command is only identifiable with its target.
+            Mutation::RenameKey { key, to } => format!("RENAMENX {key} {to}"),
         }
     }
 }
@@ -263,6 +272,10 @@ pub enum NotWritten {
     /// `ElementMoved` register: like that one, this is a *race* refusal a
     /// reader meets on a key under churn, not a broken write.
     WouldExpireNow,
+    /// A `RenameKey` found the target name already taken (M2 task 11).
+    /// Nothing was written: `RENAMENX` refuses atomically, and overwriting
+    /// is out of scope (`docs/plans/m2-remaining-planning.md`).
+    TargetExists,
 }
 
 impl NotWritten {
@@ -298,6 +311,9 @@ impl NotWritten {
             NotWritten::WouldExpireNow => {
                 "that would expire it now — the ttl moved underneath it, look again"
             }
+            // A key, not a field or member; and not "the key already exists",
+            // which would read as being about the source.
+            NotWritten::TargetExists => "a key with the new name already exists",
         }
     }
 }
@@ -326,6 +342,13 @@ mod tests {
         let key = KeyName::from("user:1");
         let cases = [
             (Mutation::DeleteKey { key: key.clone() }, "DEL user:1"),
+            (
+                Mutation::RenameKey {
+                    key: key.clone(),
+                    to: "user:2".into(),
+                },
+                "RENAMENX user:1 user:2",
+            ),
             (
                 Mutation::SetString {
                     key: key.clone(),

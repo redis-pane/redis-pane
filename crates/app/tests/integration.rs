@@ -8103,3 +8103,308 @@ mod cluster_sharded_pubsub {
         feed.close();
     }
 }
+
+/// M2 task 11: rename a key (`docs/plans/m2-task11-rename.md`). Everything goes
+/// through `mutate::execute_settled`, the function the shell's mutation path
+/// runs, so the outcome mapping is what the core will actually receive.
+mod rename {
+    use super::Credentials;
+    use super::support::cluster::start_cluster;
+    use fred::prelude::*;
+    use redis_pane::redis::mutate::{execute_settled, key_exists, rename_key};
+    use redis_pane_core::mutation::{Mutation, MutationOutcome, NotWritten};
+
+    async fn setup() -> (
+        testcontainers::ContainerAsync<testcontainers::GenericImage>,
+        Client,
+        Client,
+    ) {
+        let (c, url) = super::start("redis", "7-alpine").await;
+        let writer = Builder::from_config(Config::from_url(&url).unwrap())
+            .build()
+            .unwrap();
+        writer.init().await.unwrap();
+        let (client, _) = redis_pane::redis::connect(&url).await.unwrap();
+        (c, client, writer)
+    }
+
+    fn rename(from: &[u8], to: &[u8]) -> Mutation {
+        Mutation::RenameKey {
+            key: from.into(),
+            to: to.into(),
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "needs docker"]
+    async fn a_rename_lands_and_keeps_the_ttl_and_the_value() {
+        let (_c, client, writer) = setup().await;
+        let _: () = writer.set("old", "v", None, None, false).await.unwrap();
+        let _: bool = writer.expire("old", 1000, None).await.unwrap();
+
+        let settled = execute_settled(&client, &rename(b"old", b"new")).await;
+        assert!(!settled.link_lost);
+        assert_eq!(settled.result, Ok(MutationOutcome::Done));
+
+        assert_eq!(writer.get::<String, _>("new").await.unwrap(), "v");
+        assert_eq!(writer.exists::<i64, _>("old").await.unwrap(), 0);
+        let ttl: i64 = writer.ttl("new").await.unwrap();
+        assert!(
+            (1..=1000).contains(&ttl),
+            "the TTL travels with the key: {ttl}"
+        );
+        let _ = client.quit().await;
+        let _ = writer.quit().await;
+    }
+
+    #[tokio::test]
+    #[ignore = "needs docker"]
+    async fn a_taken_target_is_refused_and_both_keys_are_unchanged() {
+        let (_c, client, writer) = setup().await;
+        let _: () = writer.set("old", "mine", None, None, false).await.unwrap();
+        let _: bool = writer.expire("old", 500, None).await.unwrap();
+        let _: () = writer
+            .set("new", "theirs", None, None, false)
+            .await
+            .unwrap();
+
+        let settled = execute_settled(&client, &rename(b"old", b"new")).await;
+        assert_eq!(
+            settled.result,
+            Ok(MutationOutcome::NotWritten(NotWritten::TargetExists))
+        );
+        assert_eq!(writer.get::<String, _>("old").await.unwrap(), "mine");
+        assert_eq!(writer.get::<String, _>("new").await.unwrap(), "theirs");
+        assert!(writer.ttl::<i64, _>("old").await.unwrap() > 0);
+        assert_eq!(writer.ttl::<i64, _>("new").await.unwrap(), -1);
+        let _ = client.quit().await;
+        let _ = writer.quit().await;
+    }
+
+    #[tokio::test]
+    #[ignore = "needs docker"]
+    async fn a_gone_source_is_key_gone_and_creates_nothing() {
+        let (_c, client, writer) = setup().await;
+        let settled = execute_settled(&client, &rename(b"ghost", b"new")).await;
+        assert_eq!(
+            settled.result,
+            Ok(MutationOutcome::NotWritten(NotWritten::KeyGone))
+        );
+        assert_eq!(writer.exists::<i64, _>("new").await.unwrap(), 0);
+        assert_eq!(writer.dbsize::<i64>().await.unwrap(), 0);
+        let _ = client.quit().await;
+        let _ = writer.quit().await;
+    }
+
+    /// The UI only types UTF-8 names (no capture takes byte escapes), but the
+    /// shell function is byte-safe, and a name of small byte values is exactly
+    /// what the `Vec<u8>` -> keys-per-byte conversion trap misreads
+    /// (`mutate::delete_key`'s doc comment).
+    #[tokio::test]
+    #[ignore = "needs docker"]
+    async fn binary_and_non_ascii_names_round_trip_without_touching_decoys() {
+        let (_c, client, writer) = setup().await;
+        let bin: &[u8] = &[7, 8];
+        let _: () = writer.set(bin, "bin", None, None, false).await.unwrap();
+        let _: () = writer.set("7", "decoy7", None, None, false).await.unwrap();
+        let _: () = writer.set("8", "decoy8", None, None, false).await.unwrap();
+
+        assert_eq!(
+            rename_key(&client, bin, &[9, 10]).await.unwrap(),
+            redis_pane::redis::mutate::KeyRename::Renamed
+        );
+        assert_eq!(
+            writer.get::<Vec<u8>, _>(&[9u8, 10][..]).await.unwrap(),
+            b"bin"
+        );
+        assert_eq!(writer.exists::<i64, _>(bin).await.unwrap(), 0);
+        assert_eq!(writer.get::<String, _>("7").await.unwrap(), "decoy7");
+        assert_eq!(writer.get::<String, _>("8").await.unwrap(), "decoy8");
+
+        let _: () = writer
+            .set("caf\u{e9}", "v", None, None, false)
+            .await
+            .unwrap();
+        let settled = execute_settled(
+            &client,
+            &rename("caf\u{e9}".as_bytes(), "\u{1f511}".as_bytes()),
+        )
+        .await;
+        assert_eq!(settled.result, Ok(MutationOutcome::Done));
+        assert_eq!(writer.get::<String, _>("\u{1f511}").await.unwrap(), "v");
+        let _ = client.quit().await;
+        let _ = writer.quit().await;
+    }
+
+    #[tokio::test]
+    #[ignore = "needs docker"]
+    async fn the_precheck_sees_a_key_and_only_that_key() {
+        let (_c, client, writer) = setup().await;
+        let _: () = writer.set("here", "v", None, None, false).await.unwrap();
+        // A byte-valued decoy: `exists` of a bare `Vec<u8>` would count keys per byte.
+        let _: () = writer.set("7", "v", None, None, false).await.unwrap();
+        assert!(key_exists(&client, b"here").await.unwrap());
+        assert!(!key_exists(&client, b"nope").await.unwrap());
+        assert!(!key_exists(&client, &[7, 7]).await.unwrap());
+        let _ = client.quit().await;
+        let _ = writer.quit().await;
+    }
+
+    #[tokio::test]
+    #[ignore = "needs docker"]
+    async fn a_rename_of_a_collection_keeps_its_contents() {
+        let (_c, client, writer) = setup().await;
+        let _: i64 = writer.hset("h", [("a", "1"), ("b", "2")]).await.unwrap();
+        let settled = execute_settled(&client, &rename(b"h", b"h2")).await;
+        assert_eq!(settled.result, Ok(MutationOutcome::Done));
+        let got: std::collections::BTreeMap<String, String> = writer.hgetall("h2").await.unwrap();
+        assert_eq!(got.len(), 2);
+        let _ = client.quit().await;
+        let _ = writer.quit().await;
+    }
+
+    /// The core's pure CRC16 agrees with the server's own `CLUSTER KEYSLOT`.
+    #[tokio::test]
+    #[ignore = "needs docker"]
+    async fn the_cores_slot_function_agrees_with_cluster_keyslot() {
+        let cluster = start_cluster().await;
+        let client = cluster.client().await;
+        for key in [
+            "foo",
+            "bar",
+            "{x}a",
+            "{x}b",
+            "user:{42}:cart",
+            "a{}b",
+            "",
+            "caf\u{e9}",
+            "{}{y}",
+        ] {
+            let reply: i64 = client
+                .custom(
+                    fred::types::CustomCommand::new_static("CLUSTER", None, false),
+                    vec!["KEYSLOT".to_string(), key.to_string()],
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                i64::from(redis_pane_core::slot::key_slot(key.as_bytes())),
+                reply,
+                "{key:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "needs docker"]
+    async fn on_a_cluster_a_same_slot_rename_lands_through_hash_tags() {
+        let cluster = start_cluster().await;
+        let client = redis_pane::redis::connect_with(&cluster.seed_url(), &Credentials::default())
+            .await
+            .expect("cluster client")
+            .0;
+        let writer = cluster.client().await;
+        let _: () = writer.set("{rp11}a", "v", None, None, false).await.unwrap();
+        let _: bool = writer.expire("{rp11}a", 800, None).await.unwrap();
+
+        let settled = execute_settled(&client, &rename(b"{rp11}a", b"{rp11}b")).await;
+        assert!(!settled.link_lost);
+        assert_eq!(settled.result, Ok(MutationOutcome::Done));
+        assert_eq!(writer.get::<String, _>("{rp11}b").await.unwrap(), "v");
+        assert!(writer.ttl::<i64, _>("{rp11}b").await.unwrap() > 0);
+
+        // A taken target is refused atomically on a Cluster too.
+        let _: () = writer
+            .set("{rp11}c", "other", None, None, false)
+            .await
+            .unwrap();
+        let settled = execute_settled(&client, &rename(b"{rp11}b", b"{rp11}c")).await;
+        assert_eq!(
+            settled.result,
+            Ok(MutationOutcome::NotWritten(NotWritten::TargetExists))
+        );
+        assert_eq!(writer.get::<String, _>("{rp11}b").await.unwrap(), "v");
+        let _ = client.quit().await;
+        let _ = writer.quit().await;
+    }
+
+    /// Across slots the core refuses at the preview, so nothing is sent. The
+    /// refusal's reason is real: the server would have said `CROSSSLOT`.
+    #[tokio::test]
+    #[ignore = "needs docker"]
+    async fn on_a_cluster_a_cross_slot_rename_is_refused_at_the_preview_and_nothing_is_sent() {
+        use redis_pane_core::msg::{KeyCode, KeyPress};
+        use redis_pane_core::state::{PendingMutation, Topology};
+        use redis_pane_core::{Command, Msg, State, update};
+
+        let cluster = start_cluster().await;
+        let client = redis_pane::redis::connect_with(&cluster.seed_url(), &Credentials::default())
+            .await
+            .expect("cluster client")
+            .0;
+        let writer = cluster.client().await;
+        let primaries = cluster.primaries().await;
+        let from = cluster.key_in_slot_of(primaries[0].port).await;
+        let to = cluster.key_in_slot_of(primaries[1].port).await;
+        let _: () = writer.set(&from, "v", None, None, false).await.unwrap();
+
+        // The core, on a Cluster, with that key selected.
+        let state = State {
+            cols: 130,
+            rows: 30,
+            connection: redis_pane_core::state::Connection {
+                topology: Some(Topology {
+                    primaries: 3,
+                    nodes: 6,
+                }),
+                ..Default::default()
+            },
+            ..State::default()
+        };
+        let (state, _) = update(
+            state,
+            Msg::ScanBatch {
+                keys: vec![from.clone().into_bytes()],
+            },
+        );
+        let (mut state, _) = update(state, Msg::Key(KeyPress::plain(KeyCode::Char('R'))));
+        for _ in 0..from.chars().count() {
+            state = update(state, Msg::Key(KeyPress::plain(KeyCode::Backspace))).0;
+        }
+        for c in to.chars() {
+            state = update(state, Msg::Key(KeyPress::plain(KeyCode::Char(c)))).0;
+        }
+        let (state, staged) = update(state, Msg::Key(KeyPress::plain(KeyCode::Enter)));
+        assert!(
+            staged.is_empty(),
+            "no pre-check for a rename that cannot run"
+        );
+        assert!(matches!(
+            state.confirm,
+            Some(PendingMutation::RenameKey {
+                cross_slot: true,
+                ..
+            })
+        ));
+        let (state, confirmed) = update(state, Msg::Key(KeyPress::plain(KeyCode::Char('y'))));
+        assert!(state.confirm.is_some(), "y does nothing");
+        assert!(
+            !confirmed
+                .iter()
+                .any(|c| matches!(c, Command::Execute { .. })),
+            "nothing is sent"
+        );
+        assert_eq!(writer.get::<String, _>(&from).await.unwrap(), "v");
+        assert_eq!(writer.exists::<i64, _>(&to).await.unwrap(), 0);
+
+        // And the reason is true: the server would have refused it.
+        let settled = execute_settled(&client, &rename(from.as_bytes(), to.as_bytes())).await;
+        match settled.result {
+            Err(detail) => assert!(detail.contains("CROSSSLOT"), "{detail}"),
+            other => panic!("expected CROSSSLOT, got {other:?}"),
+        }
+        assert_eq!(writer.get::<String, _>(&from).await.unwrap(), "v");
+        let _ = client.quit().await;
+        let _ = writer.quit().await;
+    }
+}

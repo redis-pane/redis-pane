@@ -14,6 +14,7 @@ pub mod monitor;
 pub mod open;
 pub mod pubsub;
 pub mod rebuild;
+pub mod rename;
 pub mod scan;
 mod search;
 pub mod session;
@@ -45,6 +46,7 @@ pub use pubsub::{
     Subscription, parse_subscription, parse_subscription_with, redis_glob_match,
 };
 pub use rebuild::{JobKind, REBUILD_SLICE, RebuildJob};
+pub use rename::{RenameCapture, RenameProblem, TargetCheck};
 pub use scan::{InterruptReason, ScanState};
 pub use session::{SessionFile, SessionFileError, SessionState};
 pub use slowlog::{NodeFailure, SlowlogEntry, SlowlogSort, SlowlogState};
@@ -456,6 +458,19 @@ pub enum PendingMutation {
     /// rule applies uniformly, with no carve-out for a write that touches no
     /// key.
     ResetSlowlog,
+    /// Rename a key (`RENAMENX`, M2 task 11, `docs/plans/m2-task11-rename.md`).
+    /// `index` is the Loaded set row it came from, as `DeleteKey` carries one.
+    /// `target` is the `EXISTS` pre-check's answer, filled in by
+    /// `Msg::TargetChecked` after staging; `cross_slot` is fixed at staging,
+    /// on a Cluster only, and means `y` does nothing (`RENAME` across slots
+    /// fails with `CROSSSLOT`).
+    RenameKey {
+        index: usize,
+        name: crate::key::KeyName,
+        to: crate::key::KeyName,
+        target: TargetCheck,
+        cross_slot: bool,
+    },
 }
 
 impl Eq for PendingMutation {}
@@ -542,6 +557,7 @@ impl PendingMutation {
             // The literal command, exactly as sent — no key to interpolate
             // (D8).
             PendingMutation::ResetSlowlog => "SLOWLOG RESET".to_string(),
+            PendingMutation::RenameKey { name, to, .. } => format!("RENAMENX {name} {to}"),
         }
     }
 
@@ -637,6 +653,9 @@ impl PendingMutation {
             // confirmation-scales-with-destructiveness rule covers with a
             // single `y` and no muted line explaining what it checks first.
             PendingMutation::ResetSlowlog => None,
+            PendingMutation::RenameKey { .. } => {
+                Some("only if the new name is free · keeps its TTL".to_string())
+            }
         }
     }
 
@@ -796,6 +815,9 @@ impl PendingMutation {
             ),
             // No key, no Loaded-set row to echo back (D8).
             PendingMutation::ResetSlowlog => (Mutation::ResetSlowlog, None),
+            PendingMutation::RenameKey {
+                index, name, to, ..
+            } => (Mutation::RenameKey { key: name, to }, Some(index)),
         };
         crate::Command::Execute { mutation, index }
     }
@@ -960,6 +982,13 @@ pub struct State {
     pub tree_mode: bool,
     /// Set while `/` is capturing a filter.
     pub filtering: bool,
+    /// `R` is capturing a new name for the Selected key (M2 task 11). A modal
+    /// of its own (`update::Mode::Renaming`), the filter's shape.
+    pub rename: Option<RenameCapture>,
+    /// A Loaded set index whose row the selection should land on once it has
+    /// one (M2 task 11): a renamed key enters through `scan_batch` and may not
+    /// have a row until a rebuild job swaps in. Resolved by `rebuild_step`.
+    pub follow: Option<usize>,
     /// The typed filter text is ahead of `list`: a keystroke that could not
     /// be narrowed from the previous result deferred its full rebuild to the
     /// shell's debounce timer (M4 task 4, decision 2). The text in the filter

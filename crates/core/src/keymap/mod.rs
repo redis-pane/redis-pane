@@ -80,6 +80,10 @@ pub enum Action {
     /// not the Open key, the same target every other list-scoped action
     /// takes.
     Delete,
+    /// Rename the Selected key (`R`, M2 task 11, DESIGN §4): opens a name
+    /// capture, then stages `RENAMENX`. Keys-pane scoped, on a key row; the
+    /// value pane's `R` (renaming a field or member) is task 14's.
+    Rename,
     /// Confirm whatever mutation is currently staged and run it, or say why
     /// not if Read-only Mode refuses it. No-op with nothing staged.
     ConfirmMutation,
@@ -203,7 +207,7 @@ impl Action {
             // exactly the same shape — not "is the value pane merely drawn",
             // which `open_ttl_editor`'s own ladder checks again for the same
             // reason `open_editor`'s does.
-            Action::Delete | Action::Edit | Action::Add | Action::ToggleTree => {
+            Action::Delete | Action::Rename | Action::Edit | Action::Add | Action::ToggleTree => {
                 if state.keys_pane_focused() {
                     state.pane_visible(Pane::Keys)
                 } else {
@@ -255,6 +259,7 @@ impl Action {
             Action::WidenKeysPane => "widen keys",
             Action::NarrowKeysPane => "narrow keys",
             Action::Delete => "delete",
+            Action::Rename => "rename",
             Action::ConfirmMutation => "confirm",
             Action::Edit => "edit",
             Action::Add => "add",
@@ -507,6 +512,10 @@ impl Default for Keymap {
                 Binding {
                     key: KeyPress::plain(KeyCode::Char('d')),
                     action: Action::Delete,
+                },
+                Binding {
+                    key: KeyPress::plain(KeyCode::Char('R')),
+                    action: Action::Rename,
                 },
                 Binding {
                     key: KeyPress::plain(KeyCode::Char('y')),
@@ -802,6 +811,7 @@ mod tests {
             Action::Copy,
             Action::CopyCommand,
             Action::Delete,
+            Action::Rename,
             Action::ConfirmMutation,
             Action::Edit,
             Action::Add,

@@ -836,7 +836,12 @@ pub(super) fn staged_edit_found_key_gone(state: &mut State, name: &KeyName, at_m
         // buffer to hand back. `ResetSlowlog` has no key at all, so it can
         // never be the dialog this key's own gone-ness is about (M3 phase B,
         // `docs/plans/m3-slowlog.md`). `None`: no dialog is up at all.
-        Some(PendingMutation::DeleteKey { .. } | PendingMutation::ResetSlowlog) | None => false,
+        Some(
+            PendingMutation::DeleteKey { .. }
+            | PendingMutation::RenameKey { .. }
+            | PendingMutation::ResetSlowlog,
+        )
+        | None => false,
     };
     let Some(open) = state.open.as_mut().filter(|o| o.name == *name) else {
         return;

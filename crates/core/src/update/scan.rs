@@ -42,6 +42,8 @@ pub(super) fn grown_enough(current_len: usize, last_rebuild_len: usize) -> bool 
 
 pub(super) fn scan_started(mut state: State, estimated_total: u64) -> (State, Vec<Command>) {
     state.keys.clear();
+    // A followed index (`State::follow`) names the old numbering.
+    state.follow = None;
     // Every index just changed meaning: replies to fetches issued against the
     // old numbering must not land (`metadata_batch` checks this).
     state.metadata_epoch = state.metadata_epoch.next();

@@ -10,6 +10,7 @@
             │ c         copy                                                                                         │
             │ r         rescan                                                                                       │
             │ C         copy redis-cli command                                                                       │
+            │ R         rename                                                                                       │
             │ ↑↓ jk     move                                                                                         │
             │ PgUp/PgDn page                                                                                         │
             │ Home/End  top/bottom                                                                                   │
@@ -18,7 +19,6 @@
             │                                                                                                        │
             │ Tab value keys · Esc close                                                                             │
             └────────────────────────────────────────────────────────────────────────────────────────────────────────┘
-                                                          │
                                                           │
 
  → open / expand   / filter   s sort   t tree view   d delete   c copy   r rescan   C copy redis-cli command   ? F1 help
