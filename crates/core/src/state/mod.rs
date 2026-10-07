@@ -1279,6 +1279,63 @@ impl State {
         if self.tree_mode {
             self.tree.rebuild(&self.keys, &self.list);
         }
+        self.relocate_after_rows_changed(selected_index);
+    }
+
+    /// Whether the flat view is exactly what [`State::rebuild_list`] would
+    /// rebuild: Name order, built for the typed filter, sort and mode, over
+    /// every loaded key, with no debounced rebuild owed. When true, a change
+    /// that only touches the fold (or the mode) has nothing to re-filter or
+    /// re-sort (M6 task 2, `docs/plans/m6-fold-only.md`).
+    fn view_is_current(&self) -> bool {
+        !self.filter_pending
+            && self.list.sort == SortBy::Name
+            && self.list.is_current_for(self.keys.len())
+    }
+
+    /// Whether [`State::refold`] may skip the filter and sort: tree mode is on
+    /// and the view is current. The one place that decides it, so no caller
+    /// does.
+    pub fn fold_is_current(&self) -> bool {
+        self.tree_mode && self.view_is_current()
+    }
+
+    /// Re-fold the tree over the existing view, after a change that touched
+    /// only the fold (a group collapsed or expanded, or tree mode entered
+    /// over an already-Name-sorted view). Same result as
+    /// [`State::rebuild_list`], without re-filtering or re-sorting; falls back
+    /// to it whenever [`State::fold_is_current`] is false.
+    ///
+    /// Does not touch `list`, `filter_pending` or `scan_last_rebuild_len`: it
+    /// adds no keys, and only the scan schedule reads the latter.
+    pub fn refold(&mut self) {
+        if !self.fold_is_current() {
+            self.rebuild_list();
+            return;
+        }
+        let selected_index = self.key_at(self.view.selected);
+        self.tree.rebuild(&self.keys, &self.list);
+        self.relocate_after_rows_changed(selected_index);
+    }
+
+    /// Tree mode was just switched off. The flat view is the existing
+    /// `self.list` (tree mode already kept it Name-sorted and current), so
+    /// there is nothing to fold: only the selection and Open key move. Falls
+    /// back to [`State::rebuild_list`] when the view is not current.
+    pub fn leave_tree_mode(&mut self) {
+        if self.tree_mode || !self.view_is_current() {
+            self.rebuild_list();
+            return;
+        }
+        let selected_index = self.key_at(self.view.selected);
+        self.relocate_after_rows_changed(selected_index);
+    }
+
+    /// The tail every rebuild shares: put the selection back on the key it was
+    /// on (`selected_index`, captured before the rows moved), then relocate
+    /// the Open key. The single code path for `rebuild_list_with`,
+    /// [`State::refold`] and [`State::leave_tree_mode`].
+    fn relocate_after_rows_changed(&mut self, selected_index: Option<usize>) {
         match selected_index {
             Some(index) => match self.row_of(index) {
                 Some(row) => self.view.selected = row,
@@ -1892,6 +1949,241 @@ mod tests {
                 },
                 index: None,
             }
+        );
+    }
+}
+
+/// `refold` and `leave_tree_mode` against `rebuild_list` (M6 task 2,
+/// `docs/plans/m6-fold-only.md`): the fast paths must leave exactly the state
+/// the full rebuild leaves, over random keyspaces, filters, collapsed sets,
+/// selections and Open keys. Deterministic PRNG, as in M4's tests.
+#[cfg(test)]
+mod refold_tests {
+    use super::*;
+    use crate::key::KeyName;
+
+    struct Rng(u64);
+
+    impl Rng {
+        fn next(&mut self) -> u64 {
+            self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
+            let mut z = self.0;
+            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+            z ^ (z >> 31)
+        }
+        fn below(&mut self, n: usize) -> usize {
+            (self.next() % n as u64) as usize
+        }
+    }
+
+    const SEGMENTS: [&str; 6] = ["a", "b", "ab", "c", "user", "x1"];
+    const FILTERS: [(&str, FilterMode); 9] = [
+        ("", FilterMode::Glob),
+        ("a", FilterMode::Glob),
+        ("a*", FilterMode::Glob),
+        ("*b", FilterMode::Glob),
+        ("a?b", FilterMode::Glob),
+        ("user*:c", FilterMode::Glob),
+        ("ac", FilterMode::Fuzzy),
+        ("ub", FilterMode::Fuzzy),
+        ("", FilterMode::Fuzzy),
+    ];
+
+    fn random_name(rng: &mut Rng) -> String {
+        let depth = 1 + rng.below(4);
+        let mut parts: Vec<String> = (0..depth)
+            .map(|_| SEGMENTS[rng.below(SEGMENTS.len())].to_string())
+            .collect();
+        // A unique leaf keeps names distinct without collapsing the prefixes.
+        parts.push(format!("k{}", rng.below(40)));
+        parts.join(":")
+    }
+
+    /// A tree-mode state over random keys in random order, with a filter, a
+    /// random collapsed set, a random selection and (usually) an Open key. The
+    /// view is current: `rebuild_list` ran last.
+    fn random_state(rng: &mut Rng) -> State {
+        let mut keys = LoadedSet::default();
+        for _ in 0..(20 + rng.below(300)) {
+            keys.push(random_name(rng).as_bytes());
+        }
+        let (filter, mode) = FILTERS[rng.below(FILTERS.len())];
+        let mut state = State {
+            keys,
+            rows: 30,
+            tree_mode: true,
+            ..State::default()
+        };
+        state.list.filter = filter.to_string();
+        state.list.mode = mode;
+        state.rebuild_list();
+        for _ in 0..rng.below(6) {
+            if let Some(prefix) = random_prefix(rng, &state) {
+                state.tree.toggle(&prefix);
+            }
+        }
+        state.rebuild_list();
+        if state.row_count() > 0 {
+            state.view.selected = rng.below(state.row_count());
+        }
+        if rng.below(4) != 0 && !state.keys.is_empty() {
+            let index = rng.below(state.keys.len());
+            let name = KeyName::from(state.keys.name(index).unwrap());
+            state.open = Some(OpenKey::gone(Some(index), name, 0));
+            state.relocate_open_key();
+        }
+        state
+    }
+
+    fn random_prefix(rng: &mut Rng, state: &State) -> Option<String> {
+        if state.keys.is_empty() {
+            return None;
+        }
+        let name =
+            String::from_utf8_lossy(state.keys.name(rng.below(state.keys.len()))?).into_owned();
+        let cuts: Vec<usize> = name.match_indices(':').map(|(i, _)| i + 1).collect();
+        let cut = *cuts.get(rng.below(cuts.len().max(1)))?;
+        Some(name[..cut].to_string())
+    }
+
+    /// Everything a rebuild decides, minus `scan_last_rebuild_len` (a refold
+    /// deliberately leaves it alone).
+    fn assert_same(got: &State, want: &State, what: &str) {
+        assert_eq!(got.tree, want.tree, "{what}: tree");
+        assert_eq!(got.list, want.list, "{what}: list");
+        assert_eq!(got.tree_mode, want.tree_mode, "{what}: tree_mode");
+        assert_eq!(
+            got.filter_pending, want.filter_pending,
+            "{what}: filter_pending"
+        );
+        assert_eq!(got.view.selected, want.view.selected, "{what}: selected");
+        assert_eq!(got.view.offset, want.view.offset, "{what}: offset");
+        assert_eq!(
+            got.open.as_ref().map(|o| o.row),
+            want.open.as_ref().map(|o| o.row),
+            "{what}: open row"
+        );
+    }
+
+    #[test]
+    fn refold_after_a_collapse_or_expand_equals_rebuild_list() {
+        let mut rng = Rng(7);
+        let mut fast = 0;
+        for case in 0..400 {
+            let mut state = random_state(&mut rng);
+            for _ in 0..3 {
+                let Some(prefix) = random_prefix(&mut rng, &state) else {
+                    continue;
+                };
+                // Sometimes the cursor is on a row first, as in the handlers.
+                if state.row_count() > 0 {
+                    state.view.selected = rng.below(state.row_count());
+                }
+                state.tree.toggle(&prefix);
+                let mut want = state.clone();
+                want.rebuild_list();
+                assert!(
+                    state.fold_is_current(),
+                    "case {case}: should be the fast path"
+                );
+                let len_before = state.scan_last_rebuild_len;
+                state.refold();
+                assert_eq!(state.scan_last_rebuild_len, len_before);
+                assert_same(&state, &want, &format!("case {case}"));
+                fast += 1;
+            }
+        }
+        assert!(fast > 400);
+    }
+
+    #[test]
+    fn refold_falls_back_when_a_scan_page_outran_the_view() {
+        let mut rng = Rng(11);
+        for case in 0..200 {
+            let mut state = random_state(&mut rng);
+            for _ in 0..(1 + rng.below(20)) {
+                state.keys.push(random_name(&mut rng).as_bytes());
+            }
+            if let Some(prefix) = random_prefix(&mut rng, &state) {
+                state.tree.toggle(&prefix);
+            }
+            let mut want = state.clone();
+            want.rebuild_list();
+            // New keys may all be duplicates; only assert the fallback when
+            // the Loaded set really grew past the view's coverage.
+            if !state.list.is_current_for(state.keys.len()) {
+                assert!(!state.fold_is_current(), "case {case}");
+            }
+            state.refold();
+            assert_same(&state, &want, &format!("case {case}"));
+            assert_eq!(state.scan_last_rebuild_len, want.scan_last_rebuild_len);
+        }
+    }
+
+    #[test]
+    fn refold_falls_back_while_a_filter_rebuild_is_pending() {
+        let mut rng = Rng(13);
+        for case in 0..200 {
+            let mut state = random_state(&mut rng);
+            let (filter, mode) = FILTERS[rng.below(FILTERS.len())];
+            state.list.filter = filter.to_string();
+            state.list.mode = mode;
+            state.filter_pending = true;
+            if let Some(prefix) = random_prefix(&mut rng, &state) {
+                state.tree.toggle(&prefix);
+            }
+            let mut want = state.clone();
+            want.rebuild_list();
+            assert!(!state.fold_is_current(), "case {case}");
+            state.refold();
+            assert_same(&state, &want, &format!("case {case}"));
+            assert!(!state.filter_pending);
+        }
+    }
+
+    #[test]
+    fn toggling_tree_mode_either_way_equals_rebuild_list() {
+        let mut rng = Rng(17);
+        let mut entered_fast = 0;
+        let mut left_fast = 0;
+        for case in 0..400 {
+            // Start flat, with the flat sort Name, Scan or Size.
+            let mut state = random_state(&mut rng);
+            state.tree_mode = false;
+            state.list.sort = [SortBy::Name, SortBy::Scan, SortBy::Name][rng.below(3)];
+            state.rebuild_list();
+            if state.row_count() > 0 {
+                state.view.selected = rng.below(state.row_count());
+            }
+            state.relocate_open_key();
+
+            // Into tree mode, as `toggle_tree` does.
+            state.tree_mode = true;
+            state.view.selected = 0;
+            state.view.offset = 0;
+            let mut want = state.clone();
+            want.rebuild_list();
+            entered_fast += usize::from(state.fold_is_current());
+            state.refold();
+            assert_same(&state, &want, &format!("case {case} into tree"));
+
+            // And back out.
+            if state.row_count() > 0 {
+                state.view.selected = rng.below(state.row_count());
+            }
+            state.tree_mode = false;
+            state.view.selected = 0;
+            state.view.offset = 0;
+            let mut want = state.clone();
+            want.rebuild_list();
+            left_fast += usize::from(state.view_is_current());
+            state.leave_tree_mode();
+            assert_same(&state, &want, &format!("case {case} out of tree"));
+        }
+        assert!(
+            entered_fast > 100 && left_fast > 100,
+            "{entered_fast} {left_fast}"
         );
     }
 }

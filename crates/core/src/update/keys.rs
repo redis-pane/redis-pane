@@ -223,7 +223,7 @@ pub(super) fn open_selected(mut state: State) -> (State, Vec<Command>) {
         }
         if let Some(prefix) = group_prefix_at(&state, state.view.selected) {
             state.tree.toggle(&prefix);
-            state.rebuild_list();
+            state.refold();
         }
         return after_move(state);
     }
@@ -273,7 +273,15 @@ pub(super) fn toggle_tree(mut state: State) -> (State, Vec<Command>) {
     state.tree_mode = !state.tree_mode;
     state.view.selected = 0;
     state.view.offset = 0;
-    state.rebuild_list();
+    // Only the mode changed: tree mode keeps the flat view Name-sorted, so
+    // entering it over a current Name view is a fold, and leaving it is no
+    // work at all. Each falls back to a full rebuild when the view is not
+    // current (M6 task 2).
+    if state.tree_mode {
+        state.refold();
+    } else {
+        state.leave_tree_mode();
+    }
     after_move(state)
 }
 
@@ -296,7 +304,7 @@ pub(super) fn collapse_group(mut state: State) -> (State, Vec<Command>) {
         {
             if let Some(prefix) = group_prefix_at(&state, state.view.selected) {
                 state.tree.toggle(&prefix);
-                state.rebuild_list();
+                state.refold();
             }
         } else if let Some(parent) = parent_row(&state, state.view.selected) {
             state.view.selected = parent;
