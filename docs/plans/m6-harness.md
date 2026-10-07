@@ -71,7 +71,7 @@ Any speedup. This task only measures.
 ## Outcome
 
 Done in `crates/core/tests/perf.rs`; no product code changed. The suite grew from 13 to 43 tests
-and runs in about 40 s locally and 32 s of test time (59 s job) on CI.
+and runs in about 40 s locally and 32-47 s of test time (51-75 s job) on CI.
 
 - **Fixtures** `sorted`, `random_flat` and `random_deep` are built with a fixed-seed splitmix64
   shuffle, once per process and cloned per test (the memory test builds fresh, because
@@ -83,11 +83,12 @@ and runs in about 40 s locally and 32 s of test time (59 s job) on CI.
   alone, whole scan on `random_deep` (worst page, total, count of pages over 16 ms), and four
   `time_to_new_list_*` tests (tree toggle, sort change, debounced filter rebuild, collapse). Today
   each is the single `update`; task 3 redefines them as time until the swap.
-- **Ceilings** for every random-fixture CEILING are 1.5x PR #78's CI figure, rounded up. On these
-  fixtures the CI runner is *faster* than the Apple Silicon development machine (0.7-0.9x), so a
-  local run can sit at a ceiling: locally the `sorted` fold-alone test (CI 24 ms, ceiling 37 ms,
-  local 38 ms) trips it. CI is the arbiter. Scroll, keystroke, narrowing, scan-batch and render
-  stay AT TARGET at 16 ms.
+- **Ceilings** for every random-fixture CEILING are 1.5x the *slower* of the local mean and the
+  first CI run, rounded up. M4's rule (1.5x one CI figure) did not hold: the first CI run of this
+  PR was faster than the laptop (0.7-0.9x), and a second run of the same code was up to 1.9x
+  slower (whole scan on sorted 182 ms then 339 ms), which tripped 8 of the tight ceilings. The
+  CI column below is the first run. Scroll, keystroke, narrowing, scan-batch and render stay AT
+  TARGET at 16 ms.
 - **Surprise:** `filter first character` on `random_deep` is 22 ms, over 16 ms, so it is a
   CEILING (33 ms) there and AT TARGET only on the sorted control.
 - **Memory** on `random_deep` is 99.4 MB (LoadedSet 56.0, View 7.6, Tree 35.8) against 83.4 MB
@@ -120,19 +121,19 @@ and runs in about 40 s locally and 32 s of test time (59 s job) on CI.
 | whole scan, tree mode: total | 241 / 182 | - | 1829 / 1285 |
 | memory LoadedSet+View+Tree (MB) | 83.4 / 83.4 | - | 99.4 / 99.4 |
 
-### Ceilings (CI x 1.5, rounded up, ms)
+### Ceilings (1.5 x max(local, CI), rounded up, ms)
 
 | Test (random_deep unless noted) | Ceiling |
 |---|---|
-| Name sort alone | 342 (flat 308) |
-| Sort change | 338 (flat 327) |
-| Tree toggle | 580 (flat 456) |
-| Collapse / expand | 558 / 586 (flat 395 / 491) |
-| Fold alone | 248 (flat 161); sorted 37 |
+| Name sort alone | 420 (flat 362) |
+| Sort change | 417 (flat 363) |
+| Tree toggle | 752 (flat 588) |
+| Collapse / expand | 710 / 765 (flat 579 / 588) |
+| Fold alone | 332 (flat 227); sorted 57 |
 | Filter first character | 33 |
-| Debounced filter rebuild | 57 (flat 28) |
-| time-to-new-list: toggle / sort / filter / collapse | 582 / 341 / 58 / 540 |
-| Whole scan worst page / total gate | 491 / 2 s |
+| Debounced filter rebuild | 60 (flat 35) |
+| time-to-new-list: toggle / sort / filter / collapse | 749 / 422 / 60 / 717 |
+| Whole scan worst page / total gate | 617 / 3 s |
 
 `sorted` controls keep their M4 ceilings (debounce 49, tree toggle 89, whole-scan worst page 68).
 
