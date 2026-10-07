@@ -175,6 +175,12 @@ survives as a separate, later, opt-in escape hatch (task 5 below) rather than th
 | 13 | Bulk operations: multi-select (`Space`, not yet bound) feeding the same chokepoint; bulk delete with typed key-count confirmation on `prod` | Confirmation friction scales with count exactly as DESIGN §6.5 specifies; single-key path (task 3) is untouched — bulk is additive, not a rewrite. **On a Cluster** (ADR-0022): keys are grouped by node, each group deleted on its owner, and the `prod` typed confirmation counts every key across every node, never one node's share |
 | 14 | Hash field rename: atomic `HSETNX new` + `HDEL old` in one guarded script, follow-up to task 6's D3 | Preview shows old name → new name; refuses the same way task 6's add does when the new name is already taken, and the same way its edit does when the key is gone |
 
+**Tasks 11–14 are planned** in [`m2-remaining-planning.md`](plans/m2-remaining-planning.md)
+(2026-10-08), one plan doc each, built in the order 11 → 12 → 14 → 13. Keys (user, 2026-10-08):
+`R` renames and `D` duplicates (`COPY`) in the keys pane, `R` renames a field/member in the value
+pane, `Space` marks for bulk delete. Task 14 covers Set and ZSet member rename too, which rows 7
+and 9 deferred to it. **Task 5 (`$EDITOR`) stays parked** by the same decision.
+
 **Task 6 ran before task 5**, by the user's choice on 2026-09-11 — the `$EDITOR` escape hatch
 stayed parked so the Hash field work (higher-value, and needed regardless of whether the escape
 hatch ships) could go first.
