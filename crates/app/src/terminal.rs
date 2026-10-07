@@ -308,6 +308,7 @@ pub async fn run(
     let mut countdown_tick = tokio::time::interval(std::time::Duration::from_secs(1));
     countdown_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut dirty = true;
+    let mut rebuild = RebuildGate::default();
     let mut last_draw: Option<tokio::time::Instant> = None;
 
     'session: loop {
@@ -319,6 +320,7 @@ pub async fn run(
             })?;
             dirty = false;
             last_draw = Some(now);
+            rebuild.drew();
         }
         let frame_due = last_draw.map_or(now, |at| at + FRAME);
         let persist_due = persister
@@ -370,6 +372,11 @@ pub async fn run(
                 shell.filter_debounce.clear();
                 Some(Msg::FilterRebuildDue)
             }
+            // The rebuild job's next slice (M6 task 3): last, so input, replies
+            // and timers are all polled first, and `yield_now` so the tasks
+            // feeding them get a turn between slices. Only once the frame that
+            // says `rebuilding N%` has been drawn (`RebuildGate`).
+            () = tokio::task::yield_now(), if rebuild.ready() => Some(Msg::RebuildStep),
         };
         let Some(msg) = msg else {
             break 'session;
@@ -377,6 +384,7 @@ pub async fn run(
         let commands;
         (state, commands) = update(state, msg);
         dirty = true;
+        rebuild.observe(commands.contains(&Command::ContinueRebuild));
         if let Some(p) = persister.as_mut() {
             p.observe(std::time::Instant::now(), state.session_snapshot());
         }
@@ -398,6 +406,42 @@ pub async fn run(
         eprintln!("redis-pane: could not save session state: {detail}");
     }
     Ok(())
+}
+
+/// When the loop may send `Msg::RebuildStep` (M6 task 3, decision 6).
+///
+/// Pure data, like [`Debounce`], so the scheduling rule is testable without a
+/// runtime or a terminal. A step is allowed only while the core keeps asking
+/// (`Command::ContinueRebuild`) and only after a frame has been drawn since the
+/// job began, so the reader sees `rebuilding N%` before the first slice runs.
+/// Between slices the loop does not wait for the next frame interval: steps run
+/// back to back, with input, replies and timers served ahead of each one and a
+/// draw at most once per `FRAME`, so a keystroke waits for at most one slice.
+#[derive(Debug, Default)]
+struct RebuildGate {
+    /// The core asked for another step.
+    pending: bool,
+    /// A frame has been drawn since `pending` last became true.
+    drawn: bool,
+}
+
+impl RebuildGate {
+    /// After every `update`: did its commands include `ContinueRebuild`?
+    fn observe(&mut self, asked: bool) {
+        if asked && !self.pending {
+            self.drawn = false;
+        }
+        self.pending = asked;
+    }
+
+    /// A frame was drawn.
+    fn drew(&mut self) {
+        self.drawn = true;
+    }
+
+    fn ready(&self) -> bool {
+        self.pending && self.drawn
+    }
 }
 
 /// How long the filter must be quiet before a full rebuild runs (M4 task 4,
@@ -1532,6 +1576,35 @@ mod tests {
             },
         );
         assert_eq!(set, GlyphSet::Unicode);
+    }
+
+    #[test]
+    fn a_rebuild_step_waits_for_the_frame_that_shows_the_job() {
+        use super::RebuildGate;
+        let mut g = RebuildGate::default();
+        assert!(!g.ready(), "idle: no job, no step");
+        // A trigger starts a job: the update asks for a step, but nothing has
+        // drawn `rebuilding 0%` yet.
+        g.observe(true);
+        assert!(!g.ready(), "not before the next draw");
+        g.drew();
+        assert!(g.ready());
+        // A step runs and the core still asks: back to back, no new draw
+        // needed (draws happen at most once per FRAME on their own).
+        g.observe(true);
+        assert!(g.ready(), "steps run back to back");
+        // Input arrives and is handled; the job is still running.
+        g.observe(true);
+        assert!(g.ready());
+        // The job swapped: the core stopped asking.
+        g.observe(false);
+        assert!(!g.ready());
+        // A draw alone does not start stepping.
+        g.drew();
+        assert!(!g.ready(), "nothing pending");
+        // The next job again waits for its own first draw.
+        g.observe(true);
+        assert!(!g.ready());
     }
 
     #[test]

@@ -952,12 +952,23 @@ fn status_bar(state: &State, theme: &Theme, clock: &dyn Clock, area: Rect, buf: 
     } else {
         String::new()
     };
-    let sort_readout = if on_keys {
+    // A rebuild job running: the list on screen is the old one, and says so
+    // (M6 task 3, decision 8). Drawn in its own style after the line, so the
+    // degradation is visible and not folded into a muted readout.
+    let rebuilding = if on_keys {
+        state.rebuild_progress()
+    } else {
+        None
+    };
+    // The sort readout describes the order on screen, which is not the order
+    // being built: it waits for the swap rather than claim one it is not.
+    let sort_readout = if on_keys && rebuilding.is_none() {
         state.list.sort_readout()
     } else {
         None
     };
     let quiet = readout.is_empty()
+        && rebuilding.is_none()
         && sort_readout.is_none()
         && state.notice_now(clock.now_epoch_ms()).is_none()
         && state.error_text().is_none();
@@ -995,7 +1006,17 @@ fn status_bar(state: &State, theme: &Theme, clock: &dyn Clock, area: Rect, buf: 
             .unwrap_or_default();
         line = format!("{} {error}   {dismiss} dismiss", g.get(Glyph::Deleted));
     }
-    let x = put(buf, 1, y, &line, theme.style(token));
+    let mut x = put(buf, 1, y, &line, theme.style(token));
+    if let Some(percent) = rebuilding {
+        let gap = if line.is_empty() { "" } else { "   " };
+        x = put(
+            buf,
+            x,
+            y,
+            &g.text(&format!("{gap}rebuilding {percent}%")),
+            theme.style(Token::Warn),
+        );
+    }
     if on_keys
         && state.scan.is_running()
         && let Some(hint) = state.keymap.hint(crate::keymap::Action::Cancel)

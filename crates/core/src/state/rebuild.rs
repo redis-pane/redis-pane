@@ -562,7 +562,7 @@ impl State {
 
     /// Advance the running job by one slice, swapping its result in when it
     /// finishes. Returns the key count the swapped list covers, if it swapped.
-    pub(crate) fn rebuild_step(&mut self) -> Option<usize> {
+    pub fn rebuild_step(&mut self) -> Option<usize> {
         let mut job = self.job.take()?;
         if !job.step(&self.keys, &self.list) {
             self.job = Some(job);
