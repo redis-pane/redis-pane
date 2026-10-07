@@ -22,20 +22,29 @@ which is effectively random.
 
 ## Measurements
 
-Measured on 2026-10-04 on Apple Silicon, release build, median of 7 runs. A throwaway profiler
-timed the real `KeyView::rebuild`, `Tree::rebuild` and `State::rebuild_list`. Deep names are
-`app:{i%7}:tenant:{i%211}:user:{i:08}:session`.
+Measured by task 1's harness (`crates/core/tests/perf.rs`, PR #78) at 1M keys, release build:
+local is Apple Silicon (mean of 2 runs), CI is the `perf` job on `ubuntu-latest`. Deep names are
+`app:{i%7}:tenant:{i%211}:user:{i:08}:session`. `sorted` is the old harness's pre-sorted order,
+kept as the control; `random_*` push in a fixed-seed shuffle, standing in for real `SCAN` order.
+Full table, with every measurement, in [`m6-harness.md`](m6-harness.md#outcome).
 
-| At 1M keys | Harness order (pre-sorted) | Random order, flat names | Random order, deep names |
+| At 1M keys (ms, local / CI) | sorted | random_flat | random_deep |
 |---|---|---|---|
-| View rebuild, scan order, no filter | 1.3 ms | 1.3 ms | 1.3 ms |
-| View rebuild, scan order, filter `user:0000` | 23 ms | 24 ms | 41 ms |
-| View rebuild, name sort | 4 ms | **240 ms** | **276 ms** |
-| `Tree::rebuild` alone (over a name-sorted view) | 38 ms | **139 ms** | **205 ms** |
-| `rebuild_list` in tree mode (= tree toggle) | 42 ms | **373 ms** | **482 ms** |
+| Name sort alone (`KeyView::rebuild`, no filter) | 4.2 / 3.9 | **241 / 205** | **280 / 228** |
+| `Tree::rebuild` alone (over a name-sorted view) | 38 / 24 | **151 / 107** | **221 / 165** |
+| Tree toggle (`rebuild_list` in tree mode) | 44 / 33 | **392 / 304** | **501 / 386** |
+| Collapse one top-level group | - | **386 / 263** | **473 / 372** |
+| Expand it again | - | **392 / 327** | **510 / 390** |
+| Debounced filter rebuild (`user:0000`) | 22 / 18 | 23 / 19 | 40 / 37 |
+| Whole scan in tree mode, worst page | 31 / 23 | - | **411 / 327** |
+| Whole scan in tree mode, total | 0.24 s / 0.18 s | - | 1.8 s / 1.3 s |
 
-The worst scan page in tree mode is a scheduled full rebuild late in the scan. It has not yet
-been measured at real order; task 1 measures it.
+The worst scan page is a scheduled full rebuild late in the scan (page 1,734 of 2,000, at 867,500
+keys); 12 of the 2,000 pages exceed 16 ms in the random-deep case, 4 in the sorted one. The
+2026-10-04 throwaway-profiler figures (sort 276 ms, fold 205 ms, toggle 482 ms on deep names)
+agree with the harness within about 10%, so they are not kept separately. One thing the profiler
+did not show: on random_deep, `filter first character` is 22 ms, not the 3.9 ms of the sorted
+control, since it matches every key through a shuffled arena.
 
 ## Why it is slow
 

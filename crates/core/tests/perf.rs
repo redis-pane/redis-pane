@@ -1,4 +1,5 @@
-//! Release-mode performance budgets (M4 task 2, `docs/plans/m4-perf-harness.md`).
+//! Release-mode performance budgets (M4 task 2, `docs/plans/m4-perf-harness.md`;
+//! made honest by M6 task 1, `docs/plans/m6-harness.md`).
 //!
 //! Every test here is `#[ignore]`d: `cargo test --workspace` stays debug-mode
 //! and Docker-free. These run via a dedicated CI job, in release, the same
@@ -11,31 +12,51 @@
 //! One test at a time: these are wall-clock timings, and in parallel they
 //! contend for CPU and read slower than they are.
 //!
+//! # Fixtures (M6 task 1)
+//!
+//! M4's harness pushed `user:{i:08}:session` in index order, which is already
+//! name order. Real `SCAN` returns keys in hash-slot order, effectively
+//! random, and a pass in name order over an arena in arrival order is a
+//! cache miss per key; the old harness understated every rebuild by 5-10x
+//! (`docs/plans/m6-perf-rebuild.md`). Three deterministic fixtures, all 1M
+//! keys, shuffled with a fixed-seed splitmix64 written below (no crate dep):
+//!
+//! | Fixture       | Names                                       | Push order |
+//! |---------------|---------------------------------------------|------------|
+//! | `sorted`      | `user:{i:08}:session`                       | index      |
+//! | `random_flat` | the same                                    | shuffled   |
+//! | `random_deep` | `app:{i%7}:tenant:{i%211}:user:{i:08}:session` | shuffled |
+//!
+//! `sorted` is the control: its tests keep their M4 names and ceilings so the
+//! old numbers stay comparable. `random_deep` is the reference fixture for
+//! M6's goals; every pre-existing measurement runs on it, plus collapse,
+//! expand, the fold alone, the Name sort alone and the whole-scan in tree
+//! mode. `random_flat` is run for the rebuild-heavy tests only. Each fixture
+//! is built once per process and cloned per test.
+//!
+//! # Budgets
+//!
 //! **The override that shapes every budget below:** a budget the current code
 //! does not yet meet must not turn CI red. Where the current code already
-//! meets the PRD §7 target, the constant *is* the target, labelled
-//! `AT TARGET`. Where it does not, the constant is a **regression ceiling**
-//! — the measured local baseline × 1.5, rounded up — labelled `CEILING`, with
-//! the PRD target named in a comment. Every test prints its measured number
-//! first, so a CI log carries the real value even though the assertion is
-//! against the (looser) ceiling.
+//! meets the PRD §7 target (a keystroke answered in 16ms), the constant *is*
+//! the target, labelled `AT TARGET`. Where it does not, the constant is a
+//! **regression ceiling**, labelled `CEILING`, with the PRD target named
+//! beside it. Every test prints its measured number first, so a CI log
+//! carries the real value even though the assertion is against the (looser)
+//! ceiling.
 //!
-//! M4 task 3 (`scan_batch`'s incremental-append path and geometric rebuild
-//! schedule, `docs/plans/m4-perf-scan.md`) has landed: every case that was a
-//! CEILING because of the per-page quadratic rebuild is now `AT TARGET`.
-//! M4 task 4 (`docs/plans/m4-perf-interaction.md`) has landed too: the
-//! filter keystroke narrows from the previous result and is `AT TARGET`.
-//! What remains above 16ms is a full rebuild (a debounced filter rebuild, a
-//! tree toggle, a scheduled mid-scan rebuild in tree mode). Those ceilings
-//! are **1.5x the CI measurement, rounded up** — the same rule task 2 used
-//! for the filter keystroke — because CI's ubuntu runner is the slower
-//! machine (about 1.3-1.5x the development machine) and so the one a
-//! ceiling has to hold on. Calibrated on PR #60's CI run.
-//!
-//! Keys are realistic: `user:{i:08}:session`, the same generator
-//! `crates/core/examples/memreport.rs` already uses, with two `:` separators
-//! so tree mode (R2.3) actually has something to fold.
+//! Ceiling rule: M4 used **1.5x the CI measurement, rounded up**. On the M6
+//! fixtures three runs of the same code on CI differed by up to 1.9x (runner
+//! hardware varies), so every ceiling is **1.5x the slowest figure observed
+//! across the local runs and PR #78's three CI runs, rounded up**; the table
+//! is in `docs/plans/m6-harness.md`. Time-to-new-list tests
+//! (`time_to_new_list_*`) measure only the `update` call that produces the new
+//! list; M6 task 3 redefines them as time until the rebuild job's swap.
+//! The `sorted` controls keep their M4 ceilings except where the slow CI runs
+//! showed them under 1.5x (debounce 49 -> 58, tree toggle 89 -> 94, worst page
+//! 68 -> 71).
 
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use ratatui::layout::Rect;
@@ -44,31 +65,118 @@ use redis_pane_core::msg::{KeyCode, KeyPress};
 use redis_pane_core::render;
 use redis_pane_core::state::{
     Connection, Environment, FilterMode, KeyView, Link, LoadedSet, SortBy, Source, State, Tracking,
+    Tree,
 };
 use redis_pane_core::theme::{ColorDepth, Theme};
 use redis_pane_core::{Msg, update};
 
 const COLS: u16 = 130;
 const ROWS: u16 = 26;
+const N: usize = 1_000_000;
+/// Fixed shuffle seed: every run, every machine, same arrival order.
+const SEED: u64 = 0x5eed_5ca9_1234_abcd;
 
-fn key_name(i: usize) -> String {
-    format!("user:{i:08}:session")
+// ── deterministic PRNG and fixtures ───────────────────────────────────────
+
+/// splitmix64: tiny, fixed-seed, good enough to shuffle.
+struct SplitMix64(u64);
+
+impl SplitMix64 {
+    fn next(&mut self) -> u64 {
+        self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut z = self.0;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^ (z >> 31)
+    }
 }
 
-/// A deterministic, columnar `State` with `n` keys already scanned and the
-/// list rebuilt, in the given view mode — the steady state a browse sits in
-/// once a scan has finished, which is what every per-keystroke test below
-/// perturbs with one message. `tree_mode` and `sort` are independent knobs:
-/// tree mode forces a Name sort (`rebuild_list`'s own invariant) regardless
-/// of what `sort` asks for, so passing `SortBy::Scan` with `tree_mode: true`
-/// still lands on Name — exactly what the real app does the moment Tree mode
-/// (the default view) turns on.
-fn make_state(n: usize, tree_mode: bool, sort: SortBy) -> State {
-    let mut keys = LoadedSet::default();
-    for i in 0..n {
-        assert!(keys.push(key_name(i).as_bytes()));
+/// Fisher-Yates permutation of `0..n`: arrival position -> key index.
+fn permutation(n: usize) -> Vec<u32> {
+    let mut v: Vec<u32> = (0..n as u32).collect();
+    let mut rng = SplitMix64(SEED);
+    for i in (1..n).rev() {
+        let j = (rng.next() % (i as u64 + 1)) as usize;
+        v.swap(i, j);
     }
-    let mut state = State {
+    v
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Fixture {
+    Sorted,
+    RandomFlat,
+    RandomDeep,
+}
+
+fn order() -> &'static [u32] {
+    static ORDER: OnceLock<Vec<u32>> = OnceLock::new();
+    ORDER.get_or_init(|| permutation(N))
+}
+
+impl Fixture {
+    fn label(self) -> &'static str {
+        match self {
+            Fixture::Sorted => "sorted",
+            Fixture::RandomFlat => "random_flat",
+            Fixture::RandomDeep => "random_deep",
+        }
+    }
+
+    /// Name of the key with index `i`.
+    fn name(self, i: usize) -> String {
+        match self {
+            Fixture::Sorted | Fixture::RandomFlat => format!("user:{i:08}:session"),
+            Fixture::RandomDeep => {
+                format!("app:{}:tenant:{}:user:{i:08}:session", i % 7, i % 211)
+            }
+        }
+    }
+
+    /// Name of the key that arrives at scan position `pos` (a position past
+    /// the first million is simply the next index).
+    fn scan_name(self, pos: usize) -> String {
+        match self {
+            Fixture::Sorted => self.name(pos),
+            _ if pos < N => self.name(order()[pos] as usize),
+            _ => self.name(pos),
+        }
+    }
+
+    /// The 1M-key Loaded set, built once per fixture per process.
+    fn keys(self) -> LoadedSet {
+        static SORTED: OnceLock<LoadedSet> = OnceLock::new();
+        static FLAT: OnceLock<LoadedSet> = OnceLock::new();
+        static DEEP: OnceLock<LoadedSet> = OnceLock::new();
+        let cell = match self {
+            Fixture::Sorted => &SORTED,
+            Fixture::RandomFlat => &FLAT,
+            Fixture::RandomDeep => &DEEP,
+        };
+        cell.get_or_init(|| self.build_keys()).clone()
+    }
+
+    /// Push the fixture's keys one by one, as a scan does. `keys()` clones a
+    /// cached copy, which is exact-fit; `heap_bytes` counts capacity, so the
+    /// memory test builds fresh to report what a real scan holds.
+    fn build_keys(self) -> LoadedSet {
+        let mut keys = LoadedSet::default();
+        for pos in 0..N {
+            assert!(keys.push(self.scan_name(pos).as_bytes()));
+        }
+        keys
+    }
+
+    /// A page of `count` keys starting at scan position `from`.
+    fn page(self, from: usize, count: usize) -> Vec<Vec<u8>> {
+        (from..from + count)
+            .map(|p| self.scan_name(p).into_bytes())
+            .collect()
+    }
+}
+
+fn base_state() -> State {
+    State {
         cols: COLS,
         rows: ROWS,
         connection: Connection {
@@ -82,20 +190,30 @@ fn make_state(n: usize, tree_mode: bool, sort: SortBy) -> State {
             version: "8.4.0".into(),
             tracking: Tracking::Armed,
         },
-        keys,
+        ..State::default()
+    }
+}
+
+/// A deterministic, columnar `State` holding the fixture's 1M keys with the
+/// list rebuilt, in the given view mode — the steady state a browse sits in
+/// once a scan has finished, which is what every per-keystroke test below
+/// perturbs with one message. `tree_mode` and `sort` are independent knobs:
+/// tree mode forces a Name sort (`rebuild_list`'s own invariant) regardless
+/// of what `sort` asks for.
+fn make_state(fx: Fixture, tree_mode: bool, sort: SortBy) -> State {
+    let mut state = State {
+        keys: fx.keys(),
         list: KeyView::new("", FilterMode::Glob, sort),
         tree_mode,
-        ..State::default()
+        ..base_state()
     };
     state.rebuild_list();
     state
 }
 
-/// Flat view, scan order — the shape every pre-existing test below uses,
-/// kept as its own name since most of these tests are about a keystroke's
-/// cost in that baseline view, not about the view itself.
-fn big_state(n: usize) -> State {
-    make_state(n, false, SortBy::Scan)
+/// Flat view, scan order — the shape most pre-existing tests use.
+fn big_state(fx: Fixture) -> State {
+    make_state(fx, false, SortBy::Scan)
 }
 
 fn median(mut samples: Vec<Duration>) -> Duration {
@@ -131,289 +249,451 @@ fn time_update_and_render(base: &State, iterations: usize, msg: impl Fn() -> Msg
     median(samples)
 }
 
+/// Median wall time of the `update` call alone: the time until the new list
+/// exists. M6 task 3 redefines this as time until the rebuild job's swap.
+fn time_to_new_list(base: &State, iterations: usize, msg: impl Fn() -> Msg) -> Duration {
+    let mut samples = Vec::with_capacity(iterations);
+    for _ in 0..iterations {
+        let working = base.clone();
+        let m = msg();
+        let started = Instant::now();
+        let (state, _cmds) = update(working, m);
+        samples.push(started.elapsed());
+        drop(state);
+    }
+    median(samples)
+}
+
+/// Samples for tests that run a full rebuild on a random fixture (~0.2-0.5s
+/// each): fewer than the cheap tests' 11, still a median.
+const SLOW_SAMPLES: usize = 5;
+
+/// Wrapper generating one `#[test] #[ignore]` per (fixture, ceiling_ms).
+macro_rules! variants {
+    ($body:ident: $($name:ident => ($fx:expr, $ceil:expr)),+ $(,)?) => {
+        $(
+            #[test]
+            #[ignore]
+            fn $name() {
+                $body($fx, $ceil)
+            }
+        )+
+    };
+}
+
+fn assert_budget(what: &str, elapsed: Duration, ceil_ms: u64) {
+    if ceil_ms <= 16 {
+        // AT TARGET: PRD §7's 16ms, one frame.
+        assert!(
+            elapsed < Duration::from_millis(16),
+            "{what} took {elapsed:?}, budget is 16ms"
+        );
+    } else {
+        // CEILING: PRD §7 target is 16ms, not met.
+        assert!(
+            elapsed < Duration::from_millis(ceil_ms),
+            "{what} took {elapsed:?}, ceiling is {ceil_ms}ms (target 16ms)"
+        );
+    }
+}
+
+fn key(code: KeyCode) -> Msg {
+    Msg::Key(KeyPress::plain(code))
+}
+
+// Ceilings are 1.5x the slowest figure observed (local and three CI runs),
+// rounded up; see the header.
+
 // ── (a) scroll keystroke ─────────────────────────────────────────────────
 
-#[test]
-#[ignore]
-fn scroll_keystroke_at_1m_keys() {
-    let base = big_state(1_000_000);
-    let elapsed = time_update_and_render(&base, 11, || Msg::Key(KeyPress::plain(KeyCode::Down)));
-    println!("scroll keystroke @ 1M keys: {elapsed:?}");
-    // AT TARGET: PRD §7 — a keystroke must be answerable in one frame (16ms).
+fn scroll_keystroke(fx: Fixture, ceil_ms: u64) {
+    let base = big_state(fx);
+    let elapsed = time_update_and_render(&base, 11, || key(KeyCode::Down));
+    println!("[{}] scroll keystroke @ 1M keys: {elapsed:?}", fx.label());
+    // AT TARGET: PRD §7 — a keystroke is answerable in one frame (16ms).
     // Moving the selection touches no arena, no sort, no rebuild; only the
-    // render cost scales with the keyspace, and that is already bounded by
-    // virtualization (R2.6).
-    assert!(
-        elapsed < Duration::from_millis(16),
-        "scroll took {elapsed:?}, budget is 16ms"
-    );
+    // render cost scales with the keyspace, bounded by virtualization (R2.6).
+    assert_budget("scroll", elapsed, ceil_ms);
 }
+variants!(scroll_keystroke:
+    scroll_keystroke_at_1m_keys => (Fixture::Sorted, 16),
+    scroll_keystroke_at_1m_keys_random_deep => (Fixture::RandomDeep, 16));
 
 // ── (b) filter keystroke ─────────────────────────────────────────────────
 
-#[test]
-#[ignore]
-fn filter_keystroke_at_1m_keys() {
-    let mut base = big_state(1_000_000);
+fn filter_keystroke(fx: Fixture, ceil_ms: u64) {
+    let mut base = big_state(fx);
     // Mid-typing: a filter is already active and capturing, and one more
     // character arrives. That extends the previous query, so the list
     // narrows from the rows already shown (M4 task 4, decision 1) instead of
-    // re-matching the whole Loaded set. The other keystrokes are measured
-    // beside this one: first character, deferred backspace, and the
-    // post-debounce full rebuild.
+    // re-matching the whole Loaded set.
     base.list.filter = "user:0000".into();
     base.filtering = true;
     base.rebuild_list();
-    let elapsed =
-        time_update_and_render(&base, 11, || Msg::Key(KeyPress::plain(KeyCode::Char('1'))));
-    println!("filter keystroke @ 1M keys: {elapsed:?}");
-    // AT TARGET: PRD §7's 16ms. Was a 47ms CEILING (22.3ms measured: every
-    // keystroke re-matched all 1M keys); narrowing from the previous result
-    // now measures ~0.3ms locally.
-    assert!(
-        elapsed < Duration::from_millis(16),
-        "filter keystroke took {elapsed:?}, budget is 16ms"
-    );
+    let elapsed = time_update_and_render(&base, 11, || key(KeyCode::Char('1')));
+    println!("[{}] filter keystroke @ 1M keys: {elapsed:?}", fx.label());
+    // AT TARGET: PRD §7's 16ms (narrowing from the previous result).
+    assert_budget("filter keystroke", elapsed, ceil_ms);
 }
+variants!(filter_keystroke:
+    filter_keystroke_at_1m_keys => (Fixture::Sorted, 16),
+    filter_keystroke_at_1m_keys_random_deep => (Fixture::RandomDeep, 16));
 
 /// A filter is active over the whole set and rows are in step with it.
-fn filtered_state(filter: &str) -> State {
-    let mut base = big_state(1_000_000);
+fn filtered_state(fx: Fixture, filter: &str) -> State {
+    let mut base = big_state(fx);
     base.list.filter = filter.into();
     base.filtering = true;
     base.rebuild_list();
     base
 }
 
-#[test]
-#[ignore]
-fn filter_first_character_at_1m_keys() {
+fn filter_first_character(fx: Fixture, ceil_ms: u64) {
     // The one narrowing keystroke that still touches the whole keyspace: the
-    // previous result *is* the Loaded set, so there is nothing smaller to
-    // narrow from; it matches every key once, no sort. AT TARGET (~3.9ms).
-    let base = filtered_state("");
-    let elapsed =
-        time_update_and_render(&base, 11, || Msg::Key(KeyPress::plain(KeyCode::Char('u'))));
-    println!("filter first character @ 1M keys: {elapsed:?}");
-    assert!(
-        elapsed < Duration::from_millis(16),
-        "first filter character took {elapsed:?}, budget is 16ms"
+    // previous result *is* the Loaded set; it matches every key once, no sort.
+    let base = filtered_state(fx, "");
+    let elapsed = time_update_and_render(&base, 11, || key(KeyCode::Char('u')));
+    println!(
+        "[{}] filter first character @ 1M keys: {elapsed:?}",
+        fx.label()
     );
+    // Sorted control: AT TARGET (~3.9ms). On random_deep it matches every
+    // key through the shuffled arena and is a CEILING (~21ms).
+    assert_budget("first filter character", elapsed, ceil_ms);
 }
+variants!(filter_first_character:
+    filter_first_character_at_1m_keys => (Fixture::Sorted, 16),
+    filter_first_character_at_1m_keys_random_deep => (Fixture::RandomDeep, 52));
 
-#[test]
-#[ignore]
-fn filter_backspace_keystroke_at_1m_keys() {
+fn filter_backspace_keystroke(fx: Fixture, ceil_ms: u64) {
     // M4 task 4 decision 2: a keystroke that cannot be narrowed defers its
     // rebuild to the shell's debounce timer, so what the reader waits on is
     // only the update that records the text plus the frame.
-    let base = filtered_state("user:0000");
-    let elapsed =
-        time_update_and_render(&base, 11, || Msg::Key(KeyPress::plain(KeyCode::Backspace)));
-    println!("filter backspace keystroke (rebuild deferred) @ 1M keys: {elapsed:?}");
-    assert!(
-        elapsed < Duration::from_millis(16),
-        "deferred keystroke took {elapsed:?}, budget is 16ms"
+    let base = filtered_state(fx, "user:0000");
+    let elapsed = time_update_and_render(&base, 11, || key(KeyCode::Backspace));
+    println!(
+        "[{}] filter backspace keystroke (rebuild deferred) @ 1M keys: {elapsed:?}",
+        fx.label()
     );
+    assert_budget("deferred keystroke", elapsed, ceil_ms);
+}
+variants!(filter_backspace_keystroke:
+    filter_backspace_keystroke_at_1m_keys => (Fixture::Sorted, 16),
+    filter_backspace_keystroke_at_1m_keys_random_deep => (Fixture::RandomDeep, 16));
+
+/// The state `Msg::FilterRebuildDue` acts on: a backspace has deferred a rebuild.
+fn debounce_pending_state(fx: Fixture) -> State {
+    let (base, _) = update(filtered_state(fx, "user:0000"), key(KeyCode::Backspace));
+    assert!(base.filter_pending);
+    base
 }
 
-#[test]
-#[ignore]
-fn filter_rebuild_after_debounce_at_1m_keys() {
-    // The deferred work itself: `Msg::FilterRebuildDue` after a backspace.
-    // This is a full rebuild of the Loaded set, run once per burst.
-    let (base, _) = update(
-        filtered_state("user:0000"),
-        Msg::Key(KeyPress::plain(KeyCode::Backspace)),
+fn filter_rebuild_after_debounce(fx: Fixture, ceil_ms: u64) {
+    // The deferred work itself: a full rebuild of the Loaded set, run once
+    // per keystroke burst.
+    let base = debounce_pending_state(fx);
+    let n = if fx == Fixture::Sorted {
+        11
+    } else {
+        SLOW_SAMPLES
+    };
+    let elapsed = time_update_and_render(&base, n, || Msg::FilterRebuildDue);
+    println!(
+        "[{}] filter rebuild after debounce @ 1M keys: {elapsed:?}",
+        fx.label()
     );
-    assert!(base.filter_pending);
-    let elapsed = time_update_and_render(&base, 11, || Msg::FilterRebuildDue);
-    println!("filter rebuild after debounce @ 1M keys: {elapsed:?}");
-    // CEILING: PRD target 16ms, not met — a full rebuild matches all 1M keys
-    // (~21.8ms local, 32.4ms CI), but it runs once per keystroke burst, off
-    // the keystroke's own frame. Ceiling = CI × 1.5, rounded up: 49ms.
-    assert!(
-        elapsed < Duration::from_millis(49),
-        "post-debounce rebuild took {elapsed:?}, ceiling is 49ms (target 16ms)"
-    );
+    // CEILING: PRD target 16ms, not met (sorted: 21.8ms local, 32.4ms CI,
+    // ceiling 49ms). The random fixtures are.
+    assert_budget("post-debounce rebuild", elapsed, ceil_ms);
 }
+variants!(filter_rebuild_after_debounce:
+    filter_rebuild_after_debounce_at_1m_keys => (Fixture::Sorted, 58),
+    filter_rebuild_after_debounce_at_1m_keys_random_flat => (Fixture::RandomFlat, 63),
+    filter_rebuild_after_debounce_at_1m_keys_random_deep => (Fixture::RandomDeep, 96));
+
+fn time_to_new_list_filter_rebuild(fx: Fixture, ceil_ms: u64) {
+    let base = debounce_pending_state(fx);
+    let elapsed = time_to_new_list(&base, SLOW_SAMPLES, || Msg::FilterRebuildDue);
+    println!(
+        "[{}] time-to-new-list, debounced filter rebuild @ 1M keys: {elapsed:?}",
+        fx.label()
+    );
+    // CEILING (task 3 target: <= 250ms to the swap, no single update > 16ms).
+    assert_budget("time-to-new-list (filter rebuild)", elapsed, ceil_ms);
+}
+variants!(time_to_new_list_filter_rebuild:
+    time_to_new_list_filter_rebuild_random_deep => (Fixture::RandomDeep, 97));
 
 // ── (c) sort change ──────────────────────────────────────────────────────
 
-#[test]
-#[ignore]
-fn sort_change_at_1m_keys() {
-    let base = big_state(1_000_000);
-    let elapsed =
-        time_update_and_render(&base, 11, || Msg::Key(KeyPress::plain(KeyCode::Char('s'))));
-    println!("sort change (scan -> name) @ 1M keys: {elapsed:?}");
-    // AT TARGET: PRD §7's 16ms — sorting 1M keys by name (an O(n log n)
-    // byte-slice comparison sort over the index vector, never the arena
-    // itself, ADR-0010) already lands at ~3.8ms locally.
-    assert!(
-        elapsed < Duration::from_millis(16),
-        "sort change took {elapsed:?}, budget is 16ms"
+fn sort_change(fx: Fixture, ceil_ms: u64) {
+    let base = big_state(fx);
+    let n = if fx == Fixture::Sorted {
+        11
+    } else {
+        SLOW_SAMPLES
+    };
+    let elapsed = time_update_and_render(&base, n, || key(KeyCode::Char('s')));
+    println!(
+        "[{}] sort change (scan -> name) @ 1M keys: {elapsed:?}",
+        fx.label()
     );
+    // Sorted control: AT TARGET (~4ms; pdqsort is near-linear on sorted
+    // input, which is exactly how the old harness hid the real cost). The
+    // random fixtures are a CEILING.
+    assert_budget("sort change", elapsed, ceil_ms);
 }
+variants!(sort_change:
+    sort_change_at_1m_keys => (Fixture::Sorted, 16),
+    sort_change_at_1m_keys_random_flat => (Fixture::RandomFlat, 497),
+    sort_change_at_1m_keys_random_deep => (Fixture::RandomDeep, 527));
+
+fn time_to_new_list_sort_change(fx: Fixture, ceil_ms: u64) {
+    let base = big_state(fx);
+    let elapsed = time_to_new_list(&base, SLOW_SAMPLES, || key(KeyCode::Char('s')));
+    println!(
+        "[{}] time-to-new-list, sort change @ 1M keys: {elapsed:?}",
+        fx.label()
+    );
+    assert_budget("time-to-new-list (sort change)", elapsed, ceil_ms);
+}
+variants!(time_to_new_list_sort_change:
+    time_to_new_list_sort_change_random_deep => (Fixture::RandomDeep, 533));
 
 // ── (d) toggling tree mode ───────────────────────────────────────────────
 
-#[test]
-#[ignore]
-fn toggle_tree_at_1m_keys() {
-    let base = big_state(1_000_000);
-    let elapsed =
-        time_update_and_render(&base, 11, || Msg::Key(KeyPress::plain(KeyCode::Char('t'))));
-    println!("toggle tree mode @ 1M keys: {elapsed:?}");
-    // CEILING: PRD §7 target is 16ms; entering tree mode forces a Name sort
-    // (rebuild_list's invariant) *and* a one-pass `Tree::rebuild` over all 1M
-    // rows — by far the most expensive case measured here. Local baseline
-    // measured ~129ms before M4 task 4's allocation-free `Tree::rebuild` and
-    // O(1) collapsed lookup; now ~44ms locally, 57.4ms on CI. Ceiling =
-    // CI × 1.5, rounded up: 89ms (was 194ms).
-    assert!(
-        elapsed < Duration::from_millis(89),
-        "tree toggle took {elapsed:?}, ceiling is 89ms (target 16ms)"
-    );
+fn toggle_tree(fx: Fixture, ceil_ms: u64) {
+    let base = big_state(fx);
+    let n = if fx == Fixture::Sorted {
+        11
+    } else {
+        SLOW_SAMPLES
+    };
+    let elapsed = time_update_and_render(&base, n, || key(KeyCode::Char('t')));
+    println!("[{}] toggle tree mode @ 1M keys: {elapsed:?}", fx.label());
+    // CEILING: entering tree mode forces a Name sort *and* a one-pass
+    // `Tree::rebuild` over all 1M rows. Sorted: ~44ms local, 57.4ms CI,
+    // ceiling 89ms. Random fixtures.
+    assert_budget("tree toggle", elapsed, ceil_ms);
 }
+variants!(toggle_tree:
+    toggle_tree_at_1m_keys => (Fixture::Sorted, 94),
+    toggle_tree_at_1m_keys_random_flat => (Fixture::RandomFlat, 740),
+    toggle_tree_at_1m_keys_random_deep => (Fixture::RandomDeep, 841));
+
+fn time_to_new_list_tree_toggle(fx: Fixture, ceil_ms: u64) {
+    let base = big_state(fx);
+    let elapsed = time_to_new_list(&base, SLOW_SAMPLES, || key(KeyCode::Char('t')));
+    println!(
+        "[{}] time-to-new-list, tree toggle @ 1M keys: {elapsed:?}",
+        fx.label()
+    );
+    assert_budget("time-to-new-list (tree toggle)", elapsed, ceil_ms);
+}
+variants!(time_to_new_list_tree_toggle:
+    time_to_new_list_tree_toggle_random_deep => (Fixture::RandomDeep, 874));
+
+// ── (d2) collapse / expand one top-level group, fold alone, sort alone ──
+
+/// Tree mode, row 0 a top-level expanded group, cursor on it.
+fn tree_state(fx: Fixture) -> State {
+    let state = make_state(fx, true, SortBy::Name);
+    assert!(matches!(
+        state.tree.row(0),
+        Some(redis_pane_core::state::tree::Row::Group { expanded: true, .. })
+    ));
+    state
+}
+
+fn collapse_group(fx: Fixture, ceil_ms: u64) {
+    // The real path: Left on an expanded group row -> `collapse_group` in
+    // `update/keys.rs` -> `Tree::toggle` + a full `rebuild_list`.
+    let base = tree_state(fx);
+    let rows_before = base.tree.len();
+    let (collapsed, _) = update(base.clone(), key(KeyCode::Left));
+    assert!(
+        collapsed.tree.len() < rows_before,
+        "Left must collapse row 0"
+    );
+    drop(collapsed);
+    let elapsed = time_update_and_render(&base, SLOW_SAMPLES, || key(KeyCode::Left));
+    println!(
+        "[{}] collapse one top-level group @ 1M keys: {elapsed:?}",
+        fx.label()
+    );
+    // CEILING, calibrated on CI: today it re-filters and re-sorts everything
+    // (M6 task 2 makes it a fold-only rebuild).
+    assert_budget("collapse", elapsed, ceil_ms);
+}
+variants!(collapse_group:
+    collapse_group_at_1m_keys_random_flat => (Fixture::RandomFlat, 696),
+    collapse_group_at_1m_keys_random_deep => (Fixture::RandomDeep, 827));
+
+fn expand_group(fx: Fixture, ceil_ms: u64) {
+    let (collapsed, _) = update(tree_state(fx), key(KeyCode::Left));
+    let rows_collapsed = collapsed.tree.len();
+    let (expanded, _) = update(collapsed.clone(), key(KeyCode::Right));
+    assert!(
+        expanded.tree.len() > rows_collapsed,
+        "Right on a collapsed group must expand it"
+    );
+    drop(expanded);
+    let elapsed = time_update_and_render(&collapsed, SLOW_SAMPLES, || key(KeyCode::Right));
+    println!(
+        "[{}] expand one top-level group @ 1M keys: {elapsed:?}",
+        fx.label()
+    );
+    // CEILING.
+    assert_budget("expand", elapsed, ceil_ms);
+}
+variants!(expand_group:
+    expand_group_at_1m_keys_random_flat => (Fixture::RandomFlat, 734),
+    expand_group_at_1m_keys_random_deep => (Fixture::RandomDeep, 919));
+
+fn time_to_new_list_collapse(fx: Fixture, ceil_ms: u64) {
+    let base = tree_state(fx);
+    let elapsed = time_to_new_list(&base, SLOW_SAMPLES, || key(KeyCode::Left));
+    println!(
+        "[{}] time-to-new-list, collapse @ 1M keys: {elapsed:?}",
+        fx.label()
+    );
+    assert_budget("time-to-new-list (collapse)", elapsed, ceil_ms);
+}
+variants!(time_to_new_list_collapse:
+    time_to_new_list_collapse_random_deep => (Fixture::RandomDeep, 812));
+
+fn fold_alone(fx: Fixture, ceil_ms: u64) {
+    // `Tree::rebuild` over a name-sorted KeyView, nothing else.
+    let state = make_state(fx, false, SortBy::Name);
+    let mut samples = Vec::with_capacity(SLOW_SAMPLES);
+    let mut rows = 0;
+    for _ in 0..SLOW_SAMPLES {
+        let mut tree = Tree::default();
+        let started = Instant::now();
+        tree.rebuild(&state.keys, &state.list);
+        samples.push(started.elapsed());
+        rows = tree.len();
+    }
+    let elapsed = median(samples);
+    println!(
+        "[{}] fold alone (Tree::rebuild over a name-sorted view) @ 1M keys: {elapsed:?} ({rows} rows)",
+        fx.label()
+    );
+    // M6 task 5 target: <= 60ms. CEILING.
+    assert_budget("fold alone", elapsed, ceil_ms);
+}
+variants!(fold_alone:
+    fold_alone_at_1m_keys => (Fixture::Sorted, 75),
+    fold_alone_at_1m_keys_random_flat => (Fixture::RandomFlat, 248),
+    fold_alone_at_1m_keys_random_deep => (Fixture::RandomDeep, 333));
+
+fn name_sort_alone(fx: Fixture, ceil_ms: u64) {
+    // `KeyView::rebuild` with SortBy::Name and no filter, nothing else.
+    let keys = fx.keys();
+    let mut samples = Vec::with_capacity(SLOW_SAMPLES);
+    for _ in 0..SLOW_SAMPLES {
+        let mut view = KeyView::new("", FilterMode::Glob, SortBy::Name);
+        let started = Instant::now();
+        view.rebuild(&keys);
+        samples.push(started.elapsed());
+    }
+    let elapsed = median(samples);
+    println!(
+        "[{}] Name sort alone (KeyView::rebuild, no filter) @ 1M keys: {elapsed:?}",
+        fx.label()
+    );
+    // M6 task 4 target: <= 80ms. Sorted control AT TARGET; random CEILING,
+    //.
+    assert_budget("name sort", elapsed, ceil_ms);
+}
+variants!(name_sort_alone:
+    name_sort_alone_at_1m_keys => (Fixture::Sorted, 16),
+    name_sort_alone_at_1m_keys_random_flat => (Fixture::RandomFlat, 488),
+    name_sort_alone_at_1m_keys_random_deep => (Fixture::RandomDeep, 520));
 
 // ── (e) one ScanBatch page arriving into an already-1M-key set ──────────
 
-#[test]
-#[ignore]
-fn scan_batch_of_500_into_1m_keys() {
-    let base = big_state(1_000_000);
-    let page: Vec<Vec<u8>> = (1_000_000..1_000_500)
-        .map(|i| key_name(i).into_bytes())
-        .collect();
+fn scan_batch_flat(fx: Fixture, ceil_ms: u64) {
+    // Flat scan order: `KeyView::extend`'s `O(page)` path (M4 task 3).
+    let base = big_state(fx);
+    let page = fx.page(N, 500);
     let elapsed = time_update_and_render(&base, 11, || Msg::ScanBatch { keys: page.clone() });
-    println!("ScanBatch of 500 into 1M keys: {elapsed:?}");
-    // AT TARGET: this is task 3's named hot path. Before task 3,
-    // `scan_batch` called `rebuild_list` on every batch — a full-keyspace
-    // rebuild rather than an incremental append — which at 1M keys already
-    // landed at ~2.3ms locally, comfortably inside PLAN's "update + render
-    // at 1M keys within 16ms" bar every per-keystroke update is held to.
-    // After task 3, flat scan order (this case) takes `KeyView::extend`'s
-    // `O(page)` path instead (`docs/plans/m4-perf-scan.md` decision 1),
-    // which measures faster still — ~1.1ms locally.
-    assert!(
-        elapsed < Duration::from_millis(16),
-        "ScanBatch(500) into 1M took {elapsed:?}, budget is 16ms"
+    println!(
+        "[{}] ScanBatch of 500 into 1M keys: {elapsed:?}",
+        fx.label()
     );
+    // AT TARGET: PLAN's "update + render at 1M keys within 16ms".
+    assert_budget("ScanBatch(500)", elapsed, ceil_ms);
 }
+variants!(scan_batch_flat:
+    scan_batch_of_500_into_1m_keys => (Fixture::Sorted, 16),
+    scan_batch_of_500_into_1m_keys_random_deep => (Fixture::RandomDeep, 16));
 
-// ── (e2) one ScanBatch page, tree mode (the default view) ───────────────
-
-#[test]
-#[ignore]
-fn scan_batch_of_500_into_1m_keys_tree_mode() {
-    // Tree mode is the app's *default* view (DESIGN §1). Before M4 task 3,
-    // `rebuild_list` in tree mode forced a Name sort plus a full
-    // `Tree::rebuild` on *every* `ScanBatch`, not only the final one — ~130ms
-    // for this exact page, which is what made this a CEILING case.
-    //
-    // After task 3: `scan_batch` only pays for a full rebuild when the
-    // Loaded set has grown by `SCAN_REBUILD_GROWTH_PCT` (25%) since the last
-    // one (`docs/plans/m4-perf-scan.md` decision 2). `make_state` already
-    // rebuilds once at 1,000,000 keys, so the single extra page here
-    // (1,000,500) is nowhere near the next scheduled rebuild at 1,250,000 —
-    // this now measures the geometric schedule's "most pages are free"
-    // case, not a worst case. The worst case — a page that *does* land on a
-    // scheduled rebuild — is what `whole_scan_fold_in_tree_mode_from_empty`
-    // below measures instead, since it folds every page of a real scan
-    // rather than isolating one.
-    let base = make_state(1_000_000, true, SortBy::Scan);
-    let page: Vec<Vec<u8>> = (1_000_000..1_000_500)
-        .map(|i| key_name(i).into_bytes())
-        .collect();
+fn scan_batch_tree(fx: Fixture, ceil_ms: u64) {
+    // Tree mode is the app's *default* view (DESIGN §1). `make_state` has
+    // rebuilt at 1,000,000 keys, so the one extra page is nowhere near the
+    // next scheduled rebuild at 1,250,000 (M4 task 3's geometric schedule):
+    // this is the "most pages are free" case. The worst page is measured by
+    // `whole_scan_fold_in_tree_mode_from_empty`.
+    let base = make_state(fx, true, SortBy::Scan);
+    let page = fx.page(N, 500);
     let elapsed = time_update_and_render(&base, 11, || Msg::ScanBatch { keys: page.clone() });
-    println!("ScanBatch of 500 into 1M keys, tree mode: {elapsed:?}");
-    // AT TARGET (tightened by M4 task 3 from a 195ms CEILING): measured
-    // ~1.0ms locally now that this page falls between scheduled rebuilds.
-    assert!(
-        elapsed < Duration::from_millis(16),
-        "ScanBatch(500) into 1M (tree mode) took {elapsed:?}, budget is 16ms"
+    println!(
+        "[{}] ScanBatch of 500 into 1M keys, tree mode: {elapsed:?}",
+        fx.label()
     );
+    // AT TARGET (tightened by M4 task 3 from a 195ms CEILING).
+    assert_budget("ScanBatch(500) tree mode", elapsed, ceil_ms);
 }
+variants!(scan_batch_tree:
+    scan_batch_of_500_into_1m_keys_tree_mode => (Fixture::Sorted, 16),
+    scan_batch_of_500_into_1m_keys_tree_mode_random_deep => (Fixture::RandomDeep, 16));
 
-// ── (e3) one ScanBatch page, flat view sorted by name ───────────────────
-
-#[test]
-#[ignore]
-fn scan_batch_of_500_into_1m_keys_flat_sorted_by_name() {
-    // The middle case between the cheap scan-order default and the
-    // tree-mode default: flat (no folding), but already sorted by Name
-    // rather than Scan order, so every page that *does* trigger a rebuild
-    // still pays for a full re-sort — just not the `Tree::rebuild` on top
-    // of it. This was already AT TARGET before M4 task 3 (a re-sort alone,
-    // with no folding, was never what blew the budget) — ~7ms locally —
-    // and after task 3's geometric rebuild schedule this single page is
-    // also, like the tree-mode case above, nowhere near the next scheduled
-    // rebuild, so it now measures even cheaper (~2ms).
-    let base = make_state(1_000_000, false, SortBy::Name);
-    let page: Vec<Vec<u8>> = (1_000_000..1_000_500)
-        .map(|i| key_name(i).into_bytes())
-        .collect();
+fn scan_batch_flat_name_sorted(fx: Fixture, ceil_ms: u64) {
+    // Flat, but sorted by Name: a page that does not land on a scheduled
+    // rebuild is a cheap append; one that does pays a full re-sort.
+    let base = make_state(fx, false, SortBy::Name);
+    let page = fx.page(N, 500);
     let elapsed = time_update_and_render(&base, 11, || Msg::ScanBatch { keys: page.clone() });
-    println!("ScanBatch of 500 into 1M keys, flat sorted by name: {elapsed:?}");
+    println!(
+        "[{}] ScanBatch of 500 into 1M keys, flat sorted by name: {elapsed:?}",
+        fx.label()
+    );
     // AT TARGET: PRD §7's 16ms.
-    assert!(
-        elapsed < Duration::from_millis(16),
-        "ScanBatch(500) into 1M (flat, sorted by name) took {elapsed:?}, budget is 16ms"
-    );
+    assert_budget("ScanBatch(500) flat name-sorted", elapsed, ceil_ms);
 }
+variants!(scan_batch_flat_name_sorted:
+    scan_batch_of_500_into_1m_keys_flat_sorted_by_name => (Fixture::Sorted, 16),
+    scan_batch_of_500_into_1m_keys_flat_sorted_by_name_random_deep => (Fixture::RandomDeep, 16));
 
 // ── whole scan, folded page by page, in tree mode (the default view) ────
 
-#[test]
-#[ignore]
-fn whole_scan_fold_in_tree_mode_from_empty() {
+/// Worst-page ceiling and total gate for the whole scan.
+struct ScanBudget {
+    worst_ms: u64,
+    total_s: u64,
+}
+
+fn whole_scan_fold(fx: Fixture, budget: ScanBudget) {
     // Tree mode is the default view, so this is what a fresh launch against
-    // a 1M-key server actually does: 2,000 pages of 500 keys each, folded
-    // one at a time via `update(state, Msg::ScanBatch { .. })`, exactly as
-    // `crates/app/src/redis/scan.rs`'s real dispatch loop does it. The
-    // isolated `scan_batch_of_500_into_1m_keys_tree_mode` case above times
-    // one page *at* 1M keys; this one times every page *on the way there*,
-    // which is the only way to see whether the per-page cost stays flat
-    // (true O(n) total work) or grows with the keyspace already loaded
-    // (O(n²) total, which is what the pre-task-3 always-rebuild code did).
+    // a 1M-key server does: 2,000 pages of 500 keys, folded one at a time
+    // via `update(state, Msg::ScanBatch { .. })`, as
+    // `crates/app/src/redis/scan.rs`'s dispatch loop does. Pages arrive in
+    // the fixture's scan order (random for the random fixtures: the real
+    // case). M4 task 3's geometric rebuild schedule keeps most pages an
+    // `O(page)` append; the ~30 pages that cross 25% growth pay a full
+    // synchronous Name sort + `Tree::rebuild`, and late in the scan those
+    // are the frame-freezing ones. Reports the worst page AND the total.
     //
-    // Before M4 task 3 this took ~120s locally (and tripped the wall cap
-    // below every time) — rebuilding tree mode's full index on every page
-    // meant each page cost more than the last. After task 3's geometric
-    // rebuild schedule (`docs/plans/m4-perf-scan.md` decision 2) the whole
-    // scan finishes in well under a second: most pages are a plain
-    // `O(page)` append, and only the ~60 pages that cross the 25%-growth
-    // threshold pay for a full rebuild, at geometrically growing (and so,
-    // on average, proportionally shrinking) sizes.
-    //
-    // Still capped by wall time, not by page count, as a safety net: this
-    // test runs in release in CI, and a future regression that reintroduces
-    // O(n²) behaviour should time out and report how far it got rather than
-    // hang the job. If the cap trips, the loop stops early and prints a
-    // *linear* extrapolation of the full-scan total from the completed
-    // pages — likely optimistic if the real cost is superlinear, which is
-    // called out explicitly in the printed line rather than asserted on.
+    // Capped by wall time, not page count, so a regression to O(n²) times
+    // out and reports how far it got rather than hanging the job.
     const TOTAL_PAGES: usize = 2_000; // 2,000 × 500 = 1,000,000 keys
     const WALL_CAP: Duration = Duration::from_secs(240);
 
     let mut state = State {
-        cols: COLS,
-        rows: ROWS,
-        connection: Connection {
-            target: "perf-harness:6379/0".into(),
-            environment: Environment::Staging,
-            source: Source::Profile("perf".into()),
-            topology: None,
-        },
-        last_read_ms: Some(0),
-        link: Link::Up {
-            version: "8.4.0".into(),
-            tracking: Tracking::Armed,
-        },
         list: KeyView::new("", FilterMode::Glob, SortBy::Scan),
         tree_mode: true,
-        ..State::default()
+        ..base_state()
     };
 
     let run_started = Instant::now();
@@ -422,9 +702,7 @@ fn whole_scan_fold_in_tree_mode_from_empty() {
     let mut worst_page_index = 0usize;
     let mut pages_done = 0usize;
     for page in 0..TOTAL_PAGES {
-        let batch: Vec<Vec<u8>> = (page * 500..page * 500 + 500)
-            .map(|i| key_name(i).into_bytes())
-            .collect();
+        let batch = fx.page(page * 500, 500);
         let started = Instant::now();
         let (next, _cmds) = update(state, Msg::ScanBatch { keys: batch });
         let elapsed = started.elapsed();
@@ -441,15 +719,15 @@ fn whole_scan_fold_in_tree_mode_from_empty() {
     }
     let total = run_started.elapsed();
     let capped = pages_done < TOTAL_PAGES;
-    // The median, not just the worst page: most pages take the `O(page)`
-    // incremental-append-equivalent path or skip the rebuild entirely
-    // (decision 2), so the median is the number a reader actually feels on
-    // a typical page, with the worst page (below) answering "how bad does
-    // it get on the pages that do pay for a rebuild."
+    let slow_pages = page_times
+        .iter()
+        .filter(|d| **d > Duration::from_millis(16))
+        .count();
     let median_page_time = median(page_times);
 
     println!(
-        "whole-scan fold, tree mode: {pages_done}/{TOTAL_PAGES} pages ({} keys loaded), total {total:?}, median page {median_page_time:?}, worst page #{worst_page_index} (at {} keys) took {worst_page_time:?}{}",
+        "[{}] whole-scan fold, tree mode: {pages_done}/{TOTAL_PAGES} pages ({} keys loaded), total {total:?}, median page {median_page_time:?}, worst page #{worst_page_index} (at {} keys) took {worst_page_time:?}, {slow_pages} pages over 16ms{}",
+        fx.label(),
         pages_done * 500,
         (worst_page_index + 1) * 500,
         if capped {
@@ -466,48 +744,56 @@ fn whole_scan_fold_in_tree_mode_from_empty() {
         );
     }
 
-    // AT TARGET (tightened by M4 task 3 from an observed, not asserted,
-    // figure): the whole scan used to take ~120s locally and trip the wall
-    // cap every run; it now measures ~0.6–0.8s. "Well under 10s" is the
-    // plan doc's own target for this gate — the measured figure has well
-    // over 10× headroom on top of it, which also covers a slower CI
-    // runner.
+    // The total must stay well inside the wall gate; the median page is AT
+    // TARGET (most pages are free); the worst page is a CEILING (PRD §7
+    // target 16ms) whose value is set per fixture.
     assert!(
-        total < Duration::from_secs(10),
-        "whole scan took {total:?}, gate is 10s"
+        total < Duration::from_secs(budget.total_s),
+        "whole scan took {total:?}, gate is {}s",
+        budget.total_s
     );
-    // CEILING on the worst single page: PRD §7's target is 16ms (one
-    // frame) — still not met, because the pages that land on a scheduled
-    // rebuild still pay for a full Name sort plus a full `Tree::rebuild`.
-    // Measured ~103–143ms before M4 task 4, ~31–32ms after (allocation-free
-    // fold, O(1) collapsed lookup); 45.2ms on CI. Ceiling = CI × 1.5,
-    // rounded up: 68ms (was 220ms).
-    assert!(
-        worst_page_time < Duration::from_millis(68),
-        "worst page took {worst_page_time:?}, ceiling is 68ms (target 16ms)"
-    );
-    // AT TARGET: the median page, by contrast, already meets PRD §7's 16ms
-    // bar — proof that the geometric schedule, not merely a faster rebuild,
-    // is what fixed the common case.
+    assert_budget("worst scan page", worst_page_time, budget.worst_ms);
     assert!(
         median_page_time < Duration::from_millis(16),
         "median page took {median_page_time:?}, budget is 16ms"
     );
 }
 
-// ── render alone, at 1M ───────────────────────────────────────────────────
+#[test]
+#[ignore]
+fn whole_scan_fold_in_tree_mode_from_empty() {
+    // Sorted control. Before M4 task 3 this took ~120s; ~0.24s now.
+    // Worst page: 31ms local, 47.3ms on a slow CI run, ceiling 71ms; total gate 10s.
+    whole_scan_fold(
+        Fixture::Sorted,
+        ScanBudget {
+            worst_ms: 71,
+            total_s: 10,
+        },
+    );
+}
 
 #[test]
 #[ignore]
-fn render_alone_at_1m_keys() {
-    // Companion to `golden.rs`'s `rendering_cost_does_not_grow_with_the_keyspace`,
-    // which proves the same shape at 200k keys in the **debug** profile (the
-    // default `cargo test` run). That test stays: it is Docker-free, runs on
-    // every push, and catches a virtualization regression immediately,
-    // whereas this one needs `--release` and `--ignored` and only runs on
-    // the dedicated perf job. Neither supersedes the other — 200k-debug is
-    // the fast tripwire, 1M-release is the number PRD §7 actually names.
-    let base = big_state(1_000_000);
+fn whole_scan_fold_in_tree_mode_from_empty_random_deep() {
+    // CEILING: worst page up to 479ms (slow CI run) x 1.5 = 719ms; total gate
+    // 2.13s x 1.5, rounded up = 4s. Target: worst page <= 16ms.
+    whole_scan_fold(
+        Fixture::RandomDeep,
+        ScanBudget {
+            worst_ms: 719,
+            total_s: 4,
+        },
+    );
+}
+
+// ── render alone, at 1M ───────────────────────────────────────────────────
+
+fn render_alone(fx: Fixture, ceil_ms: u64) {
+    // Companion to `golden.rs`'s `rendering_cost_does_not_grow_with_the_keyspace`
+    // (200k keys, debug profile, the fast tripwire); this is the 1M-release
+    // number PRD §7 names.
+    let base = big_state(fx);
     let mut samples = Vec::with_capacity(50);
     for _ in 0..50 {
         let started = Instant::now();
@@ -515,33 +801,27 @@ fn render_alone_at_1m_keys() {
         samples.push(started.elapsed());
     }
     let elapsed = median(samples);
-    println!("render alone @ 1M keys: {elapsed:?}");
-    // AT TARGET: R2.6, PRD §7 — a frame must be drawable in 16ms regardless
-    // of keyspace size; the list is virtualized (render cost is a function
-    // of viewport, not keyspace).
-    assert!(
-        elapsed < Duration::from_millis(16),
-        "render took {elapsed:?}, budget is 16ms"
-    );
+    println!("[{}] render alone @ 1M keys: {elapsed:?}", fx.label());
+    // AT TARGET: R2.6, PRD §7 — render cost is a function of viewport.
+    assert_budget("render", elapsed, ceil_ms);
 }
+variants!(render_alone:
+    render_alone_at_1m_keys => (Fixture::Sorted, 16),
+    render_alone_at_1m_keys_random_deep => (Fixture::RandomDeep, 16));
 
 // ── memory accounting: LoadedSet + View + Tree at 1M keys ────────────────
 
-#[test]
-#[ignore]
-fn loaded_set_plus_view_plus_tree_fit_inside_the_budget() {
-    // Extends `loaded.rs`'s `a_million_keys_fit_inside_the_budget`, which
-    // only accounts for the `LoadedSet` arena itself, to the two structures
-    // that sit beside it in a real browse: the `View`'s order index (ADR-0010
-    // already budgets ~15MB of indices at 1M keys, this is the part of that
-    // which lives in `KeyView`) and `Tree`'s folded rows (R2.3) — built here
-    // with tree mode on, since an unbuilt `Tree` is empty and would make this
-    // test pass by omission. Pure arithmetic, no RSS measurement, so it is
-    // deterministic cross-machine and does not need `--release` to be fast
-    // enough — ignored anyway, to keep it with the rest of this file's
-    // 1M-key fixtures rather than splitting the harness across two files.
-    let mut state = big_state(1_000_000);
-    state.tree_mode = true;
+fn memory_budget(fx: Fixture, _unused: u64) {
+    // Extends `loaded.rs`'s `a_million_keys_fit_inside_the_budget` to the two
+    // structures beside the arena in a real browse: `KeyView`'s order index
+    // and `Tree`'s folded rows (R2.3), built with tree mode on (an unbuilt
+    // `Tree` is empty and would pass by omission). Pure arithmetic, no RSS.
+    let mut state = State {
+        keys: fx.build_keys(),
+        list: KeyView::new("", FilterMode::Glob, SortBy::Scan),
+        tree_mode: true,
+        ..base_state()
+    };
     state.rebuild_list();
 
     let keys_bytes = state.keys.heap_bytes();
@@ -550,18 +830,16 @@ fn loaded_set_plus_view_plus_tree_fit_inside_the_budget() {
     let total = keys_bytes + view_bytes + tree_bytes;
 
     println!(
-        "LoadedSet {:.1}MB + View {:.1}MB + Tree {:.1}MB = {:.1}MB @ 1M keys",
+        "[{}] LoadedSet {:.1}MB + View {:.1}MB + Tree {:.1}MB = {:.1}MB @ 1M keys",
+        fx.label(),
         keys_bytes as f64 / 1024.0 / 1024.0,
         view_bytes as f64 / 1024.0 / 1024.0,
         tree_bytes as f64 / 1024.0 / 1024.0,
         total as f64 / 1024.0 / 1024.0,
     );
 
-    // AT TARGET: PRD §7's 250MB RSS budget, R2.6/ADR-0010. This pure
-    // arithmetic total is not RSS (no allocator overhead, no runtime, no
-    // Viewer), so it is held to half the budget, exactly as
-    // `a_million_keys_fit_inside_the_budget` already does, leaving room for
-    // the rest of the process.
+    // AT TARGET: PRD §7's 250MB RSS budget, R2.6/ADR-0010. Not RSS, so held
+    // to half the budget, as `a_million_keys_fit_inside_the_budget` does.
     let budget = 250 * 1024 * 1024;
     assert!(
         total < budget / 2,
@@ -570,3 +848,6 @@ fn loaded_set_plus_view_plus_tree_fit_inside_the_budget() {
         budget / 2 / 1024 / 1024
     );
 }
+variants!(memory_budget:
+    loaded_set_plus_view_plus_tree_fit_inside_the_budget => (Fixture::Sorted, 0),
+    loaded_set_plus_view_plus_tree_fit_inside_the_budget_random_deep => (Fixture::RandomDeep, 0));

@@ -1,6 +1,6 @@
 # M6 task 1: Honest harness
 
-Status: **planned.**
+Status: **done** (PR #78).
 
 ## Context
 
@@ -67,3 +67,83 @@ Every later M6 task is judged by these numbers, so they have to describe the rea
 ## Out of scope
 
 Any speedup. This task only measures.
+
+## Outcome
+
+Done in `crates/core/tests/perf.rs`; no product code changed. The suite grew from 13 to 43 tests
+and runs in about 40 s locally and 32-50 s of test time (51-77 s job) on CI.
+
+- **Fixtures** `sorted`, `random_flat` and `random_deep` are built with a fixed-seed splitmix64
+  shuffle, once per process and cloned per test (the memory test builds fresh, because
+  `heap_bytes` counts capacity and a clone is exact-fit).
+- **Existing tests** keep their names and ceilings on `sorted` and gain a `_random_deep` twin.
+  `random_flat` runs for the rebuild-heavy tests only (sort, tree toggle, debounced rebuild, fold,
+  collapse, expand).
+- **New:** collapse, expand (through `update` with Left and Right on row 0), fold alone, Name sort
+  alone, whole scan on `random_deep` (worst page, total, count of pages over 16 ms), and four
+  `time_to_new_list_*` tests (tree toggle, sort change, debounced filter rebuild, collapse). Today
+  each is the single `update`; task 3 redefines them as time until the swap.
+- **Ceilings** are 1.5x the slowest figure observed (two local runs and three CI runs), rounded
+  up. M4's rule (1.5x one CI figure) did not hold: the first CI run of this PR was faster than
+  the laptop (0.7-0.9x), the next two were up to 1.9x slower (whole scan on sorted 182 ms, then
+  339 and 343 ms), and they tripped 8 and then 4 of the tighter ceilings. The CI column below is
+  the first run. Three `sorted` ceilings were also raised (debounce 49 to 58, tree toggle 89 to 94,
+  whole-scan worst page 68 to 71) because the slow runs left them under 1.5x. Scroll, keystroke,
+  narrowing, scan-batch and render stay AT TARGET at 16 ms.
+- **Surprise:** `filter first character` on `random_deep` is 22 ms, over 16 ms, so it is a
+  CEILING (33 ms) there and AT TARGET only on the sorted control.
+- **Memory** on `random_deep` is 99.4 MB (LoadedSet 56.0, View 7.6, Tree 35.8) against 83.4 MB
+  sorted, inside the 250 MB budget; the longer names account for the difference.
+
+### Measurements (ms, local mean of 2 runs / CI)
+
+| Measurement (ms) | sorted local / CI | random_flat local / CI | random_deep local / CI |
+|---|---|---|---|
+| Name sort alone (KeyView::rebuild, no filter) | 4.22 / 3.92 | 241 / 205 | 280 / 228 |
+| ScanBatch(500) into 1M, flat scan order | 1.71 / 3.94 | - | 1.63 / 1.22 |
+| ScanBatch(500) into 1M, flat sorted by name | 1.37 / 2.49 | - | 1.42 / 1.08 |
+| ScanBatch(500) into 1M, tree mode | 1.62 / 3.43 | - | 1.52 / 2.16 |
+| collapse one top-level group | - | 386 / 263 | 473 / 372 |
+| expand one top-level group | - | 392 / 327 | 510 / 390 |
+| filter backspace keystroke (rebuild deferred) | 0.04 / 0.06 | - | 0.05 / 0.07 |
+| filter first character | 3.89 / 3.20 | - | 22 / 22 |
+| filter keystroke | 0.27 / 0.25 | - | 0.56 / 2.18 |
+| filter rebuild after debounce | 22 / 18 | 23 / 19 | 40 / 37 |
+| fold alone (Tree::rebuild over a name-sorted view) | 38 / 24 | 151 / 107 | 221 / 165 |
+| render alone | 0.04 / 0.04 | - | 0.05 / 0.05 |
+| scroll keystroke | 0.04 / 0.07 | - | 0.05 / 0.08 |
+| sort change (scan -> name) | 4.23 / 4.45 | 242 / 218 | 278 / 225 |
+| time-to-new-list, collapse | - | - | 478 / 360 |
+| time-to-new-list, debounced filter rebuild | - | - | 40 / 39 |
+| time-to-new-list, sort change | - | - | 281 / 227 |
+| time-to-new-list, tree toggle | - | - | 499 / 387 |
+| toggle tree mode | 44 / 33 | 392 / 304 | 501 / 386 |
+| whole scan, tree mode: worst page | 31.5 / 23.1 | - | 411 / 327 |
+| whole scan, tree mode: total | 241 / 182 | - | 1829 / 1285 |
+| memory LoadedSet+View+Tree (MB) | 83.4 / 83.4 | - | 99.4 / 99.4 |
+
+### Ceilings (1.5 x slowest observed, rounded up, ms)
+
+| Test (random_deep unless noted) | Ceiling |
+|---|---|
+| Name sort alone | 520 (flat 488) |
+| Sort change | 527 (flat 497) |
+| Tree toggle | 841 (flat 740); sorted 94 |
+| Collapse / expand | 827 / 919 (flat 696 / 734) |
+| Fold alone | 333 (flat 248); sorted 75 |
+| Filter first character | 52 |
+| Debounced filter rebuild | 96 (flat 63); sorted 58 |
+| time-to-new-list: toggle / sort / filter / collapse | 874 / 533 / 97 / 812 |
+| Whole scan worst page / total gate | 719 / 4 s; sorted 71 / 10 s |
+
+### Findings for tasks 2-5
+
+1. **Collapse costs as much as a tree toggle** (386-473 ms vs 392-501 ms locally): it is a full
+   re-filter, re-sort and re-fold. Task 2's fold-only path removes the sort and so should leave
+   only the fold (about 165-220 ms), which task 5 then has to shrink.
+2. **Sort and fold split roughly 55/45 on random_deep** (280 vs 221 ms locally; 228 vs 165 ms on
+   CI), and are about 65x (sort) and 6x (fold) their sorted-control cost. The fold alone is not cheap at random
+   arena order, so task 5's gather pass matters as much as task 4's sort.
+3. **The whole-scan worst page is 411 ms (327 ms CI)** at 867,500 keys, 12 pages exceed 16 ms,
+   and the scan total is 1.8 s (1.3 s CI), so the scan itself is fine: the problem is purely the
+   late scheduled rebuilds that task 3 must slice.
