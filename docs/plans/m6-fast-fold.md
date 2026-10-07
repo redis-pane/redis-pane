@@ -1,6 +1,6 @@
 # M6 task 5: Fast fold
 
-Status: **planned.**
+Status: **done** (PR #82; see the Outcome, then the phase log it summarises).
 
 ## Context
 
@@ -56,3 +56,254 @@ task 4's sort emits each key's LCP with its predecessor.
 - **Task 3's job equivalence tests pass unchanged.**
 - **Perf:** fold alone, time until the new list appears for collapse (fold only) and for tree
   toggle. Report local and CI figures.
+
+## Outcome
+
+Built as designed, and past the targets: the fold at 1M random_deep is 27-33 ms alone (target
+60) and a tree toggle shows its list in 108-115 ms (target 250). Decisions 1 and 2 are done as
+written, with three additions the profile asked for (below). The per-phase working notes (the
+profile split, the experiment matrices, the calibration) follow this section.
+
+**Profile split (phase 1, 1M random_deep, 207 ms fold).** Reading one byte of each name in view
+order costs 6.5 ms (independent loads overlap); `split_segments` takes it to 74 ms (the loop depends
+on the loaded line, so the miss is serialised), the shared-segment byte comparison adds ~49 ms, rows,
+counts and open groups ~55 ms, the fix-up 4 ms. With one collapsed prefix the per-separator hash
+probes in `ancestor_collapsed` added ~115 ms (294 ms key pass).
+
+**LCP design choice (decision 1).** A parallel `lcp: Vec<u32>` column on `KeyView`, read through
+`KeyView::name_lcp()`, not carried through `FoldProgress`. Collapse and expand are fold-only jobs with
+no Sort stage, so a job-carried LCP could never reach the hottest everyday case; a column on the view
+is there when they start, the job moves its sorter's by-product into it at the swap, and the fold
+takes an `Option<&[u32]>`, so one function serves both. It stays correct because every writer of
+`order` maintains it: `rebuild` and `install` set it, `narrow` patches it (the running minimum of the
+adjacent LCPs, exact), `extend` clears it (Scan only), and `name_lcp()` refuses it unless the order was
+built for Name and the column is exactly as long as `order`. Without a column the fold computes each
+LCP against the previous name (`common_prefix`) and runs the same code: one fold, not two. u32 (4 MB
+at 1M) rather than u16: a u16 would be exact (names are capped at 65535 bytes) but the sorter emits
+u32 and converting costs more than the 2 MB saved. Shared segments = the previous key's separators at
+positions `< lcp`; boundary semantics and the multi-byte separator rule (`char as u8`, low byte) are in
+the phase 2 notes and pinned by tests against a verbatim copy of the old fold.
+
+**Additions beyond the two decisions** (all in the same loop, all property-tested against the old
+fold): descendant counts recorded as `placed_at_close - placed_at_open` (drops the `counts` column and
+the per-key pass over every open group); the "key is hidden" test reads the innermost open group
+instead of probing every separator, and `prefix_is_collapsed` is skipped unless some collapsed prefix
+has that length; the open-group stack carries each group's collapsed flag (reading `rows[r]`, a row far
+back in a 32 MB vector, cost ~11 ms per 1M keys); a SWAR separator search.
+
+**Gather vs lookahead (decision 2).** Lookahead (touch the name k keys ahead inside the loop, k =
+4-64): 78-81 ms against 70 without, worse, because the touch is an ordinary load that blocks
+retirement and the loop body is too long to overlap it. A chunk touch pass (a loop that only loads
+each name's two relevant lines for the next 64-16384 keys, then the fold loop): **28.5-30.5 ms**
+(256 keys best, flat to 4096). A gather that copies the tails into a buffer (isolated harness, names +
+shared + tail scan only): 37.0 ms against 35.0 for nothing and 17.9 for the touch pass. Kept: the touch
+pass, `touch_names`, 256 keys per chunk, no `unsafe`. The fold over an arena stored in name order, with
+no misses, takes 16 ms, so the fold now sits 12 ms above its floor.
+
+**Slice (phase 4): unchanged at 32768.** Worst step at 32768 is ~1.4 ms local (sort refine and fold
+tie); 65536 would save 6 ms of ~116 (5%) and make rebuilds of up to 65535 keys synchronous. Only the
+comment changed.
+
+**Before and after** (1M random_deep unless noted; "local" is Apple Silicon at load average 2.5-6, the
+best of the two or three runs; CI is the `perf` job, `ubuntu-latest`, before = task 4's Outcome, after =
+three runs of this PR's head, shown as a range)
+
+| | before local / CI | after local / CI |
+|---|---|---|
+| Fold alone (target <= 60 local) | 207 / 165 ms | 27-33 / 37-45 ms |
+| Fold alone, random_flat | 118 / 107 ms | 30 / 35-48 ms |
+| Fold alone, sorted control | 39.5 / 24 ms | 15-19 / 16-26 ms |
+| Collapse time-to-swap | 171-183 / 193-244 ms | 18.6-19 / 28-36 ms |
+| Expand time-to-swap | 200 / n.a. | 28 / 42-51 ms |
+| Tree toggle time-to-swap, from scan order (goal <= 250) | 295-352 (309 here) / 363-383 ms | 108-115 / 147-194 ms |
+| Tree toggle time-to-swap, from a Name-sorted flat view | 225 / n.a. | 30 / 41-53 ms |
+| Sort change time-to-swap (unchanged code) | 88-109 / 145 ms | 82-84 / 104-145 ms |
+| Worst step, tree toggle | 8.1-8.5 (fold) / 9.3 ms | 1.4-1.7 / 2.8-3.4 ms |
+| Worst step, collapse / expand | 6.9 / 7.4 ms local | 0.8 / 1.0 ms local; 1.3-1.6 / 2.6-3.4 CI |
+| Whole scan, tree mode: worst page | 9.4 (74 on a noisy run) / 9.2 ms | 1.8 / 2.4-2.9 ms |
+| Whole scan, tree mode: total | 1.43 s / 1.36 s | 0.54 s / 0.55-0.82 s |
+| Whole scan: scan end to a level list | 441 ms local | 119 ms local |
+| Memory: View | 7.6 MB | 11.4 MB (+3.8 MB, the LCP column) |
+| Memory: LoadedSet + View + Tree | 107.4 MB | 111.3 MB |
+| Memory: shown list + job peak / after the swap | 124.4 / 104.9 MB | 116.4 / 108.8 MB (no `counts` column) |
+
+**Ceilings re-set** from the three CI runs, 1.5x the slowest seen rounded up (local never exceeded
+CI): fold alone sorted 75 -> 40, random_flat 248 -> 73, random_deep 333 -> 68 ms; time-to-new-list
+collapse 290 -> 55, tree toggle 575 -> 292 ms (the goal is 250; CI's slowest run was 194); whole-scan
+total gates 6 s -> 2 s (random_deep) and 10 s -> 2 s (sorted). Per-step gates stay 16 ms (AT TARGET).
+The CI runs varied up to 1.3x between attempts of the same code (fold 36.6, 45.3, 45.0).
+
+**Persistent name order: still no-go.** Stage totals for a tree toggle from scan order, local: sort
+87 ms (refine 68), fold 31 ms, filter and inverse 2 ms, of ~120: the sort is now ~72% of the toggle,
+not 30% as in task 4. Removing it would take a toggle to ~35 ms local, but the goal (250 ms) is met
+with 1.3x to spare on CI's slowest run (194 ms), and a persistent order is a second 4 MB column that
+every scan page, narrow and filter change must keep valid, which is the invalidation surface this
+milestone has just spent three tasks making safe. Reopen if the goal slips or the target moves under
+100 ms on CI; the sort is where the time is.
+
+**Task 6 (filter fast path) gate: met.** Debounced filter rebuild at 1M random_deep: 40.2 ms local
+(35.6-64 ms CI) of which the filter stage is 40.0 ms (99.6%), the inverse 0.17 ms, no sort and no
+fold: the filter pass is the longest, indeed the only, stage. The filter's first character (a
+synchronous narrowing pass, not a job) is 21.5 ms local and 20-35 ms CI, the one keystroke figure at
+1M random_deep still over the 16 ms frame, and it is the same pass. So task 6 is warranted by its own
+gate; no time-to-swap goal is missed without it (40 ms against 250).
+
+**Deviations**
+- The baseline run on main had two spurious perf failures (a 35 ms fold step, a 74 ms page) on a
+  loaded machine; both measure ~8 ms on a quiet one. No code involved.
+- `perf.rs` gained a `stage totals` line in `profile()` (summed time per stage), because task 6's
+  gate is a question about totals, not worst steps.
+- A first gather/lookahead matrix was invalid (zsh does not word-split `$cfg`); discarded and re-run.
+- The gather with a copy was measured in an isolated harness, not wired into the fold, because it
+  lost to doing nothing there.
+- `Tree` now carries `collapsed_lens`, a derived column recomputed by `toggle`; `PartialEq` on `Tree`
+  includes it, and `shell()` copies it.
+- Task 2 and 3's equivalence tests pass unchanged; the job-equivalence test gained one assertion (the
+  swapped view's column equals a brute-force LCP).
+- GitHub's push endpoint returned HTTP 500 for ~15 minutes mid-task; pushes resumed on their own.
+
+## Phase log (working notes; folded into the Outcome at the end)
+
+### Phase 1: baseline on main (local, load avg ~2.2-2.7, noisy machine)
+
+| Measure (1M random_deep unless noted) | Local |
+|---|---|
+| fold alone (`Tree::rebuild`) | 207 ms (sorted 39.5, random_flat 118) |
+| collapse / expand time-to-swap | 171-183 / 200 ms; worst step 6.9 / 7.4 ms |
+| tree toggle time-to-swap from scan order | 309 ms (time_to_new_list) |
+| tree toggle from Name-sorted flat (profile) | 225 ms; worst step 8.5 ms |
+| whole-scan fold (tree mode) | total 1.43 s, scan end to level list 441 ms, worst page 74 ms (3 pages over 16 ms: noise, `fold` step 40 ms) |
+| memory | LoadedSet 64.0 + View 7.6 + Tree 35.8 = 107.4 MB; job peak: 124.4 MB during, 104.9 MB after |
+| slice calibration, worst fold step @ 8192/16384/24576/32768/49152/65536 | 2.3 / 4.2 / 5.8 / 8.1 / 11.0 / 14.8 ms |
+
+Two perf tests failed on this noisy baseline run (`toggle_tree_at_1m_keys_random_deep`: a 34.9 ms
+fold step; `whole_scan_fold..._random_deep`: 74 ms page): the step normally measures 8 ms, so these
+are scheduler noise, not code.
+
+Throwaway profile (1M random_deep, Name-sorted view, median of 5, no collapsed prefix):
+
+| Slice of the work | Cumulative time |
+|---|---|
+| A. read one byte of each name in view order (the miss floor; loads are independent, so the core overlaps them) | 6.5 ms |
+| B. + `split_segments` (byte loop that depends on the loaded line) | 74 ms |
+| C. + shared-segment byte comparison | 123 ms (compare itself ~49 ms) |
+| D. full key pass (rows, counts, open_groups) | 178 ms (rows/counts/groups ~55 ms) |
+| fix-up pass | 4 ms |
+| D with one collapsed prefix: key pass | 294 ms (the per-separator `HashSet<String>` probes in `ancestor_collapsed` cost ~115 ms, eight SipHash probes per key) |
+
+So: the split is 74 ms of which most is the *serialised* miss (A shows the misses are cheap when
+independent), the comparison ~49 ms, the row pushes ~55 ms, and with any collapsed prefix the
+ancestor probes are the single biggest cost.
+
+### Phase 2: LCP-driven fold
+
+**Shared segments.** `shared` = the number of the previous key's separators that sit before byte
+`lcp` (`s < lcp`). Equivalent to the old comparison: segment *i* is equal in both names exactly when
+both carry the same bytes through its terminating separator, i.e. when that separator is inside the
+shared prefix; a separator *at* the LCP is the first differing byte or past it (so `a:b`, `a:c`
+share one segment, `a`, `a:` share none). A key that is a prefix of its predecessor (`lcp = len`)
+shares the separators it has; `a::b` empty segments, a trailing separator and no separator fall out
+of the same rule (pinned by a boundary test and a randomised oracle). The separator is
+`self.separator as u8`, the low byte of the char, exactly as before (`é` and `→` are tested and
+behave as they did).
+
+**What it removed.** The fold no longer builds `(offset, len)` segment lists or compares bytes: it
+keeps one `seps: Vec<u16>` (positions of the separators of the last key), truncates it to `shared`,
+and scans only `name[lcp..]` for new separators, so the shared prefix's bytes are never read.
+Group rows are built from the separator positions.
+
+**Two further changes the profile asked for** (both in the same loop):
+- *Descendant counts without the per-key pass.* A group records `placed` when it opens and is given
+  `placed_at_close - placed_at_open` when it closes (when a later key shares fewer segments, or at
+  the end). The `counts` column (8 MB at 1M, one push per row) and the per-key
+  `for g in open_groups { counts[g] += 1 }` are gone; the fix-up pass only writes the inverse now.
+- *No per-separator hashing for the collapsed test.* The old per-key `ancestor_collapsed(name)`
+  probed the hash set once per separator (the 115 ms collapsed-prefix cost in the profile). With no
+  irregular prefix, the key is hidden exactly when the innermost open group is collapsed (the groups
+  stop at the first collapsed prefix), so that is read directly. And `prefix_is_collapsed`
+  (still needed for each *new* group) is skipped unless a collapsed prefix has that byte length
+  (`collapsed_lens`, recomputed by `toggle`). The irregular-prefix path (a hand-toggled prefix that
+  does not end in the separator) keeps the old linear scan.
+
+**Where the LCP lives: a parallel column on `KeyView` (`lcp: Vec<u32>`), not carried through
+`FoldProgress`.** Reasons: (1) fold-only jobs (collapse, expand, entering tree mode over a Name
+view) have no Sort stage, so a job-carried LCP could never reach the hottest everyday case, while a
+column on the view is already there when they start; (2) one source for the sync path and the job
+path (the job moves its sorter's by-product into the view at the swap, `KeyView::install`, as it
+does with `order`); (3) the fold takes `Option<&[u32]>`, so the same function is used by both.
+Cost: 4 MB at 1M (u32; u16 would be exact since names are capped at 65535 bytes, but the job's
+sorter emits u32 and a conversion pass costs more than the 2 MB it would save).
+
+**Validity.** `KeyView::name_lcp()` returns the column only when the order was built for Name and
+the column is exactly as long as `order`. It is set by `rebuild` and `install`, **patched** by
+`narrow` (a kept row's new LCP is the minimum of the adjacent LCPs since the previous kept row,
+exact because the LCP of two names in sorted order is the minimum of the adjacent ones), and cleared
+by `extend` (Scan order only). Every other sort leaves it empty. **Fallback:** with no column the
+fold computes each key's LCP against the previous key's name itself (`common_prefix`, 8 bytes at a
+time) and runs the same code, so there is one fold, not two.
+
+**Tests.** `the_lcp_fold_equals_the_legacy_fold_for_every_separator_and_collapsed_set` keeps the old
+fold verbatim as an oracle (`legacy_rows`) and compares rows (so descendants, expanded flags, depth)
+and the inverse for 400 random keyspaces over five separators (`:`, `/`, `.`, `é`, `→`), empty
+segments, trailing separators, bare names, prefix-of-neighbour names, invalid UTF-8 and random
+collapsed sets including irregular prefixes, with the view's LCP, with none, and sliced. Plus the
+`cache:` / `cache:user:` regression, the boundary cases, narrowing keeps the column equal to a brute
+force LCP, `extend`/other sorts carry none, and the job equivalence suite additionally asserts the
+swapped view's column. A mutation (`<` to `<=`) fails two of them. Task 2 and 3 tests pass unchanged.
+
+First measurement (local, load avg 6.5, noisy): fold alone 207 -> 98 ms; collapse time-to-swap
+183 -> 59 ms; tree toggle time-to-swap 309 -> 181 ms; toggle from Name-sorted flat 99 ms to swap,
+worst step 4.0 ms.
+
+### Phase 3: hiding the per-key miss
+
+Measured at 1M random_deep, Name-sorted view, minimum or median of 5-15 runs, load average 2.6-4.
+(One trap worth recording: a first matrix of these runs was invalid because zsh does not word-split
+`$cfg`, so every run used the default; the numbers below are from the re-run.)
+
+Steps taken before the miss work, each from a profile of the loop: the key pass after phase 2 was
+~88 ms. The SWAR separator search (`push_separators`: 8 bytes per word, exact zero-byte test, one
+overlapping last word, byte loop under 8 bytes) took it to ~80; keeping each open group's collapsed
+flag on the open-group stack instead of reading `rows[r]` (a row up to 47 KB back, per key) took it to
+~69 ms. Both are plain safe Rust.
+
+| Variant | Key pass / fold alone |
+|---|---|
+| none | 69-70 ms |
+| (b) software lookahead: touch the name k ahead inside the loop, k = 4 / 8 / 16 / 32 / 64 | 79 / 80 / 81 / 78 / 78 ms (worse: the touch is an ordinary load that blocks retirement, and the loop body is too long to overlap it) |
+| chunk touch pass (loads only, over the next 64 / 256 / 1024 / 4096 / 16384 keys, then the fold loop) | 29.6 / **28.5** / 29.8 / 30.5 / 35.3 ms |
+| (a) gather: copy each chunk's name tails into one buffer, then scan the buffer (isolated harness: name read + shared + tail scan only) | none 35.0 ms, chunk touch 17.9 ms, **gather 37.0 ms** (chunks of 512 and 4096) |
+| floor: the same fold over an arena stored in name order (no misses) | 16 ms |
+
+Kept: **the chunk touch pass**, a degenerate gather that copies nothing (`touch_names`, chunk of
+256 keys, loads the line at the first byte past the shared prefix and the line with the last byte).
+It is a tight loop of independent loads the core overlaps dozens at a time; the fold loop then reads
+its names from L1/L2. The gather with a copy only added the copy to the same misses, and the in-loop
+lookahead loses. No `unsafe`, no arch intrinsics. The fold lands 12 ms above its no-miss floor.
+
+After phase 3 (local): fold alone 207 -> 27 ms (target 60); collapse time-to-swap 183 -> 19 ms;
+tree toggle time-to-swap 309 -> 108 ms (target 250); toggle from a Name-sorted flat view 225 -> 30 ms;
+worst fold step at slice 32768: 8 ms -> 1.05 ms.
+
+### Phase 4: slice and calibration
+
+`rebuild_slice_calibration_random_deep`, local, tree toggle from scan order at 1M random_deep
+(worst single update / trigger to swap):
+
+| Slice | Worst update | Fold step | Steps | To swap |
+|---|---|---|---|---|
+| 8192 | 0.44 ms | 0.39 ms | 2981 | 123 ms |
+| 16384 | 0.65 ms | 0.65 ms | 1376 | 117 ms |
+| 24576 | 0.86 ms | 0.86 ms | 874 | 116 ms |
+| **32768** | 1.40 ms | 1.17 ms (sort refine 1.27 ms) | 647 | 116 ms |
+| 49152 | 1.53 ms | 1.53 ms | 405 | 110 ms |
+| 65536 | 2.39 ms | 1.92 ms | 314 | 109 ms |
+
+(Before: 2.3 / 4.2 / 5.8 / 8.1 / 11.0 / 14.8 ms at the same slices; time to swap ~290 ms.)
+
+**Decision: keep 32768.** The fold is no longer the longest stage (the Name sort's refine step
+ties it), the worst step is ~1.3 ms local (about 2.5 ms on a 1.9x slower CI run, against the 16 ms
+gate), and going to 65536 saves 6 ms of a 116 ms rebuild (5%). The cost of raising it is not on the
+step but on the threshold: `is_large(n)` is `n >= slice`, so a larger slice makes a rebuild of up
+to 65535 keys synchronous, and the lazy sorts (Size, TTL, Kind) still use a comparison sort there.
+Not worth it for 5%. Only the comment on `REBUILD_SLICE` changes.

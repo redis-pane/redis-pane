@@ -21,9 +21,12 @@ use super::{FilterMode, KeyView, LoadedSet, SortBy, State, Tree};
 
 /// Keys (or output positions) one step of a rebuild job handles.
 ///
-/// Calibrated so the slowest step, a fold step over random-order deep names
-/// at 1M keys, stays comfortably inside a 16ms frame on CI
-/// (`docs/plans/m6-rebuild-job.md` Outcome).
+/// Calibrated so the slowest step stays comfortably inside a 16ms frame on
+/// CI (`docs/plans/m6-rebuild-job.md` Outcome). Since M6 task 5 the slowest
+/// steps at 1M random-order deep names are the Name sort's refine and the
+/// fold, both about 1.2ms locally; raising the slice to 65536 would save
+/// only ~6ms of a ~115ms rebuild and move the threshold below which a
+/// rebuild is synchronous (`docs/plans/m6-fast-fold.md` Outcome).
 pub const REBUILD_SLICE: usize = 32_768;
 
 /// What a job rebuilds.
@@ -336,6 +339,11 @@ impl RebuildJob {
                 self.known = self.order.len();
             }
             self.cursor = 0;
+            if self.sort == SortBy::Name && self.order.len() < 2 {
+                // Nothing to sort, so no sorter runs: the LCP column is all
+                // zeros (0 or 1 positions).
+                self.lcp = vec![0; self.order.len()];
+            }
             self.stage = if self.sort == SortBy::Scan || self.order.len() < 2 {
                 Stage::Inverse
             } else {
@@ -456,7 +464,12 @@ impl RebuildJob {
             self.fold = tree.fold_begin();
             self.cursor = 1;
         }
-        tree.fold_step(keys, order, self.covered, &mut self.fold, self.slice)
+        let lcp = match self.kind {
+            JobKind::Full => (self.sort == SortBy::Name && self.lcp.len() == order.len())
+                .then_some(self.lcp.as_slice()),
+            JobKind::FoldOnly => live.name_lcp(),
+        };
+        tree.fold_step(keys, order, lcp, self.covered, &mut self.fold, self.slice)
     }
 
     /// The finished pieces, to be placed by the swap.
@@ -465,6 +478,7 @@ impl RebuildJob {
             list: (self.kind == JobKind::Full).then_some(FinishedList {
                 order: self.order,
                 inverse: self.inverse,
+                lcp: self.lcp,
                 known: self.known,
                 built: (self.filter, self.mode, self.sort),
             }),
@@ -478,6 +492,8 @@ impl RebuildJob {
 pub(super) struct FinishedList {
     order: Vec<u32>,
     inverse: Vec<u32>,
+    /// The Name sort's LCP column (empty for any other sort).
+    lcp: Vec<u32>,
     known: usize,
     built: (String, FilterMode, SortBy),
 }
@@ -661,8 +677,14 @@ impl State {
         let done = job.finish();
         let covered = done.covered;
         if let Some(list) = done.list {
-            self.list
-                .install(list.order, list.inverse, list.known, list.built, covered);
+            self.list.install(
+                list.order,
+                list.inverse,
+                list.lcp,
+                list.known,
+                list.built,
+                covered,
+            );
             self.scan_last_rebuild_len = covered;
         }
         if let Some(tree) = done.tree {
@@ -1008,6 +1030,13 @@ pub(crate) mod tests {
             assert_eq!(job.name_lcp(), want_lcp, "case {case}: lcp");
             state.run_rebuild_to_completion();
             assert_eq!(state.list.order(), want, "case {case}: swapped order");
+            // The swap hands the column to the view, where a later fold-only
+            // job (collapse, expand) finds it.
+            assert_eq!(
+                state.list.name_lcp(),
+                Some(want_lcp.as_slice()),
+                "case {case}: swapped lcp"
+            );
         }
     }
 
