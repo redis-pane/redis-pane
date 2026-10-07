@@ -46,15 +46,15 @@
 //! ceiling.
 //!
 //! Ceiling rule: M4 used **1.5x the CI measurement, rounded up**. On the M6
-//! fixtures two runs of the same code on CI differed by up to 1.9x (runner
-//! hardware varies), so each random-fixture ceiling is **1.5x the slower of the
-//! local mean and the CI figure, rounded up**; the table is in
-//! `docs/plans/m6-harness.md`. Time-to-new-list tests (`time_to_new_list_*`)
-//! measure only the `update` call that produces the new list; M6 task 3
-//! redefines them as time until the rebuild job's swap.
-//! The `sorted` controls keep their M4 ceilings. Time-to-new-list tests
-//! (`time_to_new_list_*`) measure only the `update` call that produces the
-//! new list; M6 task 3 redefines them as time until the rebuild job's swap.
+//! fixtures three runs of the same code on CI differed by up to 1.9x (runner
+//! hardware varies), so every ceiling is **1.5x the slowest figure observed
+//! across the local runs and PR #78's three CI runs, rounded up**; the table
+//! is in `docs/plans/m6-harness.md`. Time-to-new-list tests
+//! (`time_to_new_list_*`) measure only the `update` call that produces the new
+//! list; M6 task 3 redefines them as time until the rebuild job's swap.
+//! The `sorted` controls keep their M4 ceilings except where the slow CI runs
+//! showed them under 1.5x (debounce 49 -> 58, tree toggle 89 -> 94, worst page
+//! 68 -> 71).
 
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
@@ -301,9 +301,8 @@ fn key(code: KeyCode) -> Msg {
     Msg::Key(KeyPress::plain(code))
 }
 
-// Ceilings are 1.5x the *slower* of the local and CI measurements, rounded up
-// (M4's rule was 1.5x CI alone; PR #78's two CI runs differed by up to 1.9x,
-// so a single CI sample was too tight).
+// Ceilings are 1.5x the slowest figure observed (local and three CI runs),
+// rounded up; see the header.
 
 // ── (a) scroll keystroke ─────────────────────────────────────────────────
 
@@ -364,7 +363,7 @@ fn filter_first_character(fx: Fixture, ceil_ms: u64) {
 }
 variants!(filter_first_character:
     filter_first_character_at_1m_keys => (Fixture::Sorted, 16),
-    filter_first_character_at_1m_keys_random_deep => (Fixture::RandomDeep, 33));
+    filter_first_character_at_1m_keys_random_deep => (Fixture::RandomDeep, 52));
 
 fn filter_backspace_keystroke(fx: Fixture, ceil_ms: u64) {
     // M4 task 4 decision 2: a keystroke that cannot be narrowed defers its
@@ -408,9 +407,9 @@ fn filter_rebuild_after_debounce(fx: Fixture, ceil_ms: u64) {
     assert_budget("post-debounce rebuild", elapsed, ceil_ms);
 }
 variants!(filter_rebuild_after_debounce:
-    filter_rebuild_after_debounce_at_1m_keys => (Fixture::Sorted, 49),
-    filter_rebuild_after_debounce_at_1m_keys_random_flat => (Fixture::RandomFlat, 35),
-    filter_rebuild_after_debounce_at_1m_keys_random_deep => (Fixture::RandomDeep, 60));
+    filter_rebuild_after_debounce_at_1m_keys => (Fixture::Sorted, 58),
+    filter_rebuild_after_debounce_at_1m_keys_random_flat => (Fixture::RandomFlat, 63),
+    filter_rebuild_after_debounce_at_1m_keys_random_deep => (Fixture::RandomDeep, 96));
 
 fn time_to_new_list_filter_rebuild(fx: Fixture, ceil_ms: u64) {
     let base = debounce_pending_state(fx);
@@ -423,7 +422,7 @@ fn time_to_new_list_filter_rebuild(fx: Fixture, ceil_ms: u64) {
     assert_budget("time-to-new-list (filter rebuild)", elapsed, ceil_ms);
 }
 variants!(time_to_new_list_filter_rebuild:
-    time_to_new_list_filter_rebuild_random_deep => (Fixture::RandomDeep, 60));
+    time_to_new_list_filter_rebuild_random_deep => (Fixture::RandomDeep, 97));
 
 // ── (c) sort change ──────────────────────────────────────────────────────
 
@@ -446,8 +445,8 @@ fn sort_change(fx: Fixture, ceil_ms: u64) {
 }
 variants!(sort_change:
     sort_change_at_1m_keys => (Fixture::Sorted, 16),
-    sort_change_at_1m_keys_random_flat => (Fixture::RandomFlat, 363),
-    sort_change_at_1m_keys_random_deep => (Fixture::RandomDeep, 417));
+    sort_change_at_1m_keys_random_flat => (Fixture::RandomFlat, 497),
+    sort_change_at_1m_keys_random_deep => (Fixture::RandomDeep, 527));
 
 fn time_to_new_list_sort_change(fx: Fixture, ceil_ms: u64) {
     let base = big_state(fx);
@@ -459,7 +458,7 @@ fn time_to_new_list_sort_change(fx: Fixture, ceil_ms: u64) {
     assert_budget("time-to-new-list (sort change)", elapsed, ceil_ms);
 }
 variants!(time_to_new_list_sort_change:
-    time_to_new_list_sort_change_random_deep => (Fixture::RandomDeep, 422));
+    time_to_new_list_sort_change_random_deep => (Fixture::RandomDeep, 533));
 
 // ── (d) toggling tree mode ───────────────────────────────────────────────
 
@@ -478,9 +477,9 @@ fn toggle_tree(fx: Fixture, ceil_ms: u64) {
     assert_budget("tree toggle", elapsed, ceil_ms);
 }
 variants!(toggle_tree:
-    toggle_tree_at_1m_keys => (Fixture::Sorted, 89),
-    toggle_tree_at_1m_keys_random_flat => (Fixture::RandomFlat, 588),
-    toggle_tree_at_1m_keys_random_deep => (Fixture::RandomDeep, 752));
+    toggle_tree_at_1m_keys => (Fixture::Sorted, 94),
+    toggle_tree_at_1m_keys_random_flat => (Fixture::RandomFlat, 740),
+    toggle_tree_at_1m_keys_random_deep => (Fixture::RandomDeep, 841));
 
 fn time_to_new_list_tree_toggle(fx: Fixture, ceil_ms: u64) {
     let base = big_state(fx);
@@ -492,7 +491,7 @@ fn time_to_new_list_tree_toggle(fx: Fixture, ceil_ms: u64) {
     assert_budget("time-to-new-list (tree toggle)", elapsed, ceil_ms);
 }
 variants!(time_to_new_list_tree_toggle:
-    time_to_new_list_tree_toggle_random_deep => (Fixture::RandomDeep, 749));
+    time_to_new_list_tree_toggle_random_deep => (Fixture::RandomDeep, 874));
 
 // ── (d2) collapse / expand one top-level group, fold alone, sort alone ──
 
@@ -527,8 +526,8 @@ fn collapse_group(fx: Fixture, ceil_ms: u64) {
     assert_budget("collapse", elapsed, ceil_ms);
 }
 variants!(collapse_group:
-    collapse_group_at_1m_keys_random_flat => (Fixture::RandomFlat, 579),
-    collapse_group_at_1m_keys_random_deep => (Fixture::RandomDeep, 710));
+    collapse_group_at_1m_keys_random_flat => (Fixture::RandomFlat, 696),
+    collapse_group_at_1m_keys_random_deep => (Fixture::RandomDeep, 827));
 
 fn expand_group(fx: Fixture, ceil_ms: u64) {
     let (collapsed, _) = update(tree_state(fx), key(KeyCode::Left));
@@ -548,8 +547,8 @@ fn expand_group(fx: Fixture, ceil_ms: u64) {
     assert_budget("expand", elapsed, ceil_ms);
 }
 variants!(expand_group:
-    expand_group_at_1m_keys_random_flat => (Fixture::RandomFlat, 588),
-    expand_group_at_1m_keys_random_deep => (Fixture::RandomDeep, 765));
+    expand_group_at_1m_keys_random_flat => (Fixture::RandomFlat, 734),
+    expand_group_at_1m_keys_random_deep => (Fixture::RandomDeep, 919));
 
 fn time_to_new_list_collapse(fx: Fixture, ceil_ms: u64) {
     let base = tree_state(fx);
@@ -561,7 +560,7 @@ fn time_to_new_list_collapse(fx: Fixture, ceil_ms: u64) {
     assert_budget("time-to-new-list (collapse)", elapsed, ceil_ms);
 }
 variants!(time_to_new_list_collapse:
-    time_to_new_list_collapse_random_deep => (Fixture::RandomDeep, 717));
+    time_to_new_list_collapse_random_deep => (Fixture::RandomDeep, 812));
 
 fn fold_alone(fx: Fixture, ceil_ms: u64) {
     // `Tree::rebuild` over a name-sorted KeyView, nothing else.
@@ -584,9 +583,9 @@ fn fold_alone(fx: Fixture, ceil_ms: u64) {
     assert_budget("fold alone", elapsed, ceil_ms);
 }
 variants!(fold_alone:
-    fold_alone_at_1m_keys => (Fixture::Sorted, 57),
-    fold_alone_at_1m_keys_random_flat => (Fixture::RandomFlat, 227),
-    fold_alone_at_1m_keys_random_deep => (Fixture::RandomDeep, 332));
+    fold_alone_at_1m_keys => (Fixture::Sorted, 75),
+    fold_alone_at_1m_keys_random_flat => (Fixture::RandomFlat, 248),
+    fold_alone_at_1m_keys_random_deep => (Fixture::RandomDeep, 333));
 
 fn name_sort_alone(fx: Fixture, ceil_ms: u64) {
     // `KeyView::rebuild` with SortBy::Name and no filter, nothing else.
@@ -609,8 +608,8 @@ fn name_sort_alone(fx: Fixture, ceil_ms: u64) {
 }
 variants!(name_sort_alone:
     name_sort_alone_at_1m_keys => (Fixture::Sorted, 16),
-    name_sort_alone_at_1m_keys_random_flat => (Fixture::RandomFlat, 362),
-    name_sort_alone_at_1m_keys_random_deep => (Fixture::RandomDeep, 420));
+    name_sort_alone_at_1m_keys_random_flat => (Fixture::RandomFlat, 488),
+    name_sort_alone_at_1m_keys_random_deep => (Fixture::RandomDeep, 520));
 
 // ── (e) one ScanBatch page arriving into an already-1M-key set ──────────
 
@@ -764,11 +763,11 @@ fn whole_scan_fold(fx: Fixture, budget: ScanBudget) {
 #[ignore]
 fn whole_scan_fold_in_tree_mode_from_empty() {
     // Sorted control. Before M4 task 3 this took ~120s; ~0.24s now.
-    // Worst page: 31ms local, 45.2ms CI, ceiling 68ms; total gate 10s.
+    // Worst page: 31ms local, 47.3ms on a slow CI run, ceiling 71ms; total gate 10s.
     whole_scan_fold(
         Fixture::Sorted,
         ScanBudget {
-            worst_ms: 68,
+            worst_ms: 71,
             total_s: 10,
         },
     );
@@ -777,13 +776,13 @@ fn whole_scan_fold_in_tree_mode_from_empty() {
 #[test]
 #[ignore]
 fn whole_scan_fold_in_tree_mode_from_empty_random_deep() {
-    // CEILING: worst page 411ms local / 327ms CI x 1.5 = 617ms; total gate
-    // 1.83s local x 1.5 = 3s. Target: worst page <= 16ms.
+    // CEILING: worst page up to 479ms (slow CI run) x 1.5 = 719ms; total gate
+    // 2.13s x 1.5, rounded up = 4s. Target: worst page <= 16ms.
     whole_scan_fold(
         Fixture::RandomDeep,
         ScanBudget {
-            worst_ms: 617,
-            total_s: 3,
+            worst_ms: 719,
+            total_s: 4,
         },
     );
 }
