@@ -493,7 +493,7 @@ fn toggle_tree_from_name_sorted(fx: Fixture, ceil_ms: u64) {
     assert_budget("tree toggle (Name-sorted flat view)", elapsed, ceil_ms);
 }
 variants!(toggle_tree_from_name_sorted:
-    toggle_tree_from_name_sorted_random_deep => (Fixture::RandomDeep, 400));
+    toggle_tree_from_name_sorted_random_deep => (Fixture::RandomDeep, 344));
 
 /// `t` out of tree mode over a current view: no fold, no sort.
 fn toggle_tree_off(fx: Fixture, ceil_ms: u64) {
@@ -506,7 +506,7 @@ fn toggle_tree_off(fx: Fixture, ceil_ms: u64) {
     assert_budget("tree toggle off", elapsed, ceil_ms);
 }
 variants!(toggle_tree_off:
-    toggle_tree_off_random_deep => (Fixture::RandomDeep, 50));
+    toggle_tree_off_random_deep => (Fixture::RandomDeep, 10));
 
 fn time_to_new_list_tree_toggle(fx: Fixture, ceil_ms: u64) {
     let base = big_state(fx);
@@ -554,8 +554,8 @@ fn collapse_group(fx: Fixture, ceil_ms: u64) {
     assert_budget("collapse", elapsed, ceil_ms);
 }
 variants!(collapse_group:
-    collapse_group_at_1m_keys_random_flat => (Fixture::RandomFlat, 696),
-    collapse_group_at_1m_keys_random_deep => (Fixture::RandomDeep, 827));
+    collapse_group_at_1m_keys_random_flat => (Fixture::RandomFlat, 211),
+    collapse_group_at_1m_keys_random_deep => (Fixture::RandomDeep, 307));
 
 fn expand_group(fx: Fixture, ceil_ms: u64) {
     let (collapsed, _) = update(tree_state(fx), key(KeyCode::Left));
@@ -575,8 +575,8 @@ fn expand_group(fx: Fixture, ceil_ms: u64) {
     assert_budget("expand", elapsed, ceil_ms);
 }
 variants!(expand_group:
-    expand_group_at_1m_keys_random_flat => (Fixture::RandomFlat, 734),
-    expand_group_at_1m_keys_random_deep => (Fixture::RandomDeep, 919));
+    expand_group_at_1m_keys_random_flat => (Fixture::RandomFlat, 249),
+    expand_group_at_1m_keys_random_deep => (Fixture::RandomDeep, 340));
 
 fn time_to_new_list_collapse(fx: Fixture, ceil_ms: u64) {
     let base = tree_state(fx);
@@ -588,7 +588,7 @@ fn time_to_new_list_collapse(fx: Fixture, ceil_ms: u64) {
     assert_budget("time-to-new-list (collapse)", elapsed, ceil_ms);
 }
 variants!(time_to_new_list_collapse:
-    time_to_new_list_collapse_random_deep => (Fixture::RandomDeep, 812));
+    time_to_new_list_collapse_random_deep => (Fixture::RandomDeep, 295));
 
 fn fold_alone(fx: Fixture, ceil_ms: u64) {
     // `Tree::rebuild` over a name-sorted KeyView, nothing else.
