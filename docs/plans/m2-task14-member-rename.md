@@ -1,6 +1,6 @@
 # M2 task 14: Rename a field or member inside a key
 
-Status: **planned.**
+Status: **done.**
 
 ## Context
 
@@ -269,3 +269,62 @@ the server has now.
   copy redis-cli command` so the hash bar would show it was reverted, because it pushed `C` off the
   80/130-column bar, losing a more useful hint than `↑↓ jk move`. `R` is on the bar where it fits
   (a Set at 130 columns) and always in help, as in the keys pane.
+- **Phase 5 (docs and verification).** DESIGN §4 (value-pane `R`) and §6.5 (a new "Rename a field
+  or member" paragraph), PLAN §5 row 14 done, and the note that rows 7 and 9's deferral is
+  resolved. fmt, clippy `-D warnings`, `cargo test --workspace`, the boundary check and the Docker
+  suite are clean (see Outcome). ADRs 0015, 0016 and 0018 still say "deferred to task 14"; they
+  are decision records and were left as written.
+
+## Outcome
+
+Status: **done.** `R` in the value pane renames a Hash field, Set member or ZSet member through the
+one mutation path, as one guarded script each.
+
+**Delivered, as designed:** the shared name capture with `NameKind::{Field, SetMember,
+ZSetMember}` and an `in <key>` line; `State::rename_problem()` with the shown-duplicate block
+(`RenameProblem::Shown`); `Mutation`/`PendingMutation::{RenameHashField, RenameSetMember,
+RenameZSetMember}` with no new `NotWritten` variant; the two-command preview with the guard line
+and no `EVAL`; Read-only refusal at confirm; the three scripts with the fixed check order and
+`-1/-2/-3/1` returns; the Hash field TTL carried on 7.4+ by the ADR-0015 `pcall` pattern (the
+script runs on 6.2); the ZSet score read server-side; the refetch through the one read path
+(re-arming tracking) and `OpenKey::follow`, which puts the value cursor on the new name; help and
+hint-bar rows `rename field` / `rename member`, dimmed under Read-only Mode.
+
+**Deviations from the plan text:**
+- **A Hash field with a binary *value* is renameable.** The plan said to mirror each type's edit
+  rule; `for_hash_field` refuses a binary value because it must put it in a text buffer, but a
+  rename never does (the script copies it). A binary *name* is refused with the `e` wording, for
+  all three types. A ZSet member is also refused when binary, although `e` on a ZSet accepts one,
+  because the capture must prefill the name as text.
+- **No `EXISTS` pre-check.** The key rename has one; here the shown-duplicate block is the advice
+  and the script is the guard, so `Command::CheckTarget` and `TargetCheck` are not used.
+- **Empty names are refused for Set and ZSet too,** although Redis allows an empty member and the
+  add forms let one through: the plan says an empty name is refused inline.
+- **The rename is checked against the row it started from** (`Enter` re-checks that the Open key
+  still has the old name at that row), so a reorder under the capture stages nothing and says so.
+- **`R` is not on the 130-column hint bar for a Hash or ZSet,** only for a Set. It is ranked after
+  `C copy redis-cli command` so that it cannot push `r`/`t` off; ranking it before `C` was tried and
+  reverted because it pushed `C` off the bar. It is always in help.
+- **Only help goldens changed:** `help_value_{hash,set,zset}_cursor_{80,130}` and
+  `help_read_only_dimmed_{80,130}` (eight files) gained the `R` row; in the 130-column ones the
+  overlay's own bottom bar also loses `↑↓ jk move`. Fourteen golden frames were added.
+- **Phase 3 needed a follow-up commit:** the stub arm in `execute` was not replaced by the first
+  phase 3 commit (see the phase log). The Docker tests found it.
+
+**Known limits:** a new name taken *outside* the shown window is refused by the script, not
+blocked in the capture (the add forms have the same limit). The windows are bounded, so the cursor
+stays where it was when the renamed item falls outside the re-read window. A Hash field whose TTL
+has already passed reads as gone (`FieldGone`).
+
+**Numbers:** core lib tests 1085 -> 1105, golden 275 -> 286, app unit 96 -> 96, Docker suite
+173 -> 191 (all pass, 359s); fmt, clippy `-D warnings`, `cargo test --workspace` and the
+core/shell boundary check clean.
+
+**For task 13 (bulk delete):** `Space` and `d` with marks are keys-pane concerns; nothing here
+touches the key list. New `PendingMutation` variants must still be added to the exhaustive matches
+in `update/editor.rs` (`staged_edit_found_key_gone`), `into_command`, `command_text`,
+`command_lines`, `guard_text`, `render::confirm_overlay` and `update/confirm.rs` (`nothing_to_remove`,
+and the `NotWritten` routing in `mutation_settled`). `State::rename_problem()` is now the single
+validation entry for the name capture, and `RenameCapture::owner` distinguishes a value-pane rename
+from a key rename. `OpenKey::follow` is the place to hang any "land the cursor on X after a
+refetch" behaviour.
