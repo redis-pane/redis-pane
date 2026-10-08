@@ -14,7 +14,7 @@ refresh needed.*
 
 ## Status
 
-This is a beta (`0.1.0-beta.3`). It handles browsing a keyspace, viewing every Redis type, and live updates
+This is a beta (`0.1.0-beta.4`). It handles browsing a keyspace, viewing every Redis type, and live updates
 when a value changes on the server. You can edit every core type in place — a String value, Hash
 fields, List elements, Set members, Sorted set scores — change a key's TTL, and delete a key (`e`
 to edit, `a` to add, `d` to delete, `t` for the TTL, `y` to confirm). Every change previews the
@@ -50,13 +50,13 @@ Requires Redis 6.0 or newer (Valkey works too).
 Download the binary for your OS from the [Releases page](https://github.com/vinodsantharam/redis-pane/releases) — macOS, Linux, and Windows are all covered. Or run the install script:
 
 ```bash
-curl --proto '=https' --tlsv1.2 -LsSf https://github.com/vinodsantharam/redis-pane/releases/download/v0.1.0-beta.3/redis-pane-installer.sh | sh
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/vinodsantharam/redis-pane/releases/download/v0.1.0-beta.4/redis-pane-installer.sh | sh
 ```
 
 On Windows, from PowerShell:
 
 ```powershell
-irm https://github.com/vinodsantharam/redis-pane/releases/download/v0.1.0-beta.3/redis-pane-installer.ps1 | iex
+irm https://github.com/vinodsantharam/redis-pane/releases/download/v0.1.0-beta.4/redis-pane-installer.ps1 | iex
 ```
 
 These beta builds are unsigned, so your OS may flag them on first run — on macOS, right-click the

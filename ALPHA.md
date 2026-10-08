@@ -23,13 +23,13 @@ many keys at once (`Space` to mark, `d` to delete the marked set). Treat a
 Download the binary for your OS from the [Releases page](https://github.com/vinodsantharam/redis-pane/releases) — macOS (Intel or Apple Silicon), Linux (x86_64), and Windows are all built there. Or, on macOS/Linux, run the installer script from a release page (note: these beta releases are marked as GitHub prereleases, so the `/latest/` URL alias doesn't resolve to them — use the tagged URL, matching whatever the current beta tag is):
 
 ```bash
-curl --proto '=https' --tlsv1.2 -LsSf https://github.com/vinodsantharam/redis-pane/releases/download/v0.1.0-beta.3/redis-pane-installer.sh | sh
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/vinodsantharam/redis-pane/releases/download/v0.1.0-beta.4/redis-pane-installer.sh | sh
 ```
 
 On Windows, from PowerShell:
 
 ```powershell
-irm https://github.com/vinodsantharam/redis-pane/releases/download/v0.1.0-beta.3/redis-pane-installer.ps1 | iex
+irm https://github.com/vinodsantharam/redis-pane/releases/download/v0.1.0-beta.4/redis-pane-installer.ps1 | iex
 ```
 
 These builds are **unsigned** — expected for a beta. On first run:
