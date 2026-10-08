@@ -1,6 +1,6 @@
 # M2 task 13: Multi-select and bulk delete
 
-Status: **planned.**
+Status: **done.**
 
 ## Context
 
@@ -201,3 +201,56 @@ so cancellation is deterministic); perf in the M6 harness; goldens as listed.
   `execute_bulk_settled` (the wedge check), `Shell::mutate` routing `DeleteKeys` to its own task with
   `bulk_cancel` and `Msg::BulkDeleteProgress` (`try_send`, cosmetic), `Command::CancelBulkDelete`. A bulk
   delete that fails outright (`Err`) also clears `State::bulk`. No Docker run yet; phase 4 covers it.
+- Phase 4: tests. 8 Docker tests (`mod bulk_delete` in `crates/app/tests/integration.rs`), 13 goldens, 5 perf
+  tests (two on each fixture plus the 500k-mark walk). Phase 5: docs (DESIGN §4/§6.5, PLAN §5 row 13) and verification.
+
+## Outcome
+
+Status: **done.** `Space` marks keys in the keys pane and `d` with marks stages one bulk delete
+through the one mutation path.
+
+**Delivered, as designed:** marks as a bitset over Loaded-set indices (`state/marks.rs`), cleared by
+a rescan in `scan_started`, by a completed delete, and by the first `Esc`; the `◆`/`+` glyph in the
+pane's left margin and `N marked` in the status line; `Mutation::DeleteKeys` / `PendingMutation::DeleteKeys`
+with the `DEL × N keys` preview (first eight names, `… and N more`); one `y` off `prod`, and on `prod` `y`
+then the typed count with `⏎` (`CountGate`); Read-only refusal at the first `y`; the shell's pipelined
+single-key `DEL` batches of 500 with `try_all`, progress, cancellation between batches through a
+`CancellationToken`, and a failure that names the `DEL` and how far it got; every processed row badged
+through the shared `mark_deleted` helper (the single delete uses the same one), the Open key tombstoned
+as before; `d` without marks untouched.
+
+**Deviations and choices the plan left open:**
+- **Enter submits the typed count.** The plan said "types the count exactly"; matching alone would confirm
+  `50` on the way to `500`, so the typed step ends in `⏎`. `y` and every other key are ignored there.
+- **`prod` only.** The typed count applies to `prod`, as the plan says. `unknown` starts in
+  Read-only Mode but gets one `y` once lifted, like `staging`. Worth a look at close-out if `unknown` should
+  count as `prod` here.
+- **`MutationOutcome` lost `Copy`** (it now carries a `BulkReport` with strings); nothing relied on it.
+- **A failure travels inside `Ok(BulkDeleted(report))`, not `Err`,** so the progress is never lost behind an
+  error string. A bulk delete that fails outright (`Err`) clears `State::bulk` all the same.
+- **Cluster: no per-node grouping.** PLAN row 13 said keys are grouped by node; `fred` routes every
+  pipelined command by its own key's slot, so one pipeline of single-key `DEL`s needs none and the row was
+  corrected. The Docker cluster test proves 3,000 keys over three primaries are all deleted.
+- **`Esc` order:** an error, then a running bulk delete, then the value-pane pop, then marks, then a scan.
+- **Gone rows:** `Space` on a gone row is refused, and marks that went gone are dropped at staging.
+- **Glyph roles added:** `Marked` and `Times`.
+- **Goldens:** only the six help goldens moved (two `help_disconnected_*` among them, plus the keys-pane
+  help and the three help overlays): the help overlay lists every keys-pane binding, so `Space mark` appears.
+  No browser, dialog or hint-bar frame moved; the row is ranked last among the verbs.
+
+**Known limits (for the M2 close-out):**
+- Subtree (group) marking is out of scope.
+- A marked row hidden by a filter is still deleted; the dialog counts it but cannot say how many are hidden
+  (that would be O(Loaded)).
+- Marks are not persisted in the session file and do not survive a rescan.
+- A batch in flight is not abandoned on `Esc`; cancellation lands at the next batch boundary (one pipeline of
+  500 `DEL`s, milliseconds).
+- A connection lost mid-delete fails the batch in flight: the report names that `DEL` and how far it got, and keys past it are neither deleted nor badged (a Docker test covers a dead client).
+
+**Numbers:** core lib tests 1,110 -> 1,145 at this PR's tip (36 in `update/bulk_tests.rs`, 4 in
+`state/marks.rs`, plus the label test), golden 286 -> 299 (13 new; six help goldens re-recorded), Docker
+suite 191 -> 199 (all pass, 374s, no reruns), perf suite 47 -> 52 (all pass). Perf at 1M keys (release,
+laptop): `Space` update 2.4-2.6 us (update+render 43-52 us) against a 1 ms budget; bulk-delete preview
+with 10,000 marks 0.36-0.38 ms to stage (0.44-0.48 ms with the render) against "a few ms"; 500,000 marks
+cost a 128 KB bitset and a 1.2 ms walk. fmt, clippy `-D warnings`, `cargo test --workspace` and the
+core/shell boundary check are clean.

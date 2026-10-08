@@ -1,6 +1,6 @@
 # M2 remaining: rename, copy, member rename, bulk delete
 
-Status: **planned, not started.** Planned 2026-10-08, after M6 shipped as `0.1.0-beta.3`. Each
+Status: **tasks 11-14 done** (task 5 parked). Planned 2026-10-08, after M6 shipped as `0.1.0-beta.3`. Each
 task gets its own plan doc and its own Sonnet subagent run, and is merged before the next starts.
 This is the same process as M4–M6.
 
