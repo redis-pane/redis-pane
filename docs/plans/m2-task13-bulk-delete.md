@@ -254,3 +254,11 @@ laptop): `Space` update 2.4-2.6 us (update+render 43-52 us) against a 1 ms budge
 with 10,000 marks 0.36-0.38 ms to stage (0.44-0.48 ms with the render) against "a few ms"; 500,000 marks
 cost a 128 KB bitset and a 1.2 ms walk. fmt, clippy `-D warnings`, `cargo test --workspace` and the
 core/shell boundary check are clean.
+
+## Follow-up (2026-10-08): typed count on `unknown`
+
+By the user's decision after beta.4, `unknown` gets the same typed-count gate as `prod` (it is the
+other Environment that starts in Read-only Mode, and the one we know least about). One-line gate
+change in `update/bulk.rs`, a core test (`unknown_gets_the_typed_gate_like_prod`), and DESIGN
+§6.5, PRD R4.6, README and ALPHA updated. Further bulk-delete UX work is planned, not scheduled, in
+[`bulk-delete-enhancements.md`](bulk-delete-enhancements.md).

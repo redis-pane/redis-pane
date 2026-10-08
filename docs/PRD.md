@@ -209,7 +209,7 @@ config file; a **Connection** is a live session, which may be **ad-hoc** (no Pro
   displayed. The `replica` reason cannot be lifted, because the server will refuse regardless
   (R1.15).
 - **R4.6** Confirmation friction scales with blast radius: single delete = one keypress;
-  bulk delete on prod = typed confirmation.
+  bulk delete on `prod` or `unknown` = typed confirmation.
 
 ### 6.5 Command surface
 - ~~**R5.1** Command palette (fuzzy, single keystroke) for every app action.~~ **Withdrawn** — see
