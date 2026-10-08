@@ -5580,3 +5580,113 @@ fn the_rename_row_is_dimmed_with_the_reason_under_read_only_mode() {
     assert!(refusal.preview_only, "the preview still opens");
     assert_eq!(refusal.text(), "read-only (environment) · preview only");
 }
+
+// ── M2 task 12: duplicate a key (`docs/plans/m2-task12-copy.md`) ────────────
+
+fn copy_capture_open() -> State {
+    let mut state = opened("user:8812:session", hash_value(), 2_537);
+    state.focus = Pane::Keys;
+    let (state, _) = update(state, Msg::Key(KeyPress::plain(KeyCode::Char('D'))));
+    assert!(state.rename.is_some(), "D opens the capture");
+    state
+}
+
+fn copy_staged(state: State, backspaces: usize, text: &str) -> State {
+    let state = rename_typed(state, backspaces, text);
+    let (state, _) = update(state, Msg::Key(KeyPress::plain(KeyCode::Enter)));
+    assert!(matches!(
+        state.confirm,
+        Some(PendingMutation::CopyKey { .. })
+    ));
+    state
+}
+
+fn target_checked(state: State, key: &str, exists: bool) -> State {
+    update(
+        state,
+        Msg::TargetChecked {
+            key: key.into(),
+            exists,
+        },
+    )
+    .0
+}
+
+#[test]
+fn golden_copy_capture_prefilled_with_the_name_and_a_suffix() {
+    assert_golden("copy_capture", &draw(&copy_capture_open(), 130, 22));
+}
+
+#[test]
+fn golden_copy_capture_with_a_typed_name() {
+    let state = rename_typed(copy_capture_open(), 5, "2");
+    assert_golden("copy_capture_typed", &draw(&state, 130, 22));
+}
+
+#[test]
+fn golden_hint_bar_while_capturing_a_duplicate_name() {
+    let state = copy_capture_open();
+    assert_golden("hint_bar_copy_capture", &hint_bar(&state, 130));
+}
+
+#[test]
+fn golden_confirm_copy_ok() {
+    let state = copy_staged(copy_capture_open(), 5, ":clone");
+    let state = target_checked(state, "user:8812:session:clone", false);
+    assert_golden("confirm_copy", &draw(&state, 130, 22));
+}
+
+#[test]
+fn golden_confirm_copy_target_exists() {
+    let state = copy_staged(copy_capture_open(), 5, ":clone");
+    let state = target_checked(state, "user:8812:session:clone", true);
+    assert_golden("confirm_copy_target_exists", &draw(&state, 130, 22));
+}
+
+#[test]
+fn golden_confirm_copy_cross_slot_fallback_on_a_cluster() {
+    let mut state = copy_capture_open();
+    state.connection.topology = Some(redis_pane_core::state::Topology {
+        primaries: 3,
+        nodes: 6,
+    });
+    let state = copy_staged(state, 17 + 5, "cart");
+    assert!(matches!(
+        state.confirm,
+        Some(PendingMutation::CopyKey {
+            slots: redis_pane_core::state::SlotPath::CrossSlotFallback,
+            ..
+        })
+    ));
+    assert_golden("confirm_copy_cross_slot", &draw(&state, 130, 22));
+}
+
+#[test]
+fn golden_confirm_copy_under_read_only_shows_the_reason() {
+    let mut state = copy_capture_open();
+    state.read_only = Some(ReadOnlyReason::Environment);
+    let state = copy_staged(state, 5, ":clone");
+    assert_golden("confirm_copy_read_only", &draw(&state, 130, 22));
+}
+
+#[test]
+fn the_duplicate_row_is_dimmed_with_the_version_reason_below_redis_6_2() {
+    let mut state = opened("user:8812:session", hash_value(), 2_537);
+    state.focus = Pane::Keys;
+    let row_of = |state: &State| {
+        help::here(state, help::context(state))
+            .into_iter()
+            .find(|r| r.label == "duplicate key (COPY)")
+            .expect("the keys pane lists duplicate")
+    };
+    assert_eq!(row_of(&state).keys, "D");
+    assert!(row_of(&state).refused.is_none());
+
+    state.link = redis_pane_core::state::Link::Up {
+        version: "6.0.20".into(),
+        tracking: redis_pane_core::state::Tracking::Armed,
+    };
+    let refusal = row_of(&state).refused.expect("gated below 6.2");
+    assert_eq!(refusal.text(), "needs Redis 6.2");
+    assert!(!refusal.preview_only, "the key does nothing at all");
+}

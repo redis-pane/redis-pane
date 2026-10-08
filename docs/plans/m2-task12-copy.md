@@ -142,3 +142,15 @@ disambiguates with one `EXISTS src` before reporting.
   `CheckTarget` shell path apply unchanged. A `COPY` reply of `0` is disambiguated with one
   `EXISTS src` (target taken vs source gone). `restore_ttl` also maps any `PTTL` below -2 to `0`
   (defensive; the server never sends it). No deviations.
+- **Phase 4 (tests).** Docker, `mod copy` in `crates/app/tests/integration.rs` (11 tests):
+  every type (string, hash, list, set, zset, stream) lands with equal contents and a carried TTL;
+  no-TTL stays no-TTL; taken target refused with both keys unchanged; gone source creates
+  nothing; binary names with decoys; Cluster same-slot `COPY` (plus taken and gone); Cluster
+  cross-slot fallback with value and TTL kept (and the server really refuses plain `COPY` there);
+  cross-slot no-TTL; cross-slot onto an existing target; cross-slot gone source. **Deviation:**
+  the 6.0/6.1 version gate is unit-tested only. No 6.0/6.1 image is in the suite and
+  `docker pull redis:6.0-alpine` hangs in this environment; the Docker test instead pins that a
+  real 6.2 probe leaves `D` available and the server accepts `COPY`. Core: 20 new tests in
+  `update/rename.rs`; shell: 2 for `restore_ttl`. Golden: eight new frames (copy capture,
+  typed, hint bar; dialog plain, target exists, cross-slot fallback, read-only) plus a test that
+  the help row is dimmed `needs Redis 6.2` below 6.2. Only help goldens changed (phase 2).
