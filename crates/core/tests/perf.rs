@@ -1104,3 +1104,95 @@ fn rebuild_slice_calibration_random_deep() {
         profile(&base, 3, || key(KeyCode::Char('t')));
     }
 }
+
+// ── M2 task 13: multi-select and bulk delete ─────────────────────────────
+
+/// Marking costs O(1) per keystroke (`docs/plans/m2-task13-bulk-delete.md`
+/// decision 5). `Space` at 1M keys: the `update` alone is held under 1ms
+/// (AT TARGET for this task), and the keystroke with its render under the
+/// frame.
+fn space_toggle(fx: Fixture, _unused: u64) {
+    let mut base = big_state(fx);
+    base.view.selected = 500_000;
+    let samples = 31;
+    let mut update_only = Vec::with_capacity(samples);
+    for _ in 0..samples {
+        let working = base.clone();
+        let started = Instant::now();
+        let (state, _) = update(working, key(KeyCode::Char(' ')));
+        update_only.push(started.elapsed());
+        assert_eq!(state.marks.count(), 1);
+    }
+    let update_only = median(update_only);
+    let with_render = time_update_and_render(&base, 11, || key(KeyCode::Char(' ')));
+    println!(
+        "[{}] Space @ 1M keys: update {update_only:?}, update+render {with_render:?}",
+        fx.label()
+    );
+    assert!(
+        update_only < Duration::from_millis(1),
+        "Space update took {update_only:?}, budget is 1ms"
+    );
+    assert_budget("Space with render", with_render, 16);
+}
+variants!(space_toggle:
+    space_toggle_at_1m_keys => (Fixture::Sorted, 0),
+    space_toggle_at_1m_keys_random_deep => (Fixture::RandomDeep, 0));
+
+/// `d` with 10,000 marks: staging the bulk delete reads each marked name once
+/// (O(marked)) and renders a dialog of eight names. "A few ms".
+fn bulk_delete_preview(fx: Fixture, _unused: u64) {
+    let mut base = big_state(fx);
+    let mut rng = SplitMix64(SEED ^ 0x13);
+    while base.marks.count() < 10_000 {
+        let i = (rng.next() % N as u64) as usize;
+        if !base.marks.is_marked(i) {
+            base.marks.toggle(i);
+        }
+    }
+    let mut stage = Vec::new();
+    for _ in 0..11 {
+        let working = base.clone();
+        let started = Instant::now();
+        let (state, _) = update(working, key(KeyCode::Char('d')));
+        stage.push(started.elapsed());
+        assert!(state.confirm.is_some());
+    }
+    let stage = median(stage);
+    let with_render = time_update_and_render(&base, 11, || key(KeyCode::Char('d')));
+    println!(
+        "[{}] bulk-delete preview @ 1M keys, 10,000 marks: stage {stage:?}, stage+render {with_render:?}; marks heap {} bytes",
+        fx.label(),
+        base.marks.heap_bytes()
+    );
+    assert!(
+        with_render < Duration::from_millis(10),
+        "preview took {with_render:?}, budget is a few ms (10ms)"
+    );
+}
+variants!(bulk_delete_preview:
+    bulk_delete_preview_at_1m_keys_10k_marks => (Fixture::Sorted, 0),
+    bulk_delete_preview_at_1m_keys_10k_marks_random_deep => (Fixture::RandomDeep, 0));
+
+/// Marks held on a large selection: the bitset is `Loaded / 8` bytes whatever
+/// the count, and enumerating 500,000 marks stays a fraction of a frame.
+#[test]
+#[ignore]
+fn half_a_million_marks_cost_a_bitset_and_a_walk() {
+    let mut state = big_state(Fixture::RandomDeep);
+    let mut rng = SplitMix64(SEED ^ 0x14);
+    for _ in 0..500_000 {
+        state.marks.toggle((rng.next() % N as u64) as usize);
+    }
+    let started = Instant::now();
+    let walked = state.marks.iter().collect::<Vec<_>>().len();
+    let walk = started.elapsed();
+    println!(
+        "500,000 marks: {} set, heap {} bytes, walk {walk:?}",
+        walked,
+        state.marks.heap_bytes()
+    );
+    assert_eq!(walked, state.marks.count());
+    assert!(state.marks.heap_bytes() <= N / 8 + 8 * 1024);
+    assert!(walk < Duration::from_millis(16));
+}

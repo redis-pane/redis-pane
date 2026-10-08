@@ -1,0 +1,1 @@
+→ open / expand   / filter   s sort   t tree view   d delete 3 marked   Esc unmark all   c copy   r rescan   ? F1 help

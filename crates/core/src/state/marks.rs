@@ -10,6 +10,9 @@
 /// How many key names the bulk-delete dialog lists before `… and N more`.
 pub const BULK_PREVIEW_NAMES: usize = 8;
 
+/// Words added at a time when the bitset grows (8 KB).
+const GROW_WORDS: usize = 1024;
+
 /// Which Loaded-set rows are marked for a bulk operation.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Marks {
@@ -37,7 +40,12 @@ impl Marks {
     pub fn toggle(&mut self, i: usize) -> bool {
         let (word, bit) = (i / 64, 1u64 << (i % 64));
         if word >= self.words.len() {
-            self.words.resize(word + 1, 0);
+            // Grown in 8 KB steps and to exactly that, so the capacity (what
+            // `heap_bytes` reports) never overshoots `Loaded / 8` by a
+            // doubling, and a run of ascending marks reallocates rarely.
+            let want = (word + 1).next_multiple_of(GROW_WORDS);
+            self.words.reserve_exact(want - self.words.len());
+            self.words.resize(want, 0);
         }
         if self.words[word] & bit != 0 {
             self.words[word] &= !bit;

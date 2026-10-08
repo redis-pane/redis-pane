@@ -5814,3 +5814,131 @@ fn golden_hint_bar_value_pane_with_the_cursor_on_each_type() {
         );
     }
 }
+
+// ── M2 task 13: multi-select and bulk delete ────────────────────────────────
+
+/// `browsing()` grown to `total` keys, so a dialog can pass its name limit.
+fn bulk_browsing(total: usize) -> State {
+    let mut state = browsing();
+    // The viewport scrolls to the selection by `rows`, which `base()` leaves
+    // at the two a title bar needs.
+    state.cols = 130;
+    state.rows = 26;
+    for i in 8..total {
+        state.keys.push(format!("job:batch:{i:03}").as_bytes());
+        state.keys.set_kind(i, KeyKind::String);
+        state.keys.set_ttl(i, TTL_NONE, 74);
+        state.keys.set_size(i, 128 + i as u32);
+    }
+    state.rebuild_list();
+    state
+}
+
+/// `n` `Space` presses from the top: marks the first `n` rows.
+fn spaced(mut state: State, n: usize) -> State {
+    for _ in 0..n {
+        state = update(state, Msg::Key(KeyPress::plain(KeyCode::Char(' ')))).0;
+    }
+    state
+}
+
+fn pressed(state: State, c: char) -> State {
+    update(state, Msg::Key(KeyPress::plain(KeyCode::Char(c)))).0
+}
+
+fn on_prod(mut state: State) -> State {
+    state.connection.environment = Environment::Prod;
+    state.read_only = None;
+    state
+}
+
+#[test]
+fn golden_bulk_marked_rows() {
+    let state = spaced(bulk_browsing(8), 3);
+    assert_golden("bulk_marked_rows", &draw(&state, 130, 26));
+}
+
+#[test]
+fn golden_bulk_marked_rows_unicode_and_ascii_are_width_identical() {
+    let state = spaced(bulk_browsing(8), 3);
+    let (unicode, ascii) = draw_both(&state, 130, 26, &CLOCK);
+    assert_golden("bulk_marked_rows_ascii", &ascii);
+    let widths = |s: &str| s.lines().map(|l| l.chars().count()).collect::<Vec<_>>();
+    assert_eq!(widths(&unicode), widths(&ascii));
+    assert!(unicode.contains('◆') && ascii.contains("+*"));
+}
+
+#[test]
+fn golden_bulk_marked_rows_at_80_columns_with_the_status_count() {
+    let state = spaced(bulk_browsing(8), 2);
+    assert_golden("bulk_marked_80", &draw(&state, 80, 24));
+}
+
+#[test]
+fn golden_bulk_confirm_below_the_name_limit() {
+    let state = pressed(spaced(bulk_browsing(8), 5), 'd');
+    assert_golden("bulk_confirm_5", &draw(&state, 130, 26));
+}
+
+#[test]
+fn golden_bulk_confirm_above_the_name_limit() {
+    let state = pressed(spaced(bulk_browsing(20), 12), 'd');
+    assert_golden("bulk_confirm_12", &draw(&state, 130, 26));
+}
+
+#[test]
+fn golden_bulk_confirm_ascii() {
+    let state = pressed(spaced(bulk_browsing(20), 12), 'd');
+    assert_golden(
+        "bulk_confirm_12_ascii",
+        &ascii_frame(&state, 130, 26, &CLOCK),
+    );
+}
+
+#[test]
+fn golden_bulk_confirm_on_prod_before_the_count() {
+    let state = pressed(spaced(on_prod(bulk_browsing(20)), 12), 'd');
+    assert_golden("bulk_confirm_prod", &draw(&state, 130, 26));
+}
+
+#[test]
+fn golden_bulk_confirm_on_prod_empty_count() {
+    let state = pressed(pressed(spaced(on_prod(bulk_browsing(20)), 12), 'd'), 'y');
+    assert_golden("bulk_confirm_prod_typing", &draw(&state, 130, 26));
+}
+
+#[test]
+fn golden_bulk_confirm_on_prod_wrong_count() {
+    let mut state = pressed(pressed(spaced(on_prod(bulk_browsing(20)), 12), 'd'), 'y');
+    state = pressed(pressed(state, '1'), '1');
+    state = update(state, Msg::Key(KeyPress::plain(KeyCode::Enter))).0;
+    assert_golden("bulk_confirm_prod_wrong", &draw(&state, 130, 26));
+}
+
+#[test]
+fn golden_bulk_confirm_refused_by_read_only() {
+    let mut state = pressed(spaced(bulk_browsing(8), 5), 'd');
+    state.read_only = Some(ReadOnlyReason::User);
+    assert_golden("bulk_confirm_read_only", &draw(&state, 130, 26));
+}
+
+#[test]
+fn golden_bulk_hint_bar_with_marks() {
+    let state = spaced(bulk_browsing(8), 3);
+    assert_golden("hint_bar_bulk_marked", &hint_bar(&state, 130));
+}
+
+#[test]
+fn golden_bulk_hint_bar_in_the_confirm_and_the_typed_count() {
+    let confirm = pressed(spaced(on_prod(bulk_browsing(8)), 3), 'd');
+    assert_golden("hint_bar_bulk_confirm", &hint_bar(&confirm, 130));
+    let typing = pressed(confirm, 'y');
+    assert_golden("hint_bar_bulk_typing", &hint_bar(&typing, 130));
+}
+
+#[test]
+fn golden_bulk_status_while_deleting() {
+    let mut state = pressed(pressed(spaced(bulk_browsing(8), 5), 'd'), 'y');
+    state.bulk.as_mut().unwrap().done = 3;
+    assert_golden("bulk_deleting", &draw(&state, 130, 26));
+}
