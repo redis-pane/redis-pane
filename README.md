@@ -37,8 +37,11 @@ runs in slices between frames while the old list stays usable under a `rebuildin
 and the new list arrives in about a tenth of a second — a tree toggle ~0.1 s, a sort change
 ~0.1 s, a collapse or a filter rebuild a few hundredths.
 
-Known limits: rename, copy, and bulk operations across several keys are not built
-yet and are still coming next.
+Keys can be renamed (`R`), duplicated (`D`, Redis `COPY`) and deleted in bulk (`Space` marks,
+`d` deletes the marked set — on `prod` you type the count), and a Hash field or a Set/Sorted-set
+member can be renamed in place (`R` in the value pane). Nothing ever overwrites an existing name.
+
+Known limits: no move-across-database, and no opening a value in your own `$EDITOR` yet.
 
 Requires Redis 6.0 or newer (Valkey works too).
 
