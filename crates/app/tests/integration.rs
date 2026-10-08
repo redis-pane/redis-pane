@@ -9308,3 +9308,309 @@ mod member_rename {
         let _ = writer.quit().await;
     }
 }
+
+// ── M2 task 13 — multi-select and bulk delete ───────────────────────────────
+
+/// `docs/plans/m2-task13-bulk-delete.md`. Everything goes through
+/// `mutate::delete_keys` / `execute_bulk_settled`, the functions the shell's
+/// bulk-delete task runs. Cancellation is made deterministic by cancelling the
+/// token from the progress callback: it runs after a batch and before the next
+/// check, so the cut is always at a batch boundary.
+mod bulk_delete {
+    use super::Credentials;
+    use super::support::cluster::start_cluster;
+    use fred::prelude::*;
+    use redis_pane::redis::mutate::{BULK_DELETE_BATCH, delete_keys, execute_bulk_settled};
+    use redis_pane_core::key::KeyName;
+    use redis_pane_core::mutation::{BulkStop, MutationOutcome};
+    use tokio_util::sync::CancellationToken;
+
+    async fn setup() -> (
+        testcontainers::ContainerAsync<testcontainers::GenericImage>,
+        Client,
+        Client,
+    ) {
+        let (c, url) = super::start("redis", "7-alpine").await;
+        let writer = Builder::from_config(Config::from_url(&url).unwrap())
+            .build()
+            .unwrap();
+        writer.init().await.unwrap();
+        let (client, _) = redis_pane::redis::connect(&url).await.unwrap();
+        (c, client, writer)
+    }
+
+    async fn seed(writer: &Client, prefix: &str, n: usize) -> Vec<KeyName> {
+        let pipeline = writer.pipeline();
+        let mut keys = Vec::with_capacity(n);
+        for i in 0..n {
+            let key = format!("{prefix}:{i}");
+            let _: () = pipeline.set(&key, "v", None, None, false).await.unwrap();
+            keys.push(KeyName::from(key.as_str()));
+        }
+        let _: Vec<Value> = pipeline.all().await.unwrap();
+        keys
+    }
+
+    #[tokio::test]
+    #[ignore = "needs docker"]
+    async fn two_thousand_keys_are_deleted_in_batches_and_counted() {
+        let (_c, client, writer) = setup().await;
+        let keys = seed(&writer, "bulk", 2_000).await;
+        let _: () = writer
+            .set("decoy", "kept", None, None, false)
+            .await
+            .unwrap();
+
+        let mut ticks = Vec::new();
+        let run = delete_keys(
+            &client,
+            &keys,
+            BULK_DELETE_BATCH,
+            &CancellationToken::new(),
+            |done, total| ticks.push((done, total)),
+        )
+        .await;
+        assert!(run.error.is_none());
+        let r = run.report;
+        assert_eq!(r.stopped, BulkStop::Completed);
+        assert_eq!(
+            (r.total, r.processed, r.deleted, r.already_gone),
+            (2_000, 2_000, 2_000, 0)
+        );
+        assert_eq!(
+            ticks,
+            vec![(500, 2_000), (1_000, 2_000), (1_500, 2_000), (2_000, 2_000)]
+        );
+        assert_eq!(
+            writer.dbsize::<i64>().await.unwrap(),
+            1,
+            "only the decoy is left"
+        );
+        let _ = client.quit().await;
+        let _ = writer.quit().await;
+    }
+
+    #[tokio::test]
+    #[ignore = "needs docker"]
+    async fn keys_already_gone_are_counted_as_such() {
+        let (_c, client, writer) = setup().await;
+        let keys = seed(&writer, "g", 100).await;
+        for k in keys.iter().step_by(4) {
+            let _: i64 = writer.del(k.as_bytes()).await.unwrap();
+        }
+        let run = delete_keys(&client, &keys, 30, &CancellationToken::new(), |_, _| {}).await;
+        let r = run.report;
+        assert_eq!(r.stopped, BulkStop::Completed);
+        assert_eq!((r.deleted, r.already_gone, r.processed), (75, 25, 100));
+        assert_eq!(writer.dbsize::<i64>().await.unwrap(), 0);
+        let _ = client.quit().await;
+        let _ = writer.quit().await;
+    }
+
+    #[tokio::test]
+    #[ignore = "needs docker"]
+    async fn cancelling_between_batches_reports_exactly_how_far_it_got() {
+        let (_c, client, writer) = setup().await;
+        let keys = seed(&writer, "c", 2_000).await;
+        let token = CancellationToken::new();
+        let stop = token.clone();
+        let run = delete_keys(&client, &keys, 100, &token, |done, _| {
+            if done >= 500 {
+                stop.cancel();
+            }
+        })
+        .await;
+        let r = run.report;
+        assert_eq!(r.stopped, BulkStop::Cancelled);
+        assert_eq!((r.processed, r.deleted, r.already_gone), (500, 500, 0));
+        assert_eq!(writer.dbsize::<i64>().await.unwrap(), 1_500);
+        // The processed prefix is exactly the keys that are gone.
+        assert_eq!(
+            writer.exists::<i64, _>(keys[499].as_bytes()).await.unwrap(),
+            0
+        );
+        assert_eq!(
+            writer.exists::<i64, _>(keys[500].as_bytes()).await.unwrap(),
+            1
+        );
+        let _ = client.quit().await;
+        let _ = writer.quit().await;
+    }
+
+    #[tokio::test]
+    #[ignore = "needs docker"]
+    async fn a_token_cancelled_before_the_first_batch_deletes_nothing() {
+        let (_c, client, writer) = setup().await;
+        let keys = seed(&writer, "n", 50).await;
+        let token = CancellationToken::new();
+        token.cancel();
+        let run = delete_keys(&client, &keys, 10, &token, |_, _| {}).await;
+        assert_eq!(run.report.stopped, BulkStop::Cancelled);
+        assert_eq!(run.report.processed, 0);
+        assert_eq!(writer.dbsize::<i64>().await.unwrap(), 50);
+        let _ = client.quit().await;
+        let _ = writer.quit().await;
+    }
+
+    #[tokio::test]
+    #[ignore = "needs docker"]
+    async fn binary_names_are_deleted_by_their_bytes_and_decoys_survive() {
+        let (_c, client, writer) = setup().await;
+        let bin: &[u8] = &[7, 8];
+        let _: () = writer.set(bin, "bin", None, None, false).await.unwrap();
+        let _: () = writer.set("7", "decoy7", None, None, false).await.unwrap();
+        let _: () = writer.set("8", "decoy8", None, None, false).await.unwrap();
+        let keys = vec![KeyName::from(bin)];
+        let run = delete_keys(&client, &keys, 10, &CancellationToken::new(), |_, _| {}).await;
+        assert_eq!(run.report.deleted, 1);
+        assert_eq!(writer.exists::<i64, _>(bin).await.unwrap(), 0);
+        assert_eq!(writer.get::<String, _>("7").await.unwrap(), "decoy7");
+        assert_eq!(writer.get::<String, _>("8").await.unwrap(), "decoy8");
+        let _ = client.quit().await;
+        let _ = writer.quit().await;
+    }
+
+    /// A dead client cannot delete anything: the report names the failing
+    /// `DEL` and says nothing was processed, rather than the run vanishing.
+    #[tokio::test]
+    #[ignore = "needs docker"]
+    async fn a_failing_command_is_reported_with_the_command_and_how_far_it_got() {
+        let (_c, client, writer) = setup().await;
+        let keys = seed(&writer, "f", 20).await;
+        let _ = client.quit().await;
+        let settled =
+            execute_bulk_settled(&client, &keys, &CancellationToken::new(), |_, _| {}).await;
+        match settled.result {
+            Ok(MutationOutcome::BulkDeleted(r)) => {
+                match r.stopped {
+                    BulkStop::Failed { command, detail } => {
+                        assert_eq!(command, "DEL f:0");
+                        assert!(!detail.is_empty());
+                    }
+                    other => panic!("expected a failure, got {other:?}"),
+                }
+                assert_eq!((r.processed, r.deleted), (0, 0));
+            }
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(
+            writer.dbsize::<i64>().await.unwrap(),
+            20,
+            "nothing was deleted"
+        );
+        let _ = writer.quit().await;
+    }
+
+    /// The whole loop: the core stages and confirms, the shell deletes, the
+    /// core hears the report and badges the rows.
+    #[tokio::test]
+    #[ignore = "needs docker"]
+    async fn the_core_stages_the_shell_deletes_and_the_core_badges_the_rows() {
+        use redis_pane_core::msg::{KeyCode, KeyPress};
+        use redis_pane_core::{Command, Msg, State, update};
+
+        let (_c, client, writer) = setup().await;
+        let keys = seed(&writer, "e2e", 40).await;
+        let mut state = State {
+            cols: 130,
+            rows: 30,
+            ..State::default()
+        };
+        (state, _) = update(
+            state,
+            Msg::ScanStarted {
+                estimated_total: 40,
+            },
+        );
+        (state, _) = update(
+            state,
+            Msg::ScanBatch {
+                keys: keys.iter().map(|k| k.as_bytes().to_vec()).collect(),
+            },
+        );
+        (state, _) = update(state, Msg::ScanComplete);
+        while state.rebuild_running() {
+            (state, _) = update(state, Msg::RebuildStep);
+        }
+        for _ in 0..10 {
+            (state, _) = update(state, Msg::Key(KeyPress::plain(KeyCode::Char(' '))));
+        }
+        let marked: Vec<usize> = state.marks.iter().collect();
+        assert_eq!(marked.len(), 10);
+        (state, _) = update(state, Msg::Key(KeyPress::plain(KeyCode::Char('d'))));
+        let (state, commands) = update(state, Msg::Key(KeyPress::plain(KeyCode::Char('y'))));
+        let Some(Command::Execute { mutation, index }) = commands.into_iter().next() else {
+            panic!("confirming stages an Execute");
+        };
+        let redis_pane_core::mutation::Mutation::DeleteKeys { keys: sent } = &mutation else {
+            panic!("expected DeleteKeys");
+        };
+        let settled =
+            execute_bulk_settled(&client, sent, &CancellationToken::new(), |_, _| {}).await;
+        let (state, _) = update(
+            state,
+            Msg::MutationSettled {
+                mutation,
+                index,
+                result: settled.result,
+                at_ms: 1_000,
+            },
+        );
+        for i in &marked {
+            assert!(state.keys.is_gone(*i));
+        }
+        assert!(state.marks.is_empty() && state.bulk.is_none());
+        assert_eq!(state.notice.as_ref().unwrap().0, "deleted 10 of 10 keys");
+        assert_eq!(writer.dbsize::<i64>().await.unwrap(), 30);
+        let _ = client.quit().await;
+        let _ = writer.quit().await;
+    }
+
+    /// Keys spread over all three primaries are all deleted, and nothing is
+    /// refused with `CROSSSLOT`: each `DEL` is routed by its own slot.
+    #[tokio::test]
+    #[ignore = "needs docker"]
+    async fn on_a_cluster_keys_across_every_primary_are_all_deleted_without_crossslot() {
+        let cluster = start_cluster().await;
+        let client = redis_pane::redis::connect_with(&cluster.seed_url(), &Credentials::default())
+            .await
+            .expect("cluster client")
+            .0;
+        let writer = cluster.client().await;
+        let keys = seed(&writer, "cl", 3_000).await;
+        for p in cluster.primaries().await {
+            let size: i64 = cluster
+                .cli(p.port, &["dbsize"])
+                .await
+                .trim()
+                .parse()
+                .unwrap();
+            assert!(
+                size > 0,
+                "primary {} holds no keys: the spread is not real",
+                p.port
+            );
+        }
+        let settled =
+            execute_bulk_settled(&client, &keys, &CancellationToken::new(), |_, _| {}).await;
+        assert!(!settled.link_lost);
+        match settled.result {
+            Ok(MutationOutcome::BulkDeleted(r)) => {
+                assert_eq!(r.stopped, BulkStop::Completed, "{r:?}");
+                assert_eq!((r.processed, r.deleted, r.already_gone), (3_000, 3_000, 0));
+            }
+            other => panic!("{other:?}"),
+        }
+        for p in cluster.primaries().await {
+            let size: i64 = cluster
+                .cli(p.port, &["dbsize"])
+                .await
+                .trim()
+                .parse()
+                .unwrap();
+            assert_eq!(size, 0, "primary {} still holds keys", p.port);
+        }
+        let _ = client.quit().await;
+        let _ = writer.quit().await;
+    }
+}

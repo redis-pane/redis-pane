@@ -47,6 +47,8 @@ pub(super) fn scan_started(mut state: State, estimated_total: u64) -> (State, Ve
     // Every index just changed meaning: replies to fetches issued against the
     // old numbering must not land (`metadata_batch` checks this).
     state.metadata_epoch = state.metadata_epoch.next();
+    // Marks are Loaded-set indices, so they go with the numbering.
+    state.marks.clear();
     // The Open key survives a rescan; its *index* must not. `SCAN` has
     // no stable order, so the same number will address a different key
     // once the set refills, and every use of it — the tombstone

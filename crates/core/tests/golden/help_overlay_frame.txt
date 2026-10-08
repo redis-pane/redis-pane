@@ -9,6 +9,6 @@
 │ C         copy redis-cli command                                                                 │
 │ R         rename                                                                                 │
 │ D         duplicate key (COPY)                                                                   │
+│ Space     mark                                                                                   │
 │ ↑↓ jk     move                                                                                   │
-│ PgUp/PgDn page                                                                                   │
 └──────────────────────────────────────────────────────────────────────────────────────────────────┘

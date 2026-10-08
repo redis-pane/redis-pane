@@ -1,0 +1,26 @@
+─ redis-pane ─ ● prod · cache-01:6379/0 · from profile staging ────────────────────────────────────────────────────────── ● live ─
+
+ KEY                               TYPE        SIZE   TTL │ → to open
+◆● user:8812:session               hash      2.1 KB   42m │
+◆● user:8812:profile              ┌─ confirm ─────────────────────────────────────────────────┐
+◆● user:8812:cart                 │                                                           │
+◆● user:8813:session              │ DEL × 12 keys                                             │
+◆● cart:91af3c9d2e                │ one DEL per key, in batches · Esc cancels between batches │
+◆● feed:global:hot                │   user:8812:session                                       │
+◆● lock:checkout:8812             │   user:8812:profile                                       │
+◆● stream:orders                  │   user:8812:cart                                          │
+◆● job:batch:008                  │   user:8813:session                                       │
+◆● job:batch:009                  │   cart:91af3c9d2e                                         │
+◆● job:batch:010                  │   feed:global:hot                                         │
+◆● job:batch:011                  │   lock:checkout:8812                                      │
+ ● job:batch:012                  │   stream:orders                                           │
+ ● job:batch:013                  │   … and 4 more                                            │
+ ● job:batch:014                  │ ⚠ prod — y asks you to type the count                     │
+ ● job:batch:015                  │                                                           │
+ ● job:batch:016                  │ y continue · Esc cancel                                   │
+ ● job:batch:017                  └───────────────────────────────────────────────────────────┘
+ ● job:batch:018                   string     146 B     ∞ │
+ ● job:batch:019                   string     147 B     ∞ │
+                                                          │
+ scanning 41,203 of ~180,000   12 marked  Esc cancel
+ y confirm   Esc discard   F1 help

@@ -841,6 +841,7 @@ pub(super) fn staged_edit_found_key_gone(state: &mut State, name: &KeyName, at_m
         // `docs/plans/m3-slowlog.md`). `None`: no dialog is up at all.
         Some(
             PendingMutation::DeleteKey { .. }
+            | PendingMutation::DeleteKeys { .. }
             | PendingMutation::RenameKey { .. }
             | PendingMutation::CopyKey { .. }
             | PendingMutation::ResetSlowlog,

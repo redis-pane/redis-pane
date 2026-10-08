@@ -280,6 +280,12 @@ pub enum Msg {
         result: Result<crate::mutation::MutationOutcome, String>,
         at_ms: u64,
     },
+    /// A bulk delete finished another batch (M2 task 13): `done` of `total`
+    /// keys are behind it. Progress only; the outcome is `MutationSettled`.
+    BulkDeleteProgress {
+        done: usize,
+        total: usize,
+    },
     /// `Command::CheckTarget` answered (M2 task 11): whether a key named `key`
     /// exists. Applied only to a staged rename whose new name is `key`; a
     /// reply that finds nothing staged, or something else, is dropped — it

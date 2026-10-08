@@ -194,6 +194,10 @@ pub enum Command {
         /// the reply so the tombstone lands on it. `None` for every other write.
         index: Option<usize>,
     },
+    /// Stop the running bulk delete after the batch in flight (`Esc`, M2 task
+    /// 13). The shell cancels the token the delete checks between batches; a
+    /// cancel with nothing running is harmless.
+    CancelBulkDelete,
     /// Ask whether a key named `key` exists (`EXISTS`), for a staged rename's
     /// preview (M2 task 11). The core does no I/O; the shell answers with
     /// [`crate::Msg::TargetChecked`]. Advice only — the atomic `RENAMENX` is

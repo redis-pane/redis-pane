@@ -1,0 +1,26 @@
+─ redis-pane ─ ● prod · cache-01:6379/0 · from profile staging ────────────────────────────────────────────────────────── ● live ─
+
+ KEY                               TYPE        SIZE   TTL │ → to open
+◆● user:8812:session              ┌─ confirm ─────────────────────────────────────────────────┐
+◆● user:8812:profile              │                                                           │
+◆● user:8812:cart                 │ DEL × 12 keys                                             │
+◆● user:8813:session              │ one DEL per key, in batches · Esc cancels between batches │
+◆● cart:91af3c9d2e                │   user:8812:session                                       │
+◆● feed:global:hot                │   user:8812:profile                                       │
+◆● lock:checkout:8812             │   user:8812:cart                                          │
+◆● stream:orders                  │   user:8813:session                                       │
+◆● job:batch:008                  │   cart:91af3c9d2e                                         │
+◆● job:batch:009                  │   feed:global:hot                                         │
+◆● job:batch:010                  │   lock:checkout:8812                                      │
+◆● job:batch:011                  │   stream:orders                                           │
+ ● job:batch:012                  │   … and 4 more                                            │
+ ● job:batch:013                  │ ⚠ type 12 to delete 12 keys on prod                       │
+ ● job:batch:014                  │ count  11▏                                                │
+ ● job:batch:015                  │ ·· doesn't match the number of keys                       │
+ ● job:batch:016                  │                                                           │
+ ● job:batch:017                  │ ⏎ delete · ⌫ edit · Esc cancel                            │
+ ● job:batch:018                  └───────────────────────────────────────────────────────────┘
+ ● job:batch:019                   string     147 B     ∞ │
+                                                          │
+ scanning 41,203 of ~180,000   12 marked  Esc cancel
+ 0-9 ⌫ type the count   ⏎ delete   Esc discard   F1 help

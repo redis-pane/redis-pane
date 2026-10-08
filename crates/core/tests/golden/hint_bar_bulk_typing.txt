@@ -1,0 +1,1 @@
+0-9 ⌫ type the count   ⏎ delete   Esc discard   F1 help

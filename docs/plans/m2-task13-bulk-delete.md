@@ -1,6 +1,6 @@
 # M2 task 13: Multi-select and bulk delete
 
-Status: **planned.**
+Status: **done.**
 
 ## Context
 
@@ -72,3 +72,185 @@ rule: a parallel structure indexed by Loaded-set index, never a per-key struct.
   - the dialog, below and above the truncation;
   - the `prod` typed confirmation, empty and with a wrong count;
   - the hint bar.
+
+## Build design (phase 1, 2026-10-08)
+
+Written before the code, by the agent doing the build. Decisions 1–5 above are binding and are not
+reopened here; this fills in what they leave open.
+
+### Marks representation: a bitset, measured
+
+`State::marks: Marks` (`state/marks.rs`), indexed by Loaded-set index and separate from `LoadedSet`
+(marks are selection state, not key data; `LoadedSet::clear` is not the only renumbering point we
+care about, `scan_started` is). Candidates measured on 1M indices with a scratch benchmark
+(release, one thread):
+
+| marks | bitset toggle | sorted `Vec<u32>` toggle | bitset memory | sorted memory |
+|---|---|---|---|---|
+| 1,000 | 7 ns | 168 ns | 125 KB | 8 KB |
+| 10,000 | 2 ns | 665 ns | 125 KB | 44 KB |
+| 100,000 | 3 ns | 3.4 us | 125 KB | 365 KB |
+| 500,000 | 14 ns | 12 us | 125 KB | 1.3 MB |
+
+Membership (the per-visible-row test the renderer makes) is 42-250 ns per 50 rows for the bitset and
+about 1-2 us for the sorted vector. **Pick: bitset** (`Vec<u64>`, grown lazily to the highest index
+marked, so a session that never marks pays nothing) with a maintained count. Toggle and membership are
+O(1) and flat; memory is `Loaded/8` bytes at worst (250 KB at the 2M cap), reported by
+`Marks::heap_bytes`. Enumerating marks in ascending index order (for the preview and the delete) walks
+the words with `trailing_zeros`: O(Loaded/64 + marked), about 0.2-0.5 ms at 1M with 10k-500k marks,
+never a per-key scan of names.
+
+### Lifecycle
+
+- **Survive** filter, sort, tree toggle, group expand/collapse, narrowing and every sliced rebuild job
+  (M6): none of them renumbers Loaded-set indices, they only permute or subset the view over them.
+  A mark on a row the filter hides stays set and is still deleted by `d`; the dialog says how many
+  keys it will delete (and on `prod` the user types that count), but it cannot say how many are hidden
+  (that would be O(Loaded)). Recorded as a known limit.
+- **Cleared by a rescan**, in `scan_started`, on the line next to the `metadata_epoch` bump (same
+  reason: the numbering changed).
+- **Cleared by a completed bulk delete.** A cancelled or failed one unmarks only the keys it
+  processed, so the remainder stays marked for a retry. Unmarking is guarded by the epoch the delete
+  was staged under: if a rescan intervened the marks are already gone and the old indices are not used.
+- **Esc** in the keys pane: first an error, then (new) an in-flight bulk delete is cancelled, then the
+  value-pane pop, then (new) marks are cleared, then a running scan is cancelled. So a selection is
+  never stuck, and one Esc does one thing.
+- Marking a gone row is refused with a notice; rows that went gone while marked are dropped when
+  `d` stages the delete (they have nothing left to delete, as single delete already refuses them).
+- `Space` on a group row: notice `groups can't be marked - mark their keys`, nothing marked.
+
+### Glyph role and readout
+
+`Glyph::Marked`: `◆` / `+`, one column each (the table test enforces it), drawn in the pane's left
+margin column (column 0 of the keys pane, which no row uses), so no column moves and a selected row
+keeps its bar. Monochrome safe: it is a glyph, not a hue. A new `Glyph::Times` (`×` / `x`) is added
+for `DEL × N`. The status line gains `N marked` (and, while a bulk delete runs, `deleting X of N` plus
+the existing `Esc cancel`). `Space` is spelled `Space` by `key_label`.
+
+### Mutation shape
+
+`Mutation::DeleteKeys { keys: Vec<KeyName> }` (`key()` is `None`, like `ResetSlowlog`), staged as
+`PendingMutation::DeleteKeys { indices, names, epoch, gate }`. Staging is O(marked): one name copy per
+marked key, no pass over the Loaded set's names. The dialog shows the line `DEL × 2,000 keys`, a
+muted guard line (`one DEL per key, in batches · Esc cancels between batches`), the first 8 names
+and `… and N more` beyond that. `command_label` (error lines) is `DEL (N keys)`; the failure line
+names the real failing `DEL <key>`.
+
+**`prod` typed-count state machine** (`CountGate`): `None` (every other Environment: one `y`),
+`Required` (prod, dialog just opened), `Typing { text, wrong }`.
+
+- `Required` + `y`: Read-only Mode is checked here, as ever (refused: dialog closes with the
+  notice); otherwise `Typing`. Every other key is ignored.
+- `Typing`: digits append (up to 10), `⌫` removes, `Enter` submits: the exact count executes
+  (through `into_command`, the one place); anything else sets `wrong` and the dialog stays. `y` and
+  every other key are ignored; `Esc` dismisses at any stage. Enter, not auto-submit, because `50` is
+  a prefix of `500`. The rule "only `y` confirms" is for the preview step; the typed step is
+  deliberately a different gesture, which is the point of it.
+
+### Execution in the shell
+
+`Command::Execute { mutation: DeleteKeys, index: None }` is the existing chokepoint output. The shell
+(`Shell::mutate`) routes `DeleteKeys` to `redis::mutate::delete_keys`:
+
+- Batches of `BULK_DELETE_BATCH = 500` keys, each a `fred` pipeline of single-key `DEL`s collected
+  with `try_all`. Each command is routed by its own slot (`fred` writes pipelined commands one at a
+  time through the router), so a Cluster needs no grouping and never sees `CROSSSLOT`.
+- Reply `1` counts as deleted, `0` as already gone. An `Err` at position `p` of a batch stops the
+  run after that batch: the report carries `processed` (a contiguous prefix: whole batches plus the
+  Ok run before the first error), counts for that prefix, and `extra_ok` (positions after the first
+  error that did succeed, so no deleted key goes unbadged and no count lies), and
+  `BulkStop::Failed { command, detail }` naming the first failing `DEL key`. The wedge check
+  (`is_wedged`) runs on that error exactly as `execute_settled` does, and sets `link_lost`.
+- **Cancellation:** the core's `Esc` emits `Command::CancelBulkDelete`; the shell holds a
+  `CancellationToken` (`Shell::bulk_cancel`, the `scan_cancel` pattern) that `delete_keys` checks
+  between batches. A cancelled run reports `BulkStop::Cancelled` and the counts so far. A batch in
+  flight is allowed to finish (it is a few milliseconds; abandoning it would lose its counts).
+- **Progress:** after each batch the shell sends `Msg::BulkDeleteProgress { done, total }`.
+- Settlement: `Msg::MutationSettled { result: Ok(MutationOutcome::BulkDeleted(report)) }`.
+  `MutationOutcome` stops being `Copy` (it now holds strings), nothing relied on it.
+
+### Core handling of the outcome
+
+`State::bulk: Option<BulkDelete { indices, total, done, cancelling, epoch }>` is set when `y`
+produces the command and cleared on settle. For each processed position whose staged name still matches
+`keys.name(index)` and whose epoch is current, the row gets `set_gone` through the same helper the
+single delete uses (`mark_deleted`, factored out of `key_deleted`, which also tombstones an Open key
+with its last value kept). Then the processed indices are unmarked and one message is raised: a notice
+`deleted 1,998 of 2,000 keys (2 already gone)`; cancelled: `cancelled: deleted X of N ...`; failed:
+the error line `DEL k: <detail> - stopped after X of N (Y deleted, Z already gone)` (R7.4).
+While `bulk` is set, `d` says `a bulk delete is already running` and nothing is staged.
+
+### Tests planned
+
+Core unit tests per the Testing section; Docker tests call `delete_keys` directly (batch size is a
+parameter, and the cancel test cancels the token from the progress callback after the first batch,
+so cancellation is deterministic); perf in the M6 harness; goldens as listed.
+
+### Phase log
+
+- Phase 1: this note. No code.
+- Phase 2: core. `state/marks.rs` (bitset, `CountGate`, `BulkDelete`), `Space`/`ToggleMark`, `update/bulk.rs`
+  (mark, stage, typed gate, progress, cancel, settle), `Mutation::DeleteKeys`, `MutationOutcome::BulkDeleted`,
+  `Command::CancelBulkDelete`, `Msg::BulkDeleteProgress`, glyphs `Marked`/`Times`, mark glyph in the left
+  margin, `N marked`/`deleting X of N` in the status line, dialog, help and hint rows. 36 core tests in
+  `update/bulk_tests.rs` plus 4 in `state/marks.rs`. The shell executor is a stub that fails loudly until
+  phase 3 (`execute` returns an error for `DeleteKeys`); nothing sends it yet outside tests. Six help
+  goldens re-recorded (the new `Space mark` row); no other golden moved.
+- Phase 3: shell. `redis::mutate::delete_keys` (pipelined single-key `DEL` batches of 500 via `try_all`,
+  cancellation checked between batches, progress callback, failure reported inside the `BulkReport`),
+  `execute_bulk_settled` (the wedge check), `Shell::mutate` routing `DeleteKeys` to its own task with
+  `bulk_cancel` and `Msg::BulkDeleteProgress` (`try_send`, cosmetic), `Command::CancelBulkDelete`. A bulk
+  delete that fails outright (`Err`) also clears `State::bulk`. No Docker run yet; phase 4 covers it.
+- Phase 4: tests. 8 Docker tests (`mod bulk_delete` in `crates/app/tests/integration.rs`), 13 goldens, 5 perf
+  tests (two on each fixture plus the 500k-mark walk). Phase 5: docs (DESIGN §4/§6.5, PLAN §5 row 13) and verification.
+
+## Outcome
+
+Status: **done.** `Space` marks keys in the keys pane and `d` with marks stages one bulk delete
+through the one mutation path.
+
+**Delivered, as designed:** marks as a bitset over Loaded-set indices (`state/marks.rs`), cleared by
+a rescan in `scan_started`, by a completed delete, and by the first `Esc`; the `◆`/`+` glyph in the
+pane's left margin and `N marked` in the status line; `Mutation::DeleteKeys` / `PendingMutation::DeleteKeys`
+with the `DEL × N keys` preview (first eight names, `… and N more`); one `y` off `prod`, and on `prod` `y`
+then the typed count with `⏎` (`CountGate`); Read-only refusal at the first `y`; the shell's pipelined
+single-key `DEL` batches of 500 with `try_all`, progress, cancellation between batches through a
+`CancellationToken`, and a failure that names the `DEL` and how far it got; every processed row badged
+through the shared `mark_deleted` helper (the single delete uses the same one), the Open key tombstoned
+as before; `d` without marks untouched.
+
+**Deviations and choices the plan left open:**
+- **Enter submits the typed count.** The plan said "types the count exactly"; matching alone would confirm
+  `50` on the way to `500`, so the typed step ends in `⏎`. `y` and every other key are ignored there.
+- **`prod` only.** The typed count applies to `prod`, as the plan says. `unknown` starts in
+  Read-only Mode but gets one `y` once lifted, like `staging`. Worth a look at close-out if `unknown` should
+  count as `prod` here.
+- **`MutationOutcome` lost `Copy`** (it now carries a `BulkReport` with strings); nothing relied on it.
+- **A failure travels inside `Ok(BulkDeleted(report))`, not `Err`,** so the progress is never lost behind an
+  error string. A bulk delete that fails outright (`Err`) clears `State::bulk` all the same.
+- **Cluster: no per-node grouping.** PLAN row 13 said keys are grouped by node; `fred` routes every
+  pipelined command by its own key's slot, so one pipeline of single-key `DEL`s needs none and the row was
+  corrected. The Docker cluster test proves 3,000 keys over three primaries are all deleted.
+- **`Esc` order:** an error, then a running bulk delete, then the value-pane pop, then marks, then a scan.
+- **Gone rows:** `Space` on a gone row is refused, and marks that went gone are dropped at staging.
+- **Glyph roles added:** `Marked` and `Times`.
+- **Goldens:** only the six help goldens moved (two `help_disconnected_*` among them, plus the keys-pane
+  help and the three help overlays): the help overlay lists every keys-pane binding, so `Space mark` appears.
+  No browser, dialog or hint-bar frame moved; the row is ranked last among the verbs.
+
+**Known limits (for the M2 close-out):**
+- Subtree (group) marking is out of scope.
+- A marked row hidden by a filter is still deleted; the dialog counts it but cannot say how many are hidden
+  (that would be O(Loaded)).
+- Marks are not persisted in the session file and do not survive a rescan.
+- A batch in flight is not abandoned on `Esc`; cancellation lands at the next batch boundary (one pipeline of
+  500 `DEL`s, milliseconds).
+- A connection lost mid-delete fails the batch in flight: the report names that `DEL` and how far it got, and keys past it are neither deleted nor badged (a Docker test covers a dead client).
+
+**Numbers:** core lib tests 1,110 -> 1,145 at this PR's tip (36 in `update/bulk_tests.rs`, 4 in
+`state/marks.rs`, plus the label test), golden 286 -> 299 (13 new; six help goldens re-recorded), Docker
+suite 191 -> 199 (all pass, 374s, no reruns), perf suite 47 -> 52 (all pass). Perf at 1M keys (release,
+laptop): `Space` update 2.4-2.6 us (update+render 43-52 us) against a 1 ms budget; bulk-delete preview
+with 10,000 marks 0.36-0.38 ms to stage (0.44-0.48 ms with the render) against "a few ms"; 500,000 marks
+cost a 128 KB bitset and a 1.2 ms walk. fmt, clippy `-D warnings`, `cargo test --workspace` and the
+core/shell boundary check are clean.

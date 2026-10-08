@@ -239,6 +239,7 @@ pub async fn run(
         clock: clock.clone(),
         read_gate: ReadGate::default(),
         scan_cancel: None,
+        bulk_cancel: None,
         filter_debounce: Debounce::default(),
         metadata: MetadataLedger::default(),
         owner: crate::liveness::OpenOwner::default(),
@@ -491,6 +492,10 @@ struct Shell {
     /// preference.
     read_gate: ReadGate,
     scan_cancel: Option<CancellationToken>,
+    /// The running bulk delete's token (M2 task 13): `Esc` cancels it and the
+    /// delete checks it between batches. One at a time — the core refuses a
+    /// second while one runs — so a stale token is only ever a finished one.
+    bulk_cancel: Option<CancellationToken>,
     /// The filter-rebuild debounce timer (M4 task 4, decision 2). The core
     /// asks for it with `Command::ScheduleFilterRebuild` and hears back with
     /// `Msg::FilterRebuildDue`; the clock is here, never there.
@@ -584,6 +589,11 @@ impl Shell {
                 arm,
             } => self.read_key(key, index, token, arm),
             Command::Execute { mutation, index } => self.mutate(mutation, index),
+            Command::CancelBulkDelete => {
+                if let Some(token) = &self.bulk_cancel {
+                    token.cancel();
+                }
+            }
             Command::CheckTarget { key } => self.check_target(key),
             Command::CopyToClipboard { text, label } => self.copy(text, label, term).await,
             Command::Notify { text } => {
@@ -852,8 +862,45 @@ impl Shell {
     ///
     /// What the outcome means is the core's to decide; this only carries it
     /// back, with the mutation it answers.
-    fn mutate(&self, mutation: Mutation, index: Option<usize>) {
+    fn mutate(&mut self, mutation: Mutation, index: Option<usize>) {
         let (client, tx, clock) = (self.client.clone(), self.tx.clone(), self.clock.clone());
+        // A bulk delete is its own task: batched, cancellable between batches,
+        // reporting progress (M2 task 13). Still reached only from the core's
+        // confirm, after its Read-only and typed-count checks.
+        if let Mutation::DeleteKeys { keys } = &mutation {
+            let token = CancellationToken::new();
+            self.bulk_cancel = Some(token.clone());
+            let keys = keys.clone();
+            tokio::spawn(async move {
+                let progress_tx = tx.clone();
+                let total = keys.len();
+                let crate::redis::mutate::Settled { result, link_lost } =
+                    crate::redis::mutate::execute_bulk_settled(
+                        &client,
+                        &keys,
+                        &token,
+                        // Best-effort and cosmetic: a full queue drops a tick,
+                        // and the settled report carries the real figures.
+                        move |done, _| {
+                            let _ = progress_tx.try_send(Msg::BulkDeleteProgress { done, total });
+                        },
+                    )
+                    .await;
+                let at_ms = clock.now_epoch_ms();
+                let _ = tx
+                    .send(Msg::MutationSettled {
+                        mutation,
+                        index,
+                        result,
+                        at_ms,
+                    })
+                    .await;
+                if link_lost {
+                    let _ = tx.send(Msg::ConnectionLost).await;
+                }
+            });
+            return;
+        }
         // The one keyless write is per node: on a Cluster it runs on every
         // node, each on its own connection (`redis::cluster_info`, M5 task 8).
         // Still only reached from here, after the core's confirm and

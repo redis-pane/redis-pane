@@ -688,11 +688,27 @@ fn keys_rows(state: &State, tree: bool, filtered: bool) -> Vec<HelpRow> {
             if tree { "flat view" } else { "tree view" },
         ),
     ];
-    let delete = HelpRow::new(keys_for(state, Action::Delete), "delete");
+    // With rows marked, `d` deletes them all and `Esc` lets go of them
+    // (M2 task 13): both rows say so, ahead of everything else.
+    let marked = state.marks.count();
+    let delete = HelpRow::new(
+        keys_for(state, Action::Delete),
+        if marked > 0 {
+            format!(
+                "delete {} marked",
+                crate::state::scan::thousands(marked as u64)
+            )
+        } else {
+            "delete".to_string()
+        },
+    );
     rows.push(match Refusal::read_only(state, true) {
         Some(r) => delete.refused(r),
         None => delete,
     });
+    if marked > 0 {
+        rows.push(HelpRow::new(keys_for(state, Action::Cancel), "unmark all"));
+    }
     rows.push(HelpRow::new(keys_for(state, Action::Copy), "copy"));
     rows.push(HelpRow::new(
         refetch_keys(state),
@@ -727,6 +743,10 @@ fn keys_rows(state: &State, tree: bool, filtered: bool) -> Vec<HelpRow> {
         )
         .refused(Refusal::needs("needs Redis 6.2"))
     });
+    // Last among the verbs: a new row must not push `r` or `t` off an
+    // 80-column bar (the marked-rows rows above are the exception, because
+    // they only exist while rows are marked).
+    rows.push(HelpRow::new(keys_for(state, Action::ToggleMark), "mark"));
     rows.push(HelpRow::new("↑↓ jk", "move"));
     rows.push(HelpRow::new("PgUp/PgDn", "page"));
     rows.push(HelpRow::new("Home/End", "top/bottom"));
@@ -1001,6 +1021,19 @@ fn editor_rows(state: &State, ctx: EditorContext) -> Vec<HelpRow> {
 }
 
 fn confirm_rows(state: &State) -> Vec<HelpRow> {
+    // The `prod` typed count for a bulk delete (M2 task 13): once `y` has
+    // opened it, the keys are digits, `⏎` and `Esc`.
+    if let Some(crate::state::PendingMutation::DeleteKeys {
+        gate: crate::state::CountGate::Typing { .. },
+        ..
+    }) = &state.confirm
+    {
+        return vec![
+            HelpRow::new("0-9 ⌫", "type the count"),
+            HelpRow::new(keys_for(state, Action::EnterValueCursor), "delete"),
+            HelpRow::new(keys_for(state, Action::Cancel), "discard"),
+        ];
+    }
     let confirm = HelpRow::new(keys_for(state, Action::ConfirmMutation), "confirm");
     let confirm = match Refusal::read_only(state, false) {
         Some(r) => confirm.refused(r),

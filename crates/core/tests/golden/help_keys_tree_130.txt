@@ -11,14 +11,14 @@
      ● cart │ C         copy redis-cli command                                                                       │
      ● profi│ R         rename                                                                                       │
      ● sessi│ D         duplicate key (COPY)                                                                         │
-   ▾ 8813:  │ ↑↓ jk     move                                                                                         │
-     ● sessi│ PgUp/PgDn page                                                                                         │
+   ▾ 8813:  │ Space     mark                                                                                         │
+     ● sessi│ ↑↓ jk     move                                                                                         │
+            │ PgUp/PgDn page                                                                                         │
             │ Home/End  top/bottom                                                                                   │
             │                                                                                                        │
             │ ⌃R read-only   g s slowlog   g m monitor   g p pub/sub   g d dashboard   Esc back   q quit   ? F1 help │
             │                                                                                                        │
             │ Tab value keys · Esc close                                                                             │
             └────────────────────────────────────────────────────────────────────────────────────────────────────────┘
-                                                          │
     sorted by name
  → open / expand   / filter   s sort   t flat view   d delete   c copy   r rescan   C copy redis-cli command   ? F1 help

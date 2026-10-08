@@ -127,12 +127,16 @@ pub enum Glyph {
     BarFull,
     /// `░` — an empty bar cell.
     BarEmpty,
+    /// `◆` — a key row marked for a bulk operation (M2 task 13).
+    Marked,
+    /// `×` — a count of things (`DEL × 2,000 keys`).
+    Times,
 }
 
 impl Glyph {
     /// Every role. Order matters only to [`Glyphs::text`]: where two roles share
     /// a Unicode character, the earlier one is what the character means in prose.
-    pub const ALL: [Glyph; 46] = [
+    pub const ALL: [Glyph; 48] = [
         Glyph::Deleted,
         Glyph::CheckFail,
         Glyph::CheckOk,
@@ -179,6 +183,8 @@ impl Glyph {
         Glyph::Crumb,
         Glyph::BarFull,
         Glyph::BarEmpty,
+        Glyph::Marked,
+        Glyph::Times,
     ];
 
     /// The designed character.
@@ -229,6 +235,8 @@ impl Glyph {
             Glyph::Crumb => "›",
             Glyph::BarFull => "█",
             Glyph::BarEmpty => "░",
+            Glyph::Marked => "◆",
+            Glyph::Times => "×",
         }
     }
 
@@ -261,6 +269,8 @@ impl Glyph {
             | Glyph::TeeRight => "+",
             Glyph::VerticalDashed => ":",
             Glyph::BarFull => "#",
+            Glyph::Marked => "+",
+            Glyph::Times => "x",
         }
     }
 }

@@ -160,7 +160,7 @@ recomputed each frame from which tile is focused, never a persisted scroll posit
 | `Ctrl-C` ×2 | Quit (single press = cancel current op) | global |
 | `/` | Filter / search in pane | pane |
 | `n` / `N` | Next / previous match | pane |
-| `Space` | Toggle multi-select | key list |
+| `Space` | Mark or unmark the Selected key for a bulk delete and move down. A group row shows a notice and marks nothing. `Esc` clears the marks (first, before it cancels a scan); a rescan clears them too | key list |
 | `→` / `l` | Open key in value pane, or expand/descend a tree group | key list |
 | `←` / `h` | Collapse a tree group, or move to its parent | key list |
 | `Enter` | Open the Selected key (if needed) and start moving a cursor inside it | key list / value pane |
@@ -170,7 +170,7 @@ recomputed each frame from which tile is focused, never a persisted scroll posit
 | `Ctrl-S` | Stage the inline editor's buffer for confirmation | value pane, editing |
 | `t` | Edit TTL (set / persist / extend) | value pane, focused |
 | `c` / `C` | Copy key or value / copy `redis-cli` command | key list, value pane |
-| `d` | Stage delete of the Selected key (`DEL`), (Hash, cursor on a field) of that field (`HDEL`), or (Slowlog view) `SLOWLOG RESET` | key list, value pane, slowlog view |
+| `d` | Stage delete of the Selected key (`DEL`) — or, with keys marked, of every marked key — (Hash, cursor on a field) of that field (`HDEL`), or (Slowlog view) `SLOWLOG RESET` | key list, value pane, slowlog view |
 | `R` | Rename the Selected key — opens a name capture prefilled with the current name, then stages `RENAMENX old new`. A group row, a gone row or a binary name shows a notice and stages nothing | key list |
 | `R` | (Hash, Set or ZSet, cursor on a row) Rename that field or member inside the Open key — the same name capture, prefilled with the current name, then a guarded script that writes the new name before deleting the old. Value and field TTL (Hash) or score (ZSet) are kept. List, String, JSON, Binary and Stream show a notice and stage nothing | value pane, focused |
 | `D` | Duplicate the Selected key (`COPY`, Redis 6.2+) — the same name capture, prefilled with the name plus `:copy`, then stages `COPY src dst`. Below 6.2 it is dimmed in help with *needs Redis 6.2* and shows a notice. The selection and Open key stay on the source | key list |
@@ -605,6 +605,27 @@ there is none to move and the rename still lands. The refusals name the command 
 written` (`field`/`member no longer exists`, `already exists`, `key no longer exists`). Read-only
 Mode refuses at confirm. After a success the value is re-read through the ordinary read path,
 which re-arms liveness, and the value cursor follows the new name if it is in the shown window.
+
+**Multi-select and bulk delete (`Space`, then `d`, keys pane, M2 task 13,
+`docs/plans/m2-task13-bulk-delete.md`).** `Space` marks the Selected key and moves down, so a run of
+keys is marked by holding it; a marked row carries `◆` (ASCII `+`) in the pane's left margin, the
+status line says `N marked`, and `d` and `Esc` in the hint bar become `delete N marked` and `unmark
+all`. A group row cannot be marked (a notice says so): marking a subtree is the high-blast-radius case
+and is deliberately out of scope. Marks are indices into the Loaded set, so filtering, sorting, the
+tree toggle and rebuild jobs leave them alone, and a rescan (which renumbers) clears them. **A marked
+row the current filter hides is still deleted**; the dialog's count includes it. `d` with marks stages
+one bulk delete; without marks it is the single-key delete above, unchanged. The dialog shows `DEL × N
+keys`, the guard line, the first eight names and `… and N more`. Off `prod`, one `y` confirms. On
+`prod`, `y` opens a typed step: type the count exactly and press `⏎`; a wrong count keeps the dialog
+open and says so, `y` and every other key are ignored, `Esc` dismisses at any stage. Read-only Mode
+refuses at the first `y`, after the dialog has been composed, so a reader is never asked to type a
+count for something that cannot run. The shell sends one single-key `DEL` per key, pipelined in
+batches of 500 (a Cluster routes each to its owner; a multi-key `DEL` would fail with `CROSSSLOT`),
+with `deleting X of N` in the status line. `Esc` stops it after the batch in flight. The report counts
+deleted keys and keys that were already gone; a cancelled or failed run unmarks only what it processed
+(the rest stay marked for a retry), and a failure names the failing `DEL` and how far it got. Every
+processed row is badged gone through the single delete's path, and an open key that was deleted is
+tombstoned as it is today.
 
 ### 6.6 Dashboard
 

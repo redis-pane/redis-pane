@@ -18,6 +18,9 @@ use crate::state::{
 };
 use crate::{Command, Msg, State};
 
+mod bulk;
+#[cfg(test)]
+mod bulk_tests;
 mod confirm;
 mod dashboard;
 mod editor;
@@ -40,6 +43,7 @@ mod viewer;
 // it used before the split — see `docs/plans/review-m2-update-module-split.md`,
 // "The trick that makes this low-risk". A child module (a `#[cfg(test)]` mod
 // below) can see a private `use` in its parent, so nothing here needs `pub`.
+use self::bulk::*;
 use self::confirm::*;
 use self::dashboard::*;
 use self::editor::*;
@@ -238,6 +242,7 @@ fn step(mut state: State, msg: Msg) -> (State, Vec<Command>) {
         Msg::ScanStarted { estimated_total } => scan_started(state, estimated_total),
         Msg::ScanBatch { keys } => scan_batch(state, keys),
         Msg::TargetChecked { key, exists } => target_checked(state, key, exists),
+        Msg::BulkDeleteProgress { done, total } => bulk_progress(state, done, total),
         Msg::MetadataBatch {
             entries,
             gone,
@@ -754,6 +759,13 @@ fn dispatch_action(mut state: State, action: Action) -> (State, Vec<Command>) {
         // Hash-field/Set-member/List-element delete (D5, PLAN M2 task 7,
         // ADR-0016; PLAN M2 task 8, ADR-0017) is `delete_value_row`'s job,
         // which tells the three apart itself.
+        //
+        // With rows marked (`Space`, M2 task 13), `d` in the keys pane stages
+        // one bulk delete over them instead; without marks it is the line
+        // below, untouched.
+        Action::Delete if state.keys_pane_focused() && !state.marks.is_empty() => {
+            stage_bulk_delete(state)
+        }
         Action::Delete if state.keys_pane_focused() => delete_selected_key(state),
         Action::Delete => delete_value_row(state),
         // `R` renames a key from the keys pane, and a Hash field, Set member
@@ -764,6 +776,10 @@ fn dispatch_action(mut state: State, action: Action) -> (State, Vec<Command>) {
         // meaning in the Viewer.
         Action::Duplicate if state.keys_pane_focused() => begin_copy(state),
         Action::Duplicate => (state, Vec::new()),
+        // `Space` marks a key in the keys pane (M2 task 13); the Viewer has
+        // nothing to mark.
+        Action::ToggleMark if state.keys_pane_focused() => toggle_mark(state),
+        Action::ToggleMark => (state, Vec::new()),
         // Nothing is staged — `key_press` intercepts every keypress before
         // this match while `state.confirm` is `Some`, so `y` only ever
         // reaches here with nothing to confirm.
@@ -907,6 +923,11 @@ fn cancel(mut state: State) -> (State, Vec<Command>) {
         state.screen = View::Keys;
         return (state, commands);
     }
+    // A running bulk delete is the nearest in-flight thing: stop it after the
+    // batch in progress (every operation is cancellable, R7.3).
+    if state.bulk.is_some() {
+        return cancel_bulk(state);
+    }
     // The "pop" half of stack navigation: back to the list you were
     // just looking at, before an unrelated background scan. Also
     // exits value-cursor mode if it was active — the same keypress,
@@ -918,6 +939,12 @@ fn cancel(mut state: State) -> (State, Vec<Command>) {
         if let Some(open) = &mut state.open {
             open.cursor_active = false;
         }
+        return (state, Vec::new());
+    }
+    // The first `Esc` in the keys pane with rows marked clears the marks, so a
+    // selection is never stuck (M2 task 13, decision 1).
+    if !state.marks.is_empty() {
+        state.marks.clear();
         return (state, Vec::new());
     }
     // Every in-flight operation is cancellable (PRD R7.3).
