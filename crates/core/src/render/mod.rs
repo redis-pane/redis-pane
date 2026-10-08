@@ -112,7 +112,7 @@ pub fn frame(state: &State, theme: &Theme, clock: &dyn Clock, area: Rect) -> Buf
     if let Some(pending) = &state.confirm {
         confirm_overlay(state, pending, theme, area, &mut buf);
     } else if let Some(capture) = &state.rename {
-        rename_overlay(capture, theme, area, &mut buf);
+        rename_overlay(state, capture, theme, area, &mut buf);
     } else if state.pending_feed.is_some() {
         feed_confirm_overlay(state, theme, area, &mut buf);
     }
@@ -1458,6 +1458,32 @@ fn confirm_overlay(
                 ));
             }
         }
+        // Field and member renames (M2 task 14): both commands, the guard, then
+        // the one fact that changes. The value or score is read by the script,
+        // so the dialog shows a placeholder and never `EVAL`.
+        PendingMutation::RenameHashField { field: old, to, .. }
+        | PendingMutation::RenameSetMember {
+            member: old, to, ..
+        }
+        | PendingMutation::RenameZSetMember {
+            member: old, to, ..
+        } => {
+            for line in pending.command_lines() {
+                lines.push((line, Token::Text));
+            }
+            if let Some(guard) = pending.guard_text() {
+                lines.push((g.text(&guard).into_owned(), Token::Muted));
+            }
+            lines.push((
+                format!(
+                    "{} {} {}",
+                    String::from_utf8_lossy(old),
+                    g.get(Glyph::Right),
+                    String::from_utf8_lossy(to)
+                ),
+                Token::Text,
+            ));
+        }
         PendingMutation::SetString { name, old, new, .. } => {
             // The value itself is the `+` side of the diff below.
             lines.push((format!("SET {} KEEPTTL XX", name.display()), Token::Text));
@@ -1718,20 +1744,24 @@ fn confirm_overlay(
 /// frame, with the typed name, its cursor, and the reason it cannot be staged
 /// yet, if there is one.
 fn rename_overlay(
+    state: &State,
     capture: &crate::state::RenameCapture,
     theme: &Theme,
     area: Rect,
     buf: &mut Buffer,
 ) {
     let g = theme.glyphs;
-    let mut lines = vec![
-        (format!("from  {}", capture.from.display()), Token::Muted),
-        (
-            format!("to    {}{}", capture.text, g.get(Glyph::Cursor)),
-            Token::Text,
-        ),
-    ];
-    if let Some(problem) = capture.problem() {
+    let mut lines = vec![];
+    // A field or member lives in a key; say which.
+    if let Some(owner) = &capture.owner {
+        lines.push((format!("in    {}", owner.display()), Token::Muted));
+    }
+    lines.push((format!("from  {}", capture.from.display()), Token::Muted));
+    lines.push((
+        format!("to    {}{}", capture.text, g.get(Glyph::Cursor)),
+        Token::Text,
+    ));
+    if let Some(problem) = state.rename_problem() {
         lines.push((
             g.text(&format!("·· {}", problem.reason(capture.kind)))
                 .into_owned(),

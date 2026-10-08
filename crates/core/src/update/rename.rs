@@ -29,6 +29,198 @@ pub(super) fn begin_copy(state: State) -> (State, Vec<Command>) {
     begin_name_capture(state, NameKind::Copy)
 }
 
+/// `R` with the value pane focused (M2 task 14): open the name capture on the
+/// Hash field, Set member or ZSet member the value cursor is on.
+///
+/// The ladder is `delete_value_row`'s and `open_editor`'s: nothing open, a gone
+/// key and an edit still saving each say so; a type with no named items
+/// (String, JSON, Binary, List, Stream) says so and stages nothing; a
+/// collection with the cursor off says how to pick a row. A name that is not
+/// valid UTF-8 cannot be typed, so it is refused with the wording that type's
+/// `e` uses.
+pub(super) fn begin_member_rename(mut state: State) -> (State, Vec<Command>) {
+    let notify = |state: State, text: &str| (state, vec![Command::Notify { text: text.into() }]);
+    let Some(open) = state.open.as_ref() else {
+        return notify(state, "nothing to rename here");
+    };
+    if open.deleted_at_ms.is_some() {
+        return notify(state, "gone — nothing to rename");
+    }
+    if open.is_editing() {
+        return notify(state, "still saving the last edit");
+    }
+    let (kind, picked, binary) = match &open.value {
+        Some(Value::Hash(h)) => (
+            NameKind::Field,
+            h.pairs.get(open.cursor).map(|(f, _)| f.clone()),
+            "binary fields aren't editable here yet",
+        ),
+        Some(Value::Set(m)) => (
+            NameKind::SetMember,
+            m.members.get(open.cursor).cloned(),
+            "binary members aren't editable here yet",
+        ),
+        Some(Value::ZSet(z)) => (
+            NameKind::ZSetMember,
+            z.entries.get(open.cursor).map(|(m, _)| m.clone()),
+            "binary members aren't editable here yet",
+        ),
+        _ => {
+            return notify(
+                state,
+                "rename: only a hash field, set member or zset member can be renamed",
+            );
+        }
+    };
+    let noun = if kind == NameKind::Field {
+        "field"
+    } else {
+        "member"
+    };
+    if !open.cursor_active {
+        return notify(state, &format!("Enter to pick a {noun}"));
+    }
+    let Some(from) = picked else {
+        return notify(state, &format!("Enter to pick a {noun}"));
+    };
+    match RenameCapture::member(kind, open.name.clone(), open.cursor, &from) {
+        Some(capture) => {
+            state.rename = Some(capture);
+            (state, Vec::new())
+        }
+        None => notify(state, binary),
+    }
+}
+
+/// `Enter` on a field or member capture: stage the guarded rename, provided
+/// the Open key still has the old name on the row it was picked from. A
+/// refetch can reorder a Hash or Set under the capture, and a rename staged
+/// against a different row would rename the wrong thing.
+fn stage_member(mut state: State, capture: RenameCapture) -> (State, Vec<Command>) {
+    let from = capture.from.as_bytes().to_vec();
+    let to = capture.text.clone().into_bytes();
+    let name = capture.owner.clone();
+    let still_there = state
+        .open
+        .as_ref()
+        .filter(|o| Some(&o.name) == name.as_ref() && o.deleted_at_ms.is_none())
+        .and_then(|o| o.value.as_ref())
+        .is_some_and(|v| match (capture.kind, v) {
+            (NameKind::Field, Value::Hash(h)) => {
+                h.pairs.get(capture.index).is_some_and(|(f, _)| *f == from)
+            }
+            (NameKind::SetMember, Value::Set(m)) => {
+                m.members.get(capture.index).is_some_and(|x| *x == from)
+            }
+            (NameKind::ZSetMember, Value::ZSet(z)) => z
+                .entries
+                .get(capture.index)
+                .is_some_and(|(m, _)| *m == from),
+            _ => false,
+        });
+    let (true, Some(name)) = (still_there, name) else {
+        return (
+            state,
+            vec![Command::Notify {
+                text: format!("{}: the value changed — press R again", capture.kind.verb()),
+            }],
+        );
+    };
+    state.confirm = Some(match capture.kind {
+        NameKind::Field => PendingMutation::RenameHashField {
+            name,
+            field: from,
+            to,
+        },
+        NameKind::SetMember => PendingMutation::RenameSetMember {
+            name,
+            member: from,
+            to,
+        },
+        _ => PendingMutation::RenameZSetMember {
+            name,
+            member: from,
+            to,
+        },
+    });
+    (state, Vec::new())
+}
+
+/// A field or member rename landed: refetch through the one read path (which
+/// re-arms tracking) and have the value cursor follow the new name when the
+/// reply arrives. Nothing is cached; the name is only a target for the cursor.
+pub(super) fn member_renamed(
+    mut state: State,
+    mutation: &Mutation,
+    at_ms: u64,
+) -> (State, Vec<Command>) {
+    let (key, from, to, noun) = match mutation {
+        Mutation::RenameHashField { key, field, to } => (key, field, to, "field"),
+        Mutation::RenameSetMember { key, member, to }
+        | Mutation::RenameZSetMember { key, member, to } => (key, member, to, "member"),
+        _ => return (state, Vec::new()),
+    };
+    if let Some(open) = state.open.as_mut().filter(|o| o.name == *key) {
+        open.follow = Some(to.clone());
+    }
+    let (mut state, commands) = write_landed(state, key);
+    // Members are not named in a notice (ADR-0016 D3); a Hash field is.
+    let text = if matches!(mutation, Mutation::RenameHashField { .. }) {
+        format!(
+            "renamed {noun} {} → {}",
+            String::from_utf8_lossy(from),
+            String::from_utf8_lossy(to)
+        )
+    } else {
+        format!("renamed {noun}")
+    };
+    state.notice = Some((text, at_ms));
+    (state, commands)
+}
+
+/// A guard refused a field or member rename and nothing was written. Always an
+/// error naming the command. A gone key is tombstoned and never recreated; the
+/// other refusals leave the key alone and refetch, so the reader sees what the
+/// server has now.
+pub(super) fn member_rename_not_written(
+    mut state: State,
+    mutation: &Mutation,
+    why: NotWritten,
+    at_ms: u64,
+) -> (State, Vec<Command>) {
+    let Some(key) = mutation.key() else {
+        return (state, Vec::new());
+    };
+    state.error = Some((
+        format!(
+            "{}: {} — nothing written",
+            mutation.command_label(),
+            why.reason()
+        ),
+        at_ms,
+    ));
+    if !state.open.as_ref().is_some_and(|o| o.name == *key) {
+        return (state, Vec::new());
+    }
+    if why == NotWritten::KeyGone {
+        let mut gone_index = None;
+        if let Some(open) = state.open.as_mut() {
+            open.deleted_at_ms = Some(at_ms);
+            open.pending = None;
+            open.end_edit();
+            gone_index = open.index;
+        }
+        if let Some(index) = gone_index
+            && state.keys.name(index) == Some(key.as_bytes())
+        {
+            state.keys.set_gone(index);
+        }
+        return (state, Vec::new());
+    }
+    let commands = refetch(&mut state);
+    (state, commands)
+}
+
 /// Open the name capture for the Selected key.
 ///
 /// A group row, or nothing selected, has no key to act on; a gone row has
@@ -101,12 +293,14 @@ pub(super) fn rename_paste(mut state: State, text: &str) -> (State, Vec<Command>
 /// Nothing is sent that writes. The `EXISTS` is advice for the preview, and
 /// is not sent at all when the rename can never run (cross-slot).
 fn stage_name(mut state: State) -> (State, Vec<Command>) {
+    if state.rename_problem().is_some() {
+        return (state, Vec::new());
+    }
     let Some(capture) = state.rename.take() else {
         return (state, Vec::new());
     };
-    if capture.problem().is_some() {
-        state.rename = Some(capture);
-        return (state, Vec::new());
+    if capture.kind.is_member() {
+        return stage_member(state, capture);
     }
     // A rescan between `R` and `Enter` renumbers the Loaded set; the row may
     // now be a different key (the guard `key_deleted` applies at the other end).
@@ -141,6 +335,9 @@ fn stage_name(mut state: State) -> (State, Vec<Command>) {
                 slots,
             };
             (pending, !apart)
+        }
+        NameKind::Field | NameKind::SetMember | NameKind::ZSetMember => {
+            unreachable!("handled by stage_member above")
         }
         NameKind::Copy => {
             let slots = if apart {
@@ -529,7 +726,7 @@ mod tests {
     }
 
     #[test]
-    fn r_in_the_value_pane_does_nothing() {
+    fn r_in_the_value_pane_on_a_string_says_so_and_stages_nothing() {
         let mut s = with_keys(&["k"]);
         s.focus = Pane::Value;
         s.open = Some(OpenKey::new(
@@ -543,7 +740,9 @@ mod tests {
         let (s, cmds) = press(s, 'R');
         assert!(s.rename.is_none());
         assert!(s.confirm.is_none());
-        assert!(cmds.is_empty());
+        assert!(
+            matches!(&cmds[..], [Command::Notify { text }] if text.contains("only a hash field"))
+        );
     }
 
     #[test]
@@ -1484,5 +1683,519 @@ mod tests {
             },
         );
         assert!(s.error.as_ref().unwrap().0.contains("DUMP/RESTORE a b"));
+    }
+}
+
+#[cfg(test)]
+mod member_tests {
+    //! Renaming a Hash field, Set member or ZSet member (M2 task 14).
+    use super::*;
+    use crate::state::value::{
+        IndexedValue, MemberValue, PairValue, ScoredValue, StreamValue, StringValue,
+    };
+    use crate::state::{Link, OpenKey, ReadOnlyReason, RenameProblem, Tracking};
+
+    fn key(c: char) -> Msg {
+        Msg::Key(KeyPress::plain(KeyCode::Char(c)))
+    }
+
+    fn code(c: KeyCode) -> Msg {
+        Msg::Key(KeyPress::plain(c))
+    }
+
+    fn opened(value: Value, cursor: usize, active: bool) -> State {
+        let mut open = OpenKey::new(Some(0), "k".into(), value, -1, 10, 0);
+        open.cursor = cursor;
+        open.cursor_active = active;
+        State {
+            cols: 130,
+            rows: 30,
+            focus: Pane::Value,
+            link: Link::Up {
+                version: "8.4.0".into(),
+                tracking: Tracking::Armed,
+            },
+            open: Some(open),
+            ..State::default()
+        }
+    }
+
+    fn hash() -> Value {
+        Value::Hash(PairValue {
+            pairs: vec![
+                (b"a".to_vec(), b"1".to_vec()),
+                (b"b".to_vec(), b"2".to_vec()),
+            ],
+            total: 2,
+        })
+    }
+
+    fn set() -> Value {
+        Value::Set(MemberValue {
+            members: vec![b"x".to_vec(), b"y".to_vec()],
+            total: 2,
+        })
+    }
+
+    fn zset() -> Value {
+        Value::ZSet(ScoredValue {
+            entries: vec![(b"m".to_vec(), 1.5), (b"n".to_vec(), 2.0)],
+            total: 2,
+        })
+    }
+
+    fn retype(mut s: State, text: &str) -> State {
+        let n = s.rename.as_ref().unwrap().text.chars().count();
+        for _ in 0..n {
+            s = update(s, code(KeyCode::Backspace)).0;
+        }
+        for c in text.chars() {
+            s = update(s, key(c)).0;
+        }
+        s
+    }
+
+    fn staged(value: Value, cursor: usize, new: &str) -> State {
+        let (s, _) = update(opened(value, cursor, true), key('R'));
+        let s = retype(s, new);
+        update(s, code(KeyCode::Enter)).0
+    }
+
+    #[test]
+    fn r_opens_a_capture_prefilled_with_the_name_under_the_cursor() {
+        for (value, kind, text) in [
+            (hash(), NameKind::Field, "b"),
+            (set(), NameKind::SetMember, "y"),
+            (zset(), NameKind::ZSetMember, "n"),
+        ] {
+            let (s, cmds) = update(opened(value, 1, true), key('R'));
+            assert!(cmds.is_empty());
+            let c = s.rename.as_ref().expect("capture open");
+            assert_eq!((c.kind, c.text.as_str(), c.index), (kind, text, 1));
+            assert_eq!(c.owner, Some("k".into()));
+        }
+    }
+
+    #[test]
+    fn the_capture_titles_and_labels_say_field_or_member() {
+        assert_eq!(NameKind::Field.title(), "rename field");
+        assert_eq!(NameKind::SetMember.title(), "rename member");
+        assert_eq!(NameKind::ZSetMember.title(), "rename member");
+        assert_eq!(NameKind::Field.verb(), "rename field");
+        assert_eq!(NameKind::ZSetMember.key_label(), 'R');
+    }
+
+    #[test]
+    fn without_the_value_cursor_it_says_how_to_pick_a_row() {
+        for (value, word) in [(hash(), "field"), (set(), "member"), (zset(), "member")] {
+            let (s, cmds) = update(opened(value, 0, false), key('R'));
+            assert!(s.rename.is_none());
+            assert!(
+                matches!(&cmds[..], [Command::Notify { text }] if *text == format!("Enter to pick a {word}"))
+            );
+        }
+    }
+
+    #[test]
+    fn list_string_and_stream_say_so_and_stage_nothing() {
+        let list = Value::List(IndexedValue {
+            items: vec![b"a".to_vec()],
+            total: 1,
+        });
+        let string = Value::Str(StringValue::new("v", 40));
+        for value in [list, string, Value::Stream(StreamValue::default())] {
+            let (s, cmds) = update(opened(value, 0, true), key('R'));
+            assert!(s.rename.is_none() && s.confirm.is_none());
+            assert!(
+                matches!(&cmds[..], [Command::Notify { text }] if text.contains("only a hash field"))
+            );
+        }
+    }
+
+    #[test]
+    fn nothing_open_a_gone_key_and_an_edit_in_flight_are_refused() {
+        let (s, cmds) = update(
+            State {
+                focus: Pane::Value,
+                ..State::default()
+            },
+            key('R'),
+        );
+        assert!(s.rename.is_none());
+        assert!(matches!(&cmds[..], [Command::Notify { text }] if text.contains("nothing")));
+
+        let mut gone = opened(hash(), 0, true);
+        gone.open.as_mut().unwrap().deleted_at_ms = Some(1);
+        let (s, cmds) = update(gone, key('R'));
+        assert!(s.rename.is_none());
+        assert!(matches!(&cmds[..], [Command::Notify { text }] if text.contains("gone")));
+
+        let mut saving = opened(hash(), 0, true);
+        saving.open.as_mut().unwrap().edit = crate::state::EditPhase::Saving;
+        let (s, cmds) = update(saving, key('R'));
+        assert!(s.rename.is_none());
+        assert!(matches!(&cmds[..], [Command::Notify { text }] if text.contains("saving")));
+    }
+
+    #[test]
+    fn r_with_the_keys_pane_focused_still_renames_the_key_not_a_field() {
+        let mut s = opened(hash(), 0, true);
+        s.focus = Pane::Keys;
+        s.keys.push(b"k");
+        s.rebuild_list();
+        let (s, _) = update(s, key('R'));
+        let c = s.rename.as_ref().expect("a key rename");
+        assert_eq!(c.kind, NameKind::Rename);
+        assert!(c.owner.is_none());
+    }
+
+    #[test]
+    fn a_binary_name_is_refused_with_that_types_wording() {
+        let bin = vec![0xff, 0xfe];
+        let h = Value::Hash(PairValue {
+            pairs: vec![(bin.clone(), b"v".to_vec())],
+            total: 1,
+        });
+        let m = Value::Set(MemberValue {
+            members: vec![bin.clone()],
+            total: 1,
+        });
+        let z = Value::ZSet(ScoredValue {
+            entries: vec![(bin.clone(), 1.0)],
+            total: 1,
+        });
+        for (value, text) in [
+            (h, "binary fields aren't editable here yet"),
+            (m, "binary members aren't editable here yet"),
+            (z, "binary members aren't editable here yet"),
+        ] {
+            let (s, cmds) = update(opened(value, 0, true), key('R'));
+            assert!(s.rename.is_none());
+            assert!(matches!(&cmds[..], [Command::Notify { text: t }] if t == text));
+        }
+    }
+
+    #[test]
+    fn a_hash_field_with_a_binary_value_can_still_be_renamed() {
+        let h = Value::Hash(PairValue {
+            pairs: vec![(b"f".to_vec(), vec![0xff, 0x00])],
+            total: 1,
+        });
+        let (s, _) = update(opened(h, 0, true), key('R'));
+        assert!(s.rename.is_some());
+    }
+
+    #[test]
+    fn empty_and_unchanged_names_are_refused_inline() {
+        let (s, _) = update(opened(hash(), 0, true), key('R'));
+        assert_eq!(s.rename_problem(), Some(RenameProblem::Unchanged));
+        let (s, _) = update(s, code(KeyCode::Enter));
+        assert!(s.confirm.is_none(), "unchanged does not stage");
+        assert!(s.rename.is_some(), "the capture stays open");
+        let s = retype(s, "");
+        assert_eq!(s.rename_problem(), Some(RenameProblem::Empty));
+        let (s, _) = update(s, code(KeyCode::Enter));
+        assert!(s.confirm.is_none());
+    }
+
+    #[test]
+    fn a_name_already_shown_is_blocked_for_each_type() {
+        for (value, reason) in [
+            (hash(), "already a field in this hash"),
+            (set(), "already a member of this set"),
+            (zset(), "already a member of this zset"),
+        ] {
+            let other = match &value {
+                Value::Hash(_) => "b",
+                Value::Set(_) => "y",
+                _ => "n",
+            };
+            let (s, _) = update(opened(value, 0, true), key('R'));
+            let s = retype(s, other);
+            let problem = s.rename_problem();
+            assert_eq!(problem, Some(RenameProblem::Shown));
+            assert_eq!(
+                problem.unwrap().reason(s.rename.as_ref().unwrap().kind),
+                reason
+            );
+            let (s, _) = update(s, code(KeyCode::Enter));
+            assert!(s.confirm.is_none(), "a shown duplicate does not stage");
+            assert!(s.rename.is_some());
+        }
+    }
+
+    #[test]
+    fn a_free_name_stages_the_matching_mutation_and_the_preview_has_both_commands() {
+        let s = staged(hash(), 0, "z");
+        let p = s.confirm.clone().expect("staged");
+        assert!(s.rename.is_none());
+        assert_eq!(
+            p,
+            PendingMutation::RenameHashField {
+                name: "k".into(),
+                field: b"a".to_vec(),
+                to: b"z".to_vec()
+            }
+        );
+        assert_eq!(p.command_lines(), vec!["HSETNX k z <value>", "HDEL k a"]);
+        assert!(p.guard_text().unwrap().contains("keeps its value and TTL"));
+
+        let p = staged(set(), 1, "w").confirm.unwrap();
+        assert_eq!(p.command_lines(), vec!["SADD k w", "SREM k y"]);
+        assert!(!p.guard_text().unwrap().contains("TTL"));
+
+        let p = staged(zset(), 0, "q").confirm.unwrap();
+        assert_eq!(p.command_lines(), vec!["ZADD k NX <score> q", "ZREM k m"]);
+        assert!(p.guard_text().unwrap().contains("keeps its score"));
+        assert!(!p.command_text().contains("EVAL"));
+        assert!(!p.blocks_confirm());
+    }
+
+    #[test]
+    fn y_issues_the_mutation_and_read_only_refuses_after_the_preview() {
+        let s = staged(set(), 0, "w");
+        let (s2, cmds) = update(s.clone(), key('y'));
+        assert!(s2.confirm.is_none());
+        assert_eq!(
+            cmds,
+            vec![Command::Execute {
+                mutation: Mutation::RenameSetMember {
+                    key: "k".into(),
+                    member: b"x".to_vec(),
+                    to: b"w".to_vec()
+                },
+                index: None
+            }]
+        );
+
+        let mut ro = s;
+        ro.read_only = Some(ReadOnlyReason::Environment);
+        assert!(ro.confirm.is_some(), "the preview is composed first");
+        let (ro, cmds) = update(ro, key('y'));
+        assert!(ro.confirm.is_none());
+        assert!(!cmds.iter().any(|c| matches!(c, Command::Execute { .. })));
+        assert!(matches!(&cmds[..], [Command::Notify { text }] if text.contains("read-only")));
+    }
+
+    #[test]
+    fn a_reordered_value_under_the_capture_stages_nothing() {
+        let (s, _) = update(opened(hash(), 0, true), key('R'));
+        let mut s = retype(s, "z");
+        if let Some(Value::Hash(h)) = s.open.as_mut().and_then(|o| o.value.as_mut()) {
+            h.pairs.reverse();
+        }
+        let (s, cmds) = update(s, code(KeyCode::Enter));
+        assert!(s.confirm.is_none());
+        assert!(matches!(&cmds[..], [Command::Notify { text }] if text.contains("changed")));
+    }
+
+    #[test]
+    fn esc_discards_the_capture() {
+        let (s, _) = update(opened(zset(), 0, true), key('R'));
+        let (s, _) = update(s, code(KeyCode::Esc));
+        assert!(s.rename.is_none() && s.confirm.is_none());
+    }
+
+    fn done(s: State, mutation: Mutation) -> (State, Vec<Command>) {
+        update(
+            s,
+            Msg::MutationSettled {
+                mutation,
+                index: None,
+                result: Ok(MutationOutcome::Done),
+                at_ms: 5_000,
+            },
+        )
+    }
+
+    fn refused(s: State, mutation: Mutation, why: NotWritten) -> (State, Vec<Command>) {
+        update(
+            s,
+            Msg::MutationSettled {
+                mutation,
+                index: None,
+                result: Ok(MutationOutcome::NotWritten(why)),
+                at_ms: 5_000,
+            },
+        )
+    }
+
+    fn hash_rename() -> Mutation {
+        Mutation::RenameHashField {
+            key: "k".into(),
+            field: b"a".to_vec(),
+            to: b"z".to_vec(),
+        }
+    }
+
+    #[test]
+    fn success_refetches_and_the_cursor_follows_the_new_name() {
+        let (s, cmds) = done(opened(hash(), 0, true), hash_rename());
+        assert!(
+            cmds.iter().any(|c| matches!(c, Command::ReadKey { .. })),
+            "the one read path re-arms: {cmds:?}"
+        );
+        assert_eq!(s.open.as_ref().unwrap().follow, Some(b"z".to_vec()));
+        assert!(s.notice.as_ref().unwrap().0.contains("renamed field a → z"));
+
+        // The reply: the new field sits last; the cursor lands on it.
+        let token = s.read_token;
+        let reread = Value::Hash(PairValue {
+            pairs: vec![
+                (b"b".to_vec(), b"2".to_vec()),
+                (b"z".to_vec(), b"1".to_vec()),
+            ],
+            total: 2,
+        });
+        let (s, _) = update(
+            s,
+            Msg::ValueLoaded {
+                token,
+                index: Some(0),
+                name: "k".into(),
+                value: reread,
+                ttl_seconds: -1,
+                size_bytes: 10,
+                at_ms: 6_000,
+            },
+        );
+        let open = s.open.as_ref().unwrap();
+        assert_eq!(open.cursor, 1);
+        assert_eq!(open.follow, None, "taken, so it cannot fire again");
+    }
+
+    #[test]
+    fn a_new_name_outside_the_window_leaves_the_cursor_clamped() {
+        let (s, _) = done(
+            opened(set(), 1, true),
+            Mutation::RenameSetMember {
+                key: "k".into(),
+                member: b"y".to_vec(),
+                to: b"far".to_vec(),
+            },
+        );
+        let token = s.read_token;
+        let (s, _) = update(
+            s,
+            Msg::ValueLoaded {
+                token,
+                index: Some(0),
+                name: "k".into(),
+                value: Value::Set(MemberValue {
+                    members: vec![b"x".to_vec()],
+                    total: 2,
+                }),
+                ttl_seconds: -1,
+                size_bytes: 1,
+                at_ms: 6_000,
+            },
+        );
+        let open = s.open.as_ref().unwrap();
+        assert_eq!(open.cursor, 0);
+        assert_eq!(open.follow, None);
+    }
+
+    #[test]
+    fn each_refusal_is_an_error_naming_the_command_and_a_gone_key_is_not_recreated() {
+        let set_rename = Mutation::RenameSetMember {
+            key: "k".into(),
+            member: b"x".to_vec(),
+            to: b"w".to_vec(),
+        };
+        let zset_rename = Mutation::RenameZSetMember {
+            key: "k".into(),
+            member: b"m".to_vec(),
+            to: b"w".to_vec(),
+        };
+        let cases = [
+            (
+                hash_rename(),
+                NotWritten::FieldGone,
+                "HSETNX/HDEL k a z",
+                "field no longer exists",
+            ),
+            (
+                hash_rename(),
+                NotWritten::FieldExists,
+                "HSETNX/HDEL k a z",
+                "field already exists",
+            ),
+            (
+                set_rename,
+                NotWritten::MemberGone,
+                "SADD/SREM k",
+                "member no longer exists",
+            ),
+            (
+                zset_rename,
+                NotWritten::MemberExists,
+                "ZADD NX/ZREM k",
+                "member already exists",
+            ),
+        ];
+        for (mutation, why, label, reason) in cases {
+            let (s, cmds) = refused(opened(hash(), 0, true), mutation, why);
+            let (text, _) = s.error.clone().expect("an error");
+            assert!(text.contains(label) && text.contains(reason), "{text}");
+            assert!(text.contains("nothing written"));
+            assert!(s.open.as_ref().unwrap().deleted_at_ms.is_none());
+            assert!(
+                cmds.iter().any(|c| matches!(c, Command::ReadKey { .. })),
+                "refetches"
+            );
+        }
+        let (s, cmds) = refused(opened(hash(), 0, true), hash_rename(), NotWritten::KeyGone);
+        assert!(
+            s.open.as_ref().unwrap().deleted_at_ms.is_some(),
+            "tombstoned"
+        );
+        assert!(cmds.is_empty(), "no read that could resurrect it");
+        assert!(s.error.as_ref().unwrap().0.contains("key no longer exists"));
+    }
+
+    #[test]
+    fn a_server_error_names_the_failing_command() {
+        let (s, _) = update(
+            opened(hash(), 0, true),
+            Msg::MutationSettled {
+                mutation: hash_rename(),
+                index: None,
+                result: Err("boom".into()),
+                at_ms: 5_000,
+            },
+        );
+        assert!(s.error.as_ref().unwrap().0.contains("HSETNX/HDEL k a z"));
+    }
+
+    #[test]
+    fn help_and_hints_say_rename_field_or_member_only_with_the_cursor_on_a_row() {
+        let has = |s: &State, label: &str| {
+            crate::help::here(s, crate::help::context(s))
+                .iter()
+                .any(|r| r.keys == "R" && r.label == label)
+        };
+        assert!(has(&opened(hash(), 0, true), "rename field"));
+        assert!(has(&opened(set(), 0, true), "rename member"));
+        assert!(has(&opened(zset(), 0, true), "rename member"));
+        assert!(!has(&opened(hash(), 0, false), "rename field"));
+        let list = Value::List(IndexedValue {
+            items: vec![b"a".to_vec()],
+            total: 1,
+        });
+        let s = opened(list, 0, true);
+        assert!(
+            !crate::help::here(&s, crate::help::context(&s))
+                .iter()
+                .any(|r| r.keys == "R")
+        );
+    }
+
+    #[test]
+    fn the_row_is_dimmed_under_read_only_mode() {
+        let mut s = opened(set(), 0, true);
+        s.read_only = Some(ReadOnlyReason::Environment);
+        let rows = crate::help::here(&s, crate::help::context(&s));
+        let row = rows.iter().find(|r| r.keys == "R").expect("row");
+        assert!(row.refused.is_some());
     }
 }

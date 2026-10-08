@@ -218,6 +218,10 @@ pub struct OpenKey {
     pub deleted_at_ms: Option<u64>,
     /// What the last completed read found, so the header can say so.
     pub last_read: ReadOutcome,
+    /// A field or member name the value cursor should land on when this
+    /// session's own rename is read back (M2 task 14). A target for the
+    /// cursor only, never a value; taken by the first read that applies.
+    pub follow: Option<Vec<u8>>,
 }
 
 impl OpenKey {
@@ -245,6 +249,7 @@ impl OpenKey {
             pending: None,
             deleted_at_ms: None,
             last_read: ReadOutcome::Opened,
+            follow: None,
         }
     }
 
@@ -274,6 +279,7 @@ impl OpenKey {
             pending: None,
             deleted_at_ms: Some(at_ms),
             last_read: ReadOutcome::Opened,
+            follow: None,
         }
     }
 

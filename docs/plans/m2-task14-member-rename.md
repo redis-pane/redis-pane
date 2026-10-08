@@ -1,6 +1,6 @@
 # M2 task 14: Rename a field or member inside a key
 
-Status: **planned.**
+Status: **done.**
 
 ## Context
 
@@ -56,3 +56,275 @@ editing one is already a value edit.
 - **Core:** focus gating, capture validation, the shown-duplicate block, every dialog and refusal
   wording, read-only refusal.
 - **Golden frames:** the capture, the dialogs, and the hint bar for each type.
+
+## Build design
+
+Written before the code (phase 1). Where the code later disagrees, `## Outcome` says so.
+
+### Reuse from tasks 11 and 12
+
+- **The capture.** `RenameCapture` (`state/rename.rs`), `State::rename`, `Mode::Renaming`, typing,
+  `⌫`, paste, `Esc`, `Enter` and `HelpContext::Rename(kind)` are reused unchanged. `NameKind` gains
+  three variants, `Field`, `SetMember` and `ZSetMember`, because the title, the notices and the
+  mutation differ per type while the typing is shared. Titles: ` rename field `, ` rename member `
+  (both members). `verb()` is `rename field` / `rename member`, `key_label()` stays `R`.
+- **What the capture carries.** `RenameCapture` gains `owner: Option<KeyName>`: the Open key the
+  field or member lives in (`None` for a key-level rename and copy). For a field or member,
+  `from` is the old name's bytes and `index` is the value cursor row it was started from. The
+  prefill is the old name; the capture is opened only for a name that is valid UTF-8.
+- **Validation lives on `State`, not the capture.** The shown-duplicate block needs the Open key's
+  fetched window, which the capture does not hold, so `State::rename_problem()` replaces
+  `capture.problem()` at its two call sites (the overlay and `stage_name`). It returns the
+  capture's `Empty` / `Unchanged`, then a new `RenameProblem::Shown` (`already in this hash` /
+  `set` / `zset`) when the typed bytes equal another name in the shown window. A name taken
+  outside the window is the script's job, as with the add forms.
+- **Plugging in.** `Action::Rename` already reaches the value pane and is a no-op there
+  (`update/mod.rs`); it now calls `begin_member_rename`. Focus gating copies `delete_value_row`:
+  the keys-pane arm of the dispatch is unchanged, and the value-pane half runs the ladder:
+  nothing open → `nothing to rename here`; gone key → `gone — nothing to rename`; an edit under way
+  → `still saving the last edit`; Hash/Set/ZSet with no cursor → `Enter to pick a field` /
+  `member`; List, String, JSON, Binary, Stream → `rename: only a hash field, set member or zset
+  member can be renamed` and nothing is staged.
+- **Hooks.** `PendingMutation::target_mut` is not used (no `EXISTS` pre-check: the shown-duplicate
+  block is the advice and the script is the guard). `blocks_confirm` stays false. `command_lines`
+  gains the three two-line previews. The three new variants join the exhaustive matches in
+  `update/editor.rs` (`staged_edit_found_key_gone`), `into_command`, `command_text`,
+  `guard_text`, `render::confirm_overlay`, and `update/confirm.rs`'s `nothing_to_remove`.
+
+### Mutations
+
+Three variants, not one with a type tag, because every existing write is one variant per type and
+every exhaustive match then forces a per-type decision:
+
+- `Mutation::RenameHashField { key, field, to }`
+- `Mutation::RenameSetMember { key, member, to }`
+- `Mutation::RenameZSetMember { key, member, to }`
+
+All three carry `Vec<u8>` names. Neither value nor score is carried: the script reads it
+server-side in the same atomic step, so a value changed under the dialog is kept, not clobbered,
+and a 200KB field is never held in the core. `PendingMutation` has the same three variants with
+`name: KeyName` (the Open key), the old name and `to`. `key()` returns the owning key; the shell
+`execute` already keys everything off `mutation.key()`.
+
+Labels for an error line (R7.4), following each type's existing add label so a member's bytes stay
+out of an error line while a Hash field's name is shown as in `HSET`/`HDEL`:
+`HSETNX/HDEL <key> <old> <new>`, `SADD/SREM <key>`, `ZADD NX/ZREM <key>`.
+
+`NotWritten` reuses `KeyGone`, `FieldGone`, `FieldExists`, `MemberGone` and `MemberExists`. Set's
+old-gone is `MemberGone` (not a new variant); its new-taken is `MemberExists`. No new variant.
+
+### The three guarded scripts
+
+One `EVAL` each, the key only via `KEYS[1]`, names via `ARGV` (binary-safe). The check order is
+fixed and mirrors the spec: key exists, old exists, new absent, write the new name, delete the old.
+Returns: `-1` key gone, `-2` old name gone, `-3` new name taken, `1` renamed.
+
+```lua
+-- Hash
+if redis.call('EXISTS', KEYS[1]) == 0 then return -1 end
+if redis.call('HEXISTS', KEYS[1], ARGV[1]) == 0 then return -2 end
+if redis.call('HEXISTS', KEYS[1], ARGV[2]) == 1 then return -3 end
+local value = redis.call('HGET', KEYS[1], ARGV[1])
+local ttl = redis.pcall('HPEXPIRETIME', KEYS[1], 'FIELDS', 1, ARGV[1])
+redis.call('HSETNX', KEYS[1], ARGV[2], value)
+redis.call('HDEL', KEYS[1], ARGV[1])
+if type(ttl) == 'table' and not ttl.err and ttl[1] and tonumber(ttl[1]) and tonumber(ttl[1]) > 0 then
+  redis.call('HPEXPIREAT', KEYS[1], ttl[1], 'FIELDS', 1, ARGV[2])
+end
+return 1
+-- Set
+if redis.call('EXISTS', KEYS[1]) == 0 then return -1 end
+if redis.call('SISMEMBER', KEYS[1], ARGV[1]) == 0 then return -2 end
+if redis.call('SISMEMBER', KEYS[1], ARGV[2]) == 1 then return -3 end
+redis.call('SADD', KEYS[1], ARGV[2])
+redis.call('SREM', KEYS[1], ARGV[1])
+return 1
+-- ZSet
+if redis.call('EXISTS', KEYS[1]) == 0 then return -1 end
+local score = redis.call('ZSCORE', KEYS[1], ARGV[1])
+if score == false then return -2 end
+if redis.call('ZSCORE', KEYS[1], ARGV[2]) ~= false then return -3 end
+redis.call('ZADD', KEYS[1], 'NX', score, ARGV[2])
+redis.call('ZREM', KEYS[1], ARGV[1])
+return 1
+```
+
+The checks are `HEXISTS` / `SISMEMBER` / `ZSCORE` rather than relying on `HSETNX` / `SADD` / `ZADD
+NX` to refuse, because those cannot tell "old gone" from "new taken" afterwards, and a script
+cannot half-undo. The write commands are still the `NX` forms, so a future edit to the checks
+cannot turn the script into an overwrite. Writing the new name before deleting the old one means no
+interleaving ends with neither, and the script is atomic, so none ends with both. It cannot
+recreate a gone key, because the first line returns before any write. Renaming the only member
+leaves the key non-empty throughout (the new name is added before the old one is removed), so the
+key is never deleted by the `HDEL` / `SREM` / `ZREM`.
+
+- **Hash field TTL.** `HPEXPIRETIME` is read before the write, with `redis.pcall`, and
+  `HPEXPIREAT` reapplies it to the new name, exactly ADR-0015's pattern. On 7.4+ the field TTL moves
+  with the name. On 6.2 (and anything below 7.4) the `pcall` returns an error table, the `type`
+  check skips the reapply, and the rename still lands with no field TTL, which is correct because
+  there is none. A field whose TTL has passed is not visible to `HEXISTS`, so it reads as old
+  gone. `HGET` returns a binary-safe string, so a binary value survives.
+- **ZSet score carry.** `ZSCORE` returns the score as a string with enough precision to round-trip a
+  double (`%.17g`), and `ZADD` accepts it back, including `inf` and `-inf`. Reading it server-side
+  also means the score is whatever it is at write time.
+- **Cluster.** Everything touches `KEYS[1]` only, so there is no cross-slot case (decision 3).
+
+### Binary names, per type (mirror each type's existing edit rule)
+
+- **Hash field:** refused when the field *name* is not UTF-8, with the notice `binary fields
+  aren't editable here yet` (the wording `for_hash_field` uses). `for_hash_field` also refuses on a
+  binary *value*, because it has to put the value in a text buffer. Rename never puts the value in
+  a buffer (the script copies it), so refusing on the value would be a restriction with no reason;
+  rename accepts a binary value. This is a deliberate narrowing of "mirror", noted again in the
+  Outcome.
+- **Set member:** refused when not UTF-8, `binary members aren't editable here yet` (the wording
+  `open_editor` gives a Set).
+- **ZSet member:** `e` on a ZSet does not refuse a binary member (the score edit never types the
+  member), but a rename has to prefill the member as text, so it refuses with the same Set wording.
+  A typed new name is always UTF-8, so a *new* name is never binary.
+
+### Shown-duplicate block
+
+While the capture is open, `rename_problem()` compares the typed bytes with every other name in
+the fetched window: `PairValue::pairs` fields, `SetValue::members`, `ScoredValue::entries`. Equal
+to the old name is `Unchanged` (checked first), equal to another is `Shown`. `Enter` with a
+problem leaves the reason on screen, like the key rename. Empty is refused for all three types,
+including Set and ZSet where Redis would allow it: the decision text says an empty name is refused
+inline, and an empty member is never what a rename means.
+
+### Stage, preview, confirm
+
+`Enter` re-checks that the Open key is still `owner` and that the old name is still at `index` in
+the window (a refetch can reorder a Hash or Set under the capture). If not, a notice `rename
+field: the value changed — press R again` and nothing is staged, the same guard `stage_name` has
+for a rescan. Otherwise it stages the `PendingMutation`; no command is emitted.
+
+The preview is `command_lines()` (two lines), the muted guard line, then the one fact that changes:
+
+- Hash: `HSETNX key new <value>` / `HDEL key old`; guard `only if the field still exists · new
+  name must be free · keeps its value and TTL`; then `old → new`.
+- Set: `SADD key new` / `SREM key old`; guard `only if the member still exists · new name must be
+  free`.
+- ZSet: `ZADD key NX <score> new` / `ZREM key old`; guard `... · keeps its score`.
+
+`<value>` and `<score>` are literal placeholders, the same device copy's `<payload>` uses; the
+guard line is the R4.4 description of the script and the dialog never shows `EVAL`. Read-only Mode
+refuses at `y` after the preview is composed, as for every other write (DESIGN §6.5).
+
+### After success: refetch, re-arm, cursor follow
+
+`mutation_settled` → `write_landed(key)` is the existing path: it refetches through the one read
+path, which re-arms tracking. The three renames add one step before it: `OpenKey::follow:
+Option<Vec<u8>>` is set to the new name. When the refetch reply applies (`value_loaded`, the
+own-write branch), the core looks the name up in the new window; found, `cursor` moves to its row
+and `offset` follows via the same `scrolled_to_selection` the cursor movement uses; not found
+(outside the window, or the key changed), the cursor stays clamped where it was. The `follow` is
+dropped either way, so it can never fire on a later read. No value is cached: the name is only a
+target for the cursor.
+
+A `KeyGone` refusal is handled as the add and edit guards do: the Open key is tombstoned
+(`not_written`'s existing `KeyGone` arm). `FieldGone` / `MemberGone` / `FieldExists` /
+`MemberExists` refuse with an error line naming the command, and refetch so the reader sees what
+the server has now.
+
+### Phase log
+
+(Appended as the phases land.)
+
+- **Phase 2 (core).** Landed as designed. Notes:
+  - `State::rename_problem()` replaced `capture.problem()` in the overlay and in staging; the
+    capture's own `problem()` stays for the empty/unchanged half.
+  - `OpenKey::follow` and `update/viewer.rs::follow_renamed` implement the cursor follow.
+  - The Hash field rename accepts a binary *value* (see "Binary names").
+  - Mutation labels are `HSETNX/HDEL <key> <old> <new>` (the Hash field names are shown, as in
+    `HSET`/`HDEL`), `SADD/SREM <key>`, `ZADD NX/ZREM <key>`.
+  - The shell has a stub (the three mutations error) so the workspace compiles at this commit.
+  - Goldens: only the four help overlays that list value-pane rows (`help_value_{hash,set,zset}_
+    cursor_{80,130}`, `help_read_only_dimmed_{80,130}`) changed, each gaining `R rename field` /
+    `R rename member`. In the 130-column ones the overlay's own bottom hint bar also loses its
+    trailing `↑↓ jk move`, which the new row pushes off (the bar stops at the first row that does
+    not fit; the keys pane's `R` made the same trade in task 11). No browser, dialog or other
+    hint-bar frame moved.
+- **Phase 3 (shell).** `redis::mutate::{rename_hash_field, rename_set_member, rename_zset_member}`
+  over three `EVAL` scripts exactly as in the design (shared `rename_item`, one `ItemRename`
+  outcome mapped to `FieldGone`/`MemberGone`, `FieldExists`/`MemberExists`, `KeyGone`). The write
+  goes through the existing `execute_settled`, so the Cluster wedge handling applies unchanged. No
+  deviations.
+- **Phase 3 fix.** The phase 3 commit added the scripts and wrappers but missed replacing the
+  stub arm in `execute` (cargo fmt had reflowed it, so the scripted edit did not match; clippy and
+  the build were still green because the wrappers are `pub`). The Docker tests caught it on first
+  run; a follow-up commit wires the dispatch.
+- **Phase 4 (tests).** Docker, `mod member_rename` in `crates/app/tests/integration.rs` (18
+  tests): per type, the rename lands and keeps value/score and the key TTL; a taken new name is
+  refused with nothing changed (and a taken ZSet member's score is not overwritten); a gone old
+  name is refused; a gone key is refused and not recreated; binary names round-trip at the shell
+  function (Hash with a binary value, Set, ZSet with its score); a Hash's only field renames
+  without losing the key; ZSet scores `1.5`, `-0.1`, `1e300`, `0.30000000000000004` and `inf`
+  survive; Hash field TTL moves with the name on 7.4 and 8.4 and a field with no TTL does not gain
+  one; all three scripts run on 6.2 (the `pcall` is harmless); all three work, refuse and do not
+  recreate on the cluster harness. Core: 20 new tests in `update/rename.rs` (`member_tests`), plus
+  the label test in `mutation.rs`. Golden: 11 new frames (three captures, two shown-duplicate
+  captures, the capture hint bar, three dialogs, a read-only dialog) and three value-pane hint-bar
+  frames. Only the help goldens changed (phase 2). **Deviation:** an attempt to rank `R` before `C
+  copy redis-cli command` so the hash bar would show it was reverted, because it pushed `C` off the
+  80/130-column bar, losing a more useful hint than `↑↓ jk move`. `R` is on the bar where it fits
+  (a Set at 130 columns) and always in help, as in the keys pane.
+- **Phase 5 (docs and verification).** DESIGN §4 (value-pane `R`) and §6.5 (a new "Rename a field
+  or member" paragraph), PLAN §5 row 14 done, and the note that rows 7 and 9's deferral is
+  resolved. fmt, clippy `-D warnings`, `cargo test --workspace`, the boundary check and the Docker
+  suite are clean (see Outcome). ADRs 0015, 0016 and 0018 still say "deferred to task 14"; they
+  are decision records and were left as written.
+
+## Outcome
+
+Status: **done.** `R` in the value pane renames a Hash field, Set member or ZSet member through the
+one mutation path, as one guarded script each.
+
+**Delivered, as designed:** the shared name capture with `NameKind::{Field, SetMember,
+ZSetMember}` and an `in <key>` line; `State::rename_problem()` with the shown-duplicate block
+(`RenameProblem::Shown`); `Mutation`/`PendingMutation::{RenameHashField, RenameSetMember,
+RenameZSetMember}` with no new `NotWritten` variant; the two-command preview with the guard line
+and no `EVAL`; Read-only refusal at confirm; the three scripts with the fixed check order and
+`-1/-2/-3/1` returns; the Hash field TTL carried on 7.4+ by the ADR-0015 `pcall` pattern (the
+script runs on 6.2); the ZSet score read server-side; the refetch through the one read path
+(re-arming tracking) and `OpenKey::follow`, which puts the value cursor on the new name; help and
+hint-bar rows `rename field` / `rename member`, dimmed under Read-only Mode.
+
+**Deviations from the plan text:**
+- **A Hash field with a binary *value* is renameable.** The plan said to mirror each type's edit
+  rule; `for_hash_field` refuses a binary value because it must put it in a text buffer, but a
+  rename never does (the script copies it). A binary *name* is refused with the `e` wording, for
+  all three types. A ZSet member is also refused when binary, although `e` on a ZSet accepts one,
+  because the capture must prefill the name as text.
+- **No `EXISTS` pre-check.** The key rename has one; here the shown-duplicate block is the advice
+  and the script is the guard, so `Command::CheckTarget` and `TargetCheck` are not used.
+- **Empty names are refused for Set and ZSet too,** although Redis allows an empty member and the
+  add forms let one through: the plan says an empty name is refused inline.
+- **The rename is checked against the row it started from** (`Enter` re-checks that the Open key
+  still has the old name at that row), so a reorder under the capture stages nothing and says so.
+- **`R` is not on the 130-column hint bar for a Hash or ZSet,** only for a Set. It is ranked after
+  `C copy redis-cli command` so that it cannot push `r`/`t` off; ranking it before `C` was tried and
+  reverted because it pushed `C` off the bar. It is always in help.
+- **Only help goldens changed:** `help_value_{hash,set,zset}_cursor_{80,130}` and
+  `help_read_only_dimmed_{80,130}` (eight files) gained the `R` row; in the 130-column ones the
+  overlay's own bottom bar also loses `↑↓ jk move`. Fourteen golden frames were added.
+- **Phase 3 needed a follow-up commit:** the stub arm in `execute` was not replaced by the first
+  phase 3 commit (see the phase log). The Docker tests found it.
+
+**Known limits:** a new name taken *outside* the shown window is refused by the script, not
+blocked in the capture (the add forms have the same limit). The windows are bounded, so the cursor
+stays where it was when the renamed item falls outside the re-read window. A Hash field whose TTL
+has already passed reads as gone (`FieldGone`).
+
+**Numbers:** core lib tests 1085 -> 1105, golden 275 -> 286, app unit 96 -> 96, Docker suite
+173 -> 191 (all pass, 359s); fmt, clippy `-D warnings`, `cargo test --workspace` and the
+core/shell boundary check clean.
+
+**For task 13 (bulk delete):** `Space` and `d` with marks are keys-pane concerns; nothing here
+touches the key list. New `PendingMutation` variants must still be added to the exhaustive matches
+in `update/editor.rs` (`staged_edit_found_key_gone`), `into_command`, `command_text`,
+`command_lines`, `guard_text`, `render::confirm_overlay` and `update/confirm.rs` (`nothing_to_remove`,
+and the `NotWritten` routing in `mutation_settled`). `State::rename_problem()` is now the single
+validation entry for the name capture, and `RenameCapture::owner` distinguishes a value-pane rename
+from a key rename. `OpenKey::follow` is the place to hang any "land the cursor on X after a
+refetch" behaviour.

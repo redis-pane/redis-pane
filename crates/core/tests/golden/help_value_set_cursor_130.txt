@@ -9,6 +9,7 @@
  ● fee│ t         edit ttl                                                                                                 │
       │ r         refetch                                                                                                  │
       │ C         copy redis-cli command                                                                                   │
+      │ R         rename member                                                                                            │
       │ ↑↓ jk     move                                                                                                     │
       │ PgUp/PgDn page                                                                                                     │
       │ Home/End  top/bottom                                                                                               │
@@ -19,6 +20,5 @@
       └────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
                                                           │
                                                           │
-                                                          │
 
- a add member   d remove member   c copy   t edit ttl   r refetch   C copy redis-cli command   ↑↓ jk move   ? F1 help
+ a add member   d remove member   c copy   t edit ttl   r refetch   C copy redis-cli command   R rename member   ? F1 help

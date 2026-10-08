@@ -184,6 +184,30 @@ pub async fn execute(client: &Client, mutation: &Mutation) -> Result<MutationOut
             KeyCopy::TargetExists => MutationOutcome::NotWritten(NotWritten::TargetExists),
             KeyCopy::KeyGone => MutationOutcome::NotWritten(NotWritten::KeyGone),
         },
+        Mutation::RenameHashField { field, to, .. } => {
+            match rename_hash_field(client, key, field, to).await? {
+                ItemRename::Renamed => MutationOutcome::Done,
+                ItemRename::OldGone => MutationOutcome::NotWritten(NotWritten::FieldGone),
+                ItemRename::NewTaken => MutationOutcome::NotWritten(NotWritten::FieldExists),
+                ItemRename::KeyGone => MutationOutcome::NotWritten(NotWritten::KeyGone),
+            }
+        }
+        Mutation::RenameSetMember { member, to, .. } => {
+            match rename_set_member(client, key, member, to).await? {
+                ItemRename::Renamed => MutationOutcome::Done,
+                ItemRename::OldGone => MutationOutcome::NotWritten(NotWritten::MemberGone),
+                ItemRename::NewTaken => MutationOutcome::NotWritten(NotWritten::MemberExists),
+                ItemRename::KeyGone => MutationOutcome::NotWritten(NotWritten::KeyGone),
+            }
+        }
+        Mutation::RenameZSetMember { member, to, .. } => {
+            match rename_zset_member(client, key, member, to).await? {
+                ItemRename::Renamed => MutationOutcome::Done,
+                ItemRename::OldGone => MutationOutcome::NotWritten(NotWritten::MemberGone),
+                ItemRename::NewTaken => MutationOutcome::NotWritten(NotWritten::MemberExists),
+                ItemRename::KeyGone => MutationOutcome::NotWritten(NotWritten::KeyGone),
+            }
+        }
         // Handled above, before `key` was ever computed — never reached.
         Mutation::ResetSlowlog => unreachable!("returned above"),
     })
@@ -335,6 +359,154 @@ pub async fn copy_key(client: &Client, from: &[u8], to: &[u8]) -> Result<KeyCopy
 pub async fn key_exists(client: &Client, name: &[u8]) -> Result<bool, Error> {
     let n: i64 = client.exists(fred::types::Key::from(name)).await?;
     Ok(n > 0)
+}
+
+/// Lua guard for renaming one Hash field inside a key (M2 task 14,
+/// `docs/plans/m2-task14-member-rename.md`).
+///
+/// `KEYS[1]` is the hash; `ARGV[1]` the old field, `ARGV[2]` the new one, both
+/// binary-safe. Returns `-1` if the key is gone (never recreated: the first
+/// line returns before any write), `-2` if the old field is gone, `-3` if the
+/// new name is taken, `1` on success. The checks run in that order, then the
+/// new name is written before the old one is deleted, so no interleaving ends
+/// with neither, and the script is atomic, so none ends with both.
+///
+/// The value is read here, not carried from the core: a value changed under
+/// the dialog is kept rather than clobbered, and a large one never leaves the
+/// server. The field's own TTL moves with it on 7.4+, by the same
+/// `redis.pcall` pattern as [`HASH_FIELD_EDIT_SCRIPT`]: below 7.4 the
+/// `HPEXPIRETIME` comes back as an error table, the `type` check skips the
+/// reapply, and the rename still lands (there is no field TTL to carry).
+/// `HSETNX` and not `HSET` so a bad edit to the checks above cannot turn this
+/// into an overwrite.
+const HASH_FIELD_RENAME_SCRIPT: &str = r#"
+if redis.call('EXISTS', KEYS[1]) == 0 then
+  return -1
+end
+if redis.call('HEXISTS', KEYS[1], ARGV[1]) == 0 then
+  return -2
+end
+if redis.call('HEXISTS', KEYS[1], ARGV[2]) == 1 then
+  return -3
+end
+local value = redis.call('HGET', KEYS[1], ARGV[1])
+local ttl = redis.pcall('HPEXPIRETIME', KEYS[1], 'FIELDS', 1, ARGV[1])
+redis.call('HSETNX', KEYS[1], ARGV[2], value)
+redis.call('HDEL', KEYS[1], ARGV[1])
+if type(ttl) == 'table' and not ttl.err and ttl[1] and tonumber(ttl[1]) and tonumber(ttl[1]) > 0 then
+  redis.call('HPEXPIREAT', KEYS[1], ttl[1], 'FIELDS', 1, ARGV[2])
+end
+return 1
+"#;
+
+/// Lua guard for renaming one Set member: the same `-1`/`-2`/`-3`/`1` shape and
+/// check order as [`HASH_FIELD_RENAME_SCRIPT`]. A member has no value or TTL
+/// of its own to carry (ADR-0016).
+const SET_MEMBER_RENAME_SCRIPT: &str = r#"
+if redis.call('EXISTS', KEYS[1]) == 0 then
+  return -1
+end
+if redis.call('SISMEMBER', KEYS[1], ARGV[1]) == 0 then
+  return -2
+end
+if redis.call('SISMEMBER', KEYS[1], ARGV[2]) == 1 then
+  return -3
+end
+redis.call('SADD', KEYS[1], ARGV[2])
+redis.call('SREM', KEYS[1], ARGV[1])
+return 1
+"#;
+
+/// Lua guard for renaming one ZSet member, keeping its score: the same shape
+/// as [`HASH_FIELD_RENAME_SCRIPT`]. `ZSCORE` returns the score as a string that
+/// round-trips a double (`inf` included) and `ZADD` takes it back, so the score
+/// is whatever it is at write time.
+const ZSET_MEMBER_RENAME_SCRIPT: &str = r#"
+if redis.call('EXISTS', KEYS[1]) == 0 then
+  return -1
+end
+local score = redis.call('ZSCORE', KEYS[1], ARGV[1])
+if score == false then
+  return -2
+end
+if redis.call('ZSCORE', KEYS[1], ARGV[2]) ~= false then
+  return -3
+end
+redis.call('ZADD', KEYS[1], 'NX', score, ARGV[2])
+redis.call('ZREM', KEYS[1], ARGV[1])
+return 1
+"#;
+
+/// What a field or member rename did on the server ([`rename_hash_field`],
+/// [`rename_set_member`], [`rename_zset_member`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ItemRename {
+    /// The new name exists with the old one's value or score; the old is gone.
+    Renamed,
+    /// The old name was already gone; nothing was written.
+    OldGone,
+    /// The new name was already taken (including outside the shown window);
+    /// nothing was written.
+    NewTaken,
+    /// The key was already gone; nothing was written, nothing recreated.
+    KeyGone,
+}
+
+fn item_rename(code: i64) -> ItemRename {
+    match code {
+        -1 => ItemRename::KeyGone,
+        -2 => ItemRename::OldGone,
+        -3 => ItemRename::NewTaken,
+        _ => ItemRename::Renamed,
+    }
+}
+
+/// Run one of the three rename scripts: the key only via `KEYS[1]`, both names
+/// as binary-safe `ARGV` (a `Vec<u8>` is one `Bytes` value, not one per byte;
+/// see [`set_hash_field`]). `EVAL`, never `EVALSHA`.
+async fn rename_item(
+    client: &Client,
+    script: &str,
+    name: &[u8],
+    old: &[u8],
+    new: &[u8],
+) -> Result<ItemRename, Error> {
+    let key = fred::types::Key::from(name);
+    let code: i64 = client
+        .eval(script, vec![key], vec![old.to_vec(), new.to_vec()])
+        .await?;
+    Ok(item_rename(code))
+}
+
+/// Rename a Hash field, keeping its value and, on 7.4+, its field TTL (M2
+/// task 14). Re-read afterward by the core (ADR-0006).
+pub async fn rename_hash_field(
+    client: &Client,
+    name: &[u8],
+    field: &[u8],
+    to: &[u8],
+) -> Result<ItemRename, Error> {
+    rename_item(client, HASH_FIELD_RENAME_SCRIPT, name, field, to).await
+}
+
+/// Rename a Set member (M2 task 14).
+pub async fn rename_set_member(
+    client: &Client,
+    name: &[u8],
+    member: &[u8],
+    to: &[u8],
+) -> Result<ItemRename, Error> {
+    rename_item(client, SET_MEMBER_RENAME_SCRIPT, name, member, to).await
+}
+
+/// Rename a ZSet member, keeping its score (M2 task 14).
+pub async fn rename_zset_member(
+    client: &Client,
+    name: &[u8],
+    member: &[u8],
+    to: &[u8],
+) -> Result<ItemRename, Error> {
+    rename_item(client, ZSET_MEMBER_RENAME_SCRIPT, name, member, to).await
 }
 
 /// Overwrite a String value (`SET`, R4.1, PLAN M2 task 4).

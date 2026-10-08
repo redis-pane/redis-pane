@@ -826,6 +826,9 @@ pub(super) fn staged_edit_found_key_gone(state: &mut State, name: &KeyName, at_m
             | PendingMutation::SetZSetScore { name: staged, .. }
             | PendingMutation::AddZSetMember { name: staged, .. }
             | PendingMutation::DeleteZSetMember { name: staged, .. }
+            | PendingMutation::RenameHashField { name: staged, .. }
+            | PendingMutation::RenameSetMember { name: staged, .. }
+            | PendingMutation::RenameZSetMember { name: staged, .. }
             | PendingMutation::SetTtl { name: staged, .. }
             | PendingMutation::PersistTtl { name: staged, .. }
             | PendingMutation::ShiftTtl { name: staged, .. },

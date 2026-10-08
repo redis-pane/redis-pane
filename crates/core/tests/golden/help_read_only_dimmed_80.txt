@@ -1,7 +1,6 @@
 ─ redis-pane ─ ● staging · from profile staging ─── READ-ONLY environment ⌃R   ─
 
  KEY                      TYPE      TTL │ user:8812:session
- ● user:8812:cart         zset      12m │ hash · 5 fields · 2.1 KB
 ┌─ help · value pane · hash ───────────────────────────────────────────────────┐
 │ e         edit field  read-only (environment) · preview only                 │
 │ a         add field  read-only (environment) · preview only                  │
@@ -10,6 +9,7 @@
 │ t         edit ttl  read-only (environment) · preview only                   │
 │ r         refetch                                                            │
 │ C         copy redis-cli command                                             │
+│ R         rename field  read-only (environment) · preview only               │
 │ ↑↓ jk     move                                                               │
 │ PgUp/PgDn page                                                               │
 │ Home/End  top/bottom                                                         │

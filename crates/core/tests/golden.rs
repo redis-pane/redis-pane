@@ -5690,3 +5690,127 @@ fn the_duplicate_row_is_dimmed_with_the_version_reason_below_redis_6_2() {
     assert_eq!(refusal.text(), "needs Redis 6.2");
     assert!(!refusal.preview_only, "the key does nothing at all");
 }
+
+// ── M2 task 14: rename a field or member (`docs/plans/m2-task14-member-rename.md`) ──
+
+fn member_capture_open(value: Value) -> State {
+    let mut state = opened("user:8812:session", value, 2_537);
+    state.focus = Pane::Value;
+    let open = state.open.as_mut().unwrap();
+    open.cursor_active = true;
+    open.cursor = 1;
+    let (state, _) = update(state, Msg::Key(KeyPress::plain(KeyCode::Char('R'))));
+    assert!(state.rename.is_some(), "R opens the capture");
+    state
+}
+
+fn member_staged(value: Value, backspaces: usize, text: &str) -> State {
+    let state = rename_typed(member_capture_open(value), backspaces, text);
+    let (state, _) = update(state, Msg::Key(KeyPress::plain(KeyCode::Enter)));
+    assert!(state.confirm.is_some(), "staged");
+    state
+}
+
+#[test]
+fn golden_rename_field_capture() {
+    assert_golden(
+        "rename_field_capture",
+        &draw(&member_capture_open(hash_value()), 130, 22),
+    );
+}
+
+#[test]
+fn golden_rename_member_capture_set() {
+    assert_golden(
+        "rename_member_capture_set",
+        &draw(&member_capture_open(set_value()), 130, 22),
+    );
+}
+
+#[test]
+fn golden_rename_member_capture_zset() {
+    assert_golden(
+        "rename_member_capture_zset",
+        &draw(&member_capture_open(zset_value()), 130, 22),
+    );
+}
+
+#[test]
+fn golden_rename_field_capture_blocks_a_shown_duplicate() {
+    // The cursor is on `device`; typing `plan` collides with another shown field.
+    let state = rename_typed(member_capture_open(hash_value()), 6, "plan");
+    assert_eq!(
+        state.rename_problem(),
+        Some(redis_pane_core::state::RenameProblem::Shown)
+    );
+    assert_golden("rename_field_capture_duplicate", &draw(&state, 130, 22));
+}
+
+#[test]
+fn golden_rename_member_capture_blocks_a_shown_duplicate_zset() {
+    let state = rename_typed(member_capture_open(zset_value()), 4, "gamma");
+    assert_golden("rename_member_capture_duplicate", &draw(&state, 130, 22));
+}
+
+#[test]
+fn golden_hint_bar_while_capturing_a_field_name() {
+    assert_golden(
+        "hint_bar_rename_field_capture",
+        &hint_bar(&member_capture_open(hash_value()), 130),
+    );
+}
+
+#[test]
+fn golden_confirm_rename_field() {
+    assert_golden(
+        "confirm_rename_field",
+        &draw(&member_staged(hash_value(), 6, "gadget"), 130, 22),
+    );
+}
+
+#[test]
+fn golden_confirm_rename_member_set() {
+    assert_golden(
+        "confirm_rename_member_set",
+        &draw(&member_staged(set_value(), 4, "delta"), 130, 22),
+    );
+}
+
+#[test]
+fn golden_confirm_rename_member_zset() {
+    assert_golden(
+        "confirm_rename_member_zset",
+        &draw(&member_staged(zset_value(), 4, "delta"), 130, 22),
+    );
+}
+
+#[test]
+fn golden_confirm_rename_field_under_read_only_shows_the_reason() {
+    let mut state = member_capture_open(hash_value());
+    state.read_only = Some(ReadOnlyReason::Environment);
+    let state = rename_typed(state, 6, "gadget");
+    let (state, _) = update(state, Msg::Key(KeyPress::plain(KeyCode::Enter)));
+    assert_golden("confirm_rename_field_read_only", &draw(&state, 130, 22));
+}
+
+fn value_cursor_on(value: Value) -> State {
+    let mut state = opened("user:8812:session", value, 2_537);
+    state.focus = Pane::Value;
+    let open = state.open.as_mut().unwrap();
+    open.cursor_active = true;
+    state
+}
+
+#[test]
+fn golden_hint_bar_value_pane_with_the_cursor_on_each_type() {
+    for (name, value) in [
+        ("hash", hash_value()),
+        ("set", set_value()),
+        ("zset", zset_value()),
+    ] {
+        assert_golden(
+            &format!("hint_bar_value_{name}_cursor_rename"),
+            &hint_bar(&value_cursor_on(value), 130),
+        );
+    }
+}
