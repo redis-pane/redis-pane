@@ -8782,3 +8782,529 @@ mod copy {
         let _ = writer.quit().await;
     }
 }
+
+// ── M2 task 14 — rename a field or member inside a key ──────────────────────
+
+mod member_rename {
+    use super::Credentials;
+    use super::support::cluster::start_cluster;
+    use fred::prelude::*;
+    use redis_pane::redis::mutate::execute_settled;
+    use redis_pane_core::mutation::{Mutation, MutationOutcome, NotWritten};
+
+    async fn setup(
+        tag: &str,
+    ) -> (
+        testcontainers::ContainerAsync<testcontainers::GenericImage>,
+        Client,
+        Client,
+    ) {
+        let (c, url) = super::start("redis", tag).await;
+        let writer = Builder::from_config(Config::from_url(&url).unwrap())
+            .build()
+            .unwrap();
+        writer.init().await.unwrap();
+        let (client, _) = redis_pane::redis::connect(&url).await.unwrap();
+        (c, client, writer)
+    }
+
+    fn hash(key: &str, from: &[u8], to: &[u8]) -> Mutation {
+        Mutation::RenameHashField {
+            key: key.into(),
+            field: from.to_vec(),
+            to: to.to_vec(),
+        }
+    }
+
+    fn set(key: &str, from: &[u8], to: &[u8]) -> Mutation {
+        Mutation::RenameSetMember {
+            key: key.into(),
+            member: from.to_vec(),
+            to: to.to_vec(),
+        }
+    }
+
+    fn zset(key: &str, from: &[u8], to: &[u8]) -> Mutation {
+        Mutation::RenameZSetMember {
+            key: key.into(),
+            member: from.to_vec(),
+            to: to.to_vec(),
+        }
+    }
+
+    async fn run(client: &Client, m: Mutation) -> Result<MutationOutcome, String> {
+        let settled = execute_settled(client, &m).await;
+        assert!(!settled.link_lost);
+        settled.result
+    }
+
+    fn bytes(b: &[u8]) -> fred::bytes::Bytes {
+        fred::bytes::Bytes::copy_from_slice(b)
+    }
+
+    fn field(b: &[u8]) -> fred::types::Key {
+        fred::types::Key::from(b)
+    }
+
+    fn refused(why: NotWritten) -> Result<MutationOutcome, String> {
+        Ok(MutationOutcome::NotWritten(why))
+    }
+
+    async fn hfields(writer: &Client, key: &str) -> Vec<(String, String)> {
+        let map: std::collections::BTreeMap<String, String> = writer.hgetall(key).await.unwrap();
+        map.into_iter().collect()
+    }
+
+    // ---- Hash ------------------------------------------------------------
+
+    #[tokio::test]
+    #[ignore = "needs docker"]
+    async fn a_hash_field_rename_lands_and_keeps_the_value_the_others_and_the_key_ttl() {
+        let (_c, client, writer) = setup("7-alpine").await;
+        let _: i64 = writer
+            .hset("h", [("old", "payload"), ("other", "x")])
+            .await
+            .unwrap();
+        let _: bool = writer.expire("h", 900, None).await.unwrap();
+
+        assert_eq!(
+            run(&client, hash("h", b"old", b"new")).await,
+            Ok(MutationOutcome::Done)
+        );
+        assert_eq!(
+            hfields(&writer, "h").await,
+            vec![
+                ("new".into(), "payload".into()),
+                ("other".into(), "x".into())
+            ]
+        );
+        assert!((1..=900).contains(&writer.ttl::<i64, _>("h").await.unwrap()));
+        let _ = client.quit().await;
+        let _ = writer.quit().await;
+    }
+
+    #[tokio::test]
+    #[ignore = "needs docker"]
+    async fn a_hash_rename_to_a_taken_name_is_refused_and_changes_nothing() {
+        let (_c, client, writer) = setup("7-alpine").await;
+        let _: i64 = writer.hset("h", [("a", "1"), ("b", "2")]).await.unwrap();
+        assert_eq!(
+            run(&client, hash("h", b"a", b"b")).await,
+            refused(NotWritten::FieldExists)
+        );
+        assert_eq!(
+            hfields(&writer, "h").await,
+            vec![("a".into(), "1".into()), ("b".into(), "2".into())]
+        );
+        let _ = client.quit().await;
+        let _ = writer.quit().await;
+    }
+
+    #[tokio::test]
+    #[ignore = "needs docker"]
+    async fn a_hash_rename_of_a_gone_field_is_refused_and_creates_nothing() {
+        let (_c, client, writer) = setup("7-alpine").await;
+        let _: i64 = writer.hset("h", [("a", "1")]).await.unwrap();
+        assert_eq!(
+            run(&client, hash("h", b"ghost", b"new")).await,
+            refused(NotWritten::FieldGone)
+        );
+        assert_eq!(hfields(&writer, "h").await, vec![("a".into(), "1".into())]);
+        let _ = client.quit().await;
+        let _ = writer.quit().await;
+    }
+
+    #[tokio::test]
+    #[ignore = "needs docker"]
+    async fn a_hash_rename_on_a_gone_key_does_not_recreate_it() {
+        let (_c, client, writer) = setup("7-alpine").await;
+        assert_eq!(
+            run(&client, hash("h:gone", b"a", b"b")).await,
+            refused(NotWritten::KeyGone)
+        );
+        assert_eq!(writer.exists::<i64, _>("h:gone").await.unwrap(), 0);
+        let _ = client.quit().await;
+        let _ = writer.quit().await;
+    }
+
+    #[tokio::test]
+    #[ignore = "needs docker"]
+    async fn a_binary_hash_field_and_value_round_trip() {
+        let (_c, client, writer) = setup("7-alpine").await;
+        let old = [0xffu8, 0x00, 0xfe, b'a'];
+        let new = [0x80u8, 0x81, 0x00];
+        let value = [0x00u8, 0xff, b'\n', 0xc3];
+        let _: i64 = writer
+            .hset("h", (field(&old), bytes(&value)))
+            .await
+            .unwrap();
+        assert_eq!(
+            run(&client, hash("h", &old, &new)).await,
+            Ok(MutationOutcome::Done)
+        );
+        let got: Option<Vec<u8>> = writer.hget("h", field(&new)).await.unwrap();
+        assert_eq!(got.as_deref(), Some(&value[..]));
+        assert_eq!(
+            writer.hexists::<i64, _, _>("h", field(&old)).await.unwrap(),
+            0
+        );
+        let _ = client.quit().await;
+        let _ = writer.quit().await;
+    }
+
+    #[tokio::test]
+    #[ignore = "needs docker"]
+    async fn renaming_a_hashs_only_field_leaves_the_key_in_place() {
+        let (_c, client, writer) = setup("7-alpine").await;
+        let _: i64 = writer.hset("h", [("only", "v")]).await.unwrap();
+        assert_eq!(
+            run(&client, hash("h", b"only", b"renamed")).await,
+            Ok(MutationOutcome::Done)
+        );
+        assert_eq!(
+            hfields(&writer, "h").await,
+            vec![("renamed".into(), "v".into())]
+        );
+        let _ = client.quit().await;
+        let _ = writer.quit().await;
+    }
+
+    async fn field_ttl_moves_with_the_name(tag: &str) {
+        let (_c, client, writer) = setup(tag).await;
+        let _: i64 = writer
+            .hset("h", [("old", "v"), ("plain", "p")])
+            .await
+            .unwrap();
+        let set: Vec<i64> = writer
+            .custom(
+                fred::types::CustomCommand::new("HEXPIRE", None, false),
+                vec!["h", "600", "FIELDS", "1", "old"],
+            )
+            .await
+            .unwrap();
+        assert_eq!(set, vec![1]);
+
+        assert_eq!(
+            run(&client, hash("h", b"old", b"new")).await,
+            Ok(MutationOutcome::Done)
+        );
+        let ttls: Vec<i64> = writer
+            .custom(
+                fred::types::CustomCommand::new("HTTL", None, false),
+                vec!["h", "FIELDS", "3", "new", "old", "plain"],
+            )
+            .await
+            .unwrap();
+        assert!(
+            (1..=600).contains(&ttls[0]),
+            "the field TTL moved: {ttls:?}"
+        );
+        assert_eq!(ttls[1], -2, "the old name is gone");
+        assert_eq!(ttls[2], -1, "an untouched field keeps having none");
+
+        // A field with no TTL does not gain one.
+        assert_eq!(
+            run(&client, hash("h", b"plain", b"plain2")).await,
+            Ok(MutationOutcome::Done)
+        );
+        let ttls: Vec<i64> = writer
+            .custom(
+                fred::types::CustomCommand::new("HTTL", None, false),
+                vec!["h", "FIELDS", "1", "plain2"],
+            )
+            .await
+            .unwrap();
+        assert_eq!(ttls, vec![-1]);
+        let _ = client.quit().await;
+        let _ = writer.quit().await;
+    }
+
+    #[tokio::test]
+    #[ignore = "needs docker"]
+    async fn the_field_ttl_moves_with_the_name_on_redis_7_4() {
+        field_ttl_moves_with_the_name("7.4-alpine").await;
+    }
+
+    #[tokio::test]
+    #[ignore = "needs docker"]
+    async fn the_field_ttl_moves_with_the_name_on_redis_8_4() {
+        field_ttl_moves_with_the_name("8.4-alpine").await;
+    }
+
+    /// 6.2 predates `HPEXPIRETIME`: the `pcall` must come back as an error
+    /// table the script keeps running past, and the rename still lands.
+    #[tokio::test]
+    #[ignore = "needs docker"]
+    async fn the_rename_scripts_still_run_on_redis_6_2() {
+        let (_c, client, writer) = setup("6.2-alpine").await;
+        let _: i64 = writer.hset("h", [("old", "v")]).await.unwrap();
+        assert_eq!(
+            run(&client, hash("h", b"old", b"new")).await,
+            Ok(MutationOutcome::Done)
+        );
+        assert_eq!(
+            hfields(&writer, "h").await,
+            vec![("new".into(), "v".into())]
+        );
+        assert_eq!(
+            run(&client, hash("h", b"old", b"again")).await,
+            refused(NotWritten::FieldGone)
+        );
+
+        let _: i64 = writer.sadd("s", ["x", "y"]).await.unwrap();
+        assert_eq!(
+            run(&client, set("s", b"x", b"z")).await,
+            Ok(MutationOutcome::Done)
+        );
+        let _: i64 = writer
+            .zadd("z", None, None, false, false, (1.5, "m"))
+            .await
+            .unwrap();
+        assert_eq!(
+            run(&client, zset("z", b"m", b"n")).await,
+            Ok(MutationOutcome::Done)
+        );
+        let score: f64 = writer.zscore("z", "n").await.unwrap();
+        assert_eq!(score, 1.5);
+        let _ = client.quit().await;
+        let _ = writer.quit().await;
+    }
+
+    // ---- Set -------------------------------------------------------------
+
+    #[tokio::test]
+    #[ignore = "needs docker"]
+    async fn a_set_member_rename_lands_and_the_others_stay() {
+        let (_c, client, writer) = setup("7-alpine").await;
+        let _: i64 = writer.sadd("s", ["old", "other"]).await.unwrap();
+        let _: bool = writer.expire("s", 900, None).await.unwrap();
+        assert_eq!(
+            run(&client, set("s", b"old", b"new")).await,
+            Ok(MutationOutcome::Done)
+        );
+        let mut members: Vec<String> = writer.smembers("s").await.unwrap();
+        members.sort();
+        assert_eq!(members, vec!["new", "other"]);
+        assert!((1..=900).contains(&writer.ttl::<i64, _>("s").await.unwrap()));
+        let _ = client.quit().await;
+        let _ = writer.quit().await;
+    }
+
+    #[tokio::test]
+    #[ignore = "needs docker"]
+    async fn a_set_rename_to_a_taken_name_or_of_a_gone_member_is_refused() {
+        let (_c, client, writer) = setup("7-alpine").await;
+        let _: i64 = writer.sadd("s", ["a", "b"]).await.unwrap();
+        assert_eq!(
+            run(&client, set("s", b"a", b"b")).await,
+            refused(NotWritten::MemberExists)
+        );
+        assert_eq!(
+            run(&client, set("s", b"ghost", b"c")).await,
+            refused(NotWritten::MemberGone)
+        );
+        let mut members: Vec<String> = writer.smembers("s").await.unwrap();
+        members.sort();
+        assert_eq!(members, vec!["a", "b"], "nothing changed");
+        let _ = client.quit().await;
+        let _ = writer.quit().await;
+    }
+
+    #[tokio::test]
+    #[ignore = "needs docker"]
+    async fn a_set_rename_on_a_gone_key_does_not_recreate_it() {
+        let (_c, client, writer) = setup("7-alpine").await;
+        assert_eq!(
+            run(&client, set("s:gone", b"a", b"b")).await,
+            refused(NotWritten::KeyGone)
+        );
+        assert_eq!(writer.exists::<i64, _>("s:gone").await.unwrap(), 0);
+        let _ = client.quit().await;
+        let _ = writer.quit().await;
+    }
+
+    #[tokio::test]
+    #[ignore = "needs docker"]
+    async fn a_binary_set_member_round_trips_and_the_only_member_keeps_the_key() {
+        let (_c, client, writer) = setup("7-alpine").await;
+        let old = [0xffu8, 0x00, 0xfe];
+        let new = [0x00u8, 0x80];
+        let _: i64 = writer.sadd("s", bytes(&old)).await.unwrap();
+        assert_eq!(
+            run(&client, set("s", &old, &new)).await,
+            Ok(MutationOutcome::Done)
+        );
+        assert_eq!(
+            writer
+                .sismember::<i64, _, _>("s", new.to_vec())
+                .await
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            writer
+                .sismember::<i64, _, _>("s", old.to_vec())
+                .await
+                .unwrap(),
+            0
+        );
+        assert_eq!(writer.scard::<i64, _>("s").await.unwrap(), 1);
+        let _ = client.quit().await;
+        let _ = writer.quit().await;
+    }
+
+    // ---- ZSet ------------------------------------------------------------
+
+    #[tokio::test]
+    #[ignore = "needs docker"]
+    async fn a_zset_member_rename_keeps_the_score_including_awkward_ones() {
+        let (_c, client, writer) = setup("7-alpine").await;
+        let scores = [1.5, -0.1, 1e300, 0.30000000000000004, f64::INFINITY];
+        for (i, score) in scores.iter().enumerate() {
+            let old = format!("old{i}");
+            let new = format!("new{i}");
+            let _: i64 = writer
+                .zadd("z", None, None, false, false, (*score, old.as_str()))
+                .await
+                .unwrap();
+            assert_eq!(
+                run(&client, zset("z", old.as_bytes(), new.as_bytes())).await,
+                Ok(MutationOutcome::Done)
+            );
+            let got: f64 = writer.zscore("z", new.as_str()).await.unwrap();
+            assert_eq!(got, *score, "score of {new}");
+            assert!(
+                writer
+                    .zscore::<Option<f64>, _, _>("z", old.as_str())
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
+        }
+        let _ = client.quit().await;
+        let _ = writer.quit().await;
+    }
+
+    #[tokio::test]
+    #[ignore = "needs docker"]
+    async fn a_zset_rename_to_a_taken_name_or_of_a_gone_member_is_refused() {
+        let (_c, client, writer) = setup("7-alpine").await;
+        let _: i64 = writer
+            .zadd("z", None, None, false, false, vec![(1.0, "a"), (2.0, "b")])
+            .await
+            .unwrap();
+        assert_eq!(
+            run(&client, zset("z", b"a", b"b")).await,
+            refused(NotWritten::MemberExists)
+        );
+        assert_eq!(
+            run(&client, zset("z", b"ghost", b"c")).await,
+            refused(NotWritten::MemberGone)
+        );
+        assert_eq!(writer.zscore::<f64, _, _>("z", "a").await.unwrap(), 1.0);
+        assert_eq!(
+            writer.zscore::<f64, _, _>("z", "b").await.unwrap(),
+            2.0,
+            "the taken member's score is not overwritten"
+        );
+        assert_eq!(writer.zcard::<i64, _>("z").await.unwrap(), 2);
+        let _ = client.quit().await;
+        let _ = writer.quit().await;
+    }
+
+    #[tokio::test]
+    #[ignore = "needs docker"]
+    async fn a_zset_rename_on_a_gone_key_does_not_recreate_it() {
+        let (_c, client, writer) = setup("7-alpine").await;
+        assert_eq!(
+            run(&client, zset("z:gone", b"a", b"b")).await,
+            refused(NotWritten::KeyGone)
+        );
+        assert_eq!(writer.exists::<i64, _>("z:gone").await.unwrap(), 0);
+        let _ = client.quit().await;
+        let _ = writer.quit().await;
+    }
+
+    #[tokio::test]
+    #[ignore = "needs docker"]
+    async fn a_binary_zset_member_round_trips_with_its_score() {
+        let (_c, client, writer) = setup("7-alpine").await;
+        let old = [0xffu8, 0x00, 0xfe];
+        let new = [0x01u8, 0x80, 0x00];
+        let _: i64 = writer
+            .zadd("z", None, None, false, false, (7.25, bytes(&old)))
+            .await
+            .unwrap();
+        assert_eq!(
+            run(&client, zset("z", &old, &new)).await,
+            Ok(MutationOutcome::Done)
+        );
+        let got: f64 = writer.zscore("z", bytes(&new)).await.unwrap();
+        assert_eq!(got, 7.25);
+        assert_eq!(writer.zcard::<i64, _>("z").await.unwrap(), 1);
+        let _ = client.quit().await;
+        let _ = writer.quit().await;
+    }
+
+    // ---- Cluster ---------------------------------------------------------
+
+    #[tokio::test]
+    #[ignore = "needs docker"]
+    async fn on_a_cluster_all_three_renames_land_and_refuse_as_standalone() {
+        let cluster = start_cluster().await;
+        let client = redis_pane::redis::connect_with(&cluster.seed_url(), &Credentials::default())
+            .await
+            .expect("cluster client")
+            .0;
+        let writer = cluster.client().await;
+        let _: i64 = writer.hset("h14", [("a", "1"), ("b", "2")]).await.unwrap();
+        let _: i64 = writer.sadd("s14", ["a", "b"]).await.unwrap();
+        let _: i64 = writer
+            .zadd(
+                "z14",
+                None,
+                None,
+                false,
+                false,
+                vec![(3.5, "a"), (4.5, "b")],
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            run(&client, hash("h14", b"a", b"c")).await,
+            Ok(MutationOutcome::Done)
+        );
+        assert_eq!(
+            run(&client, set("s14", b"a", b"c")).await,
+            Ok(MutationOutcome::Done)
+        );
+        assert_eq!(
+            run(&client, zset("z14", b"a", b"c")).await,
+            Ok(MutationOutcome::Done)
+        );
+        assert_eq!(writer.hget::<String, _, _>("h14", "c").await.unwrap(), "1");
+        assert_eq!(writer.sismember::<i64, _, _>("s14", "c").await.unwrap(), 1);
+        assert_eq!(writer.zscore::<f64, _, _>("z14", "c").await.unwrap(), 3.5);
+
+        assert_eq!(
+            run(&client, hash("h14", b"c", b"b")).await,
+            refused(NotWritten::FieldExists)
+        );
+        assert_eq!(
+            run(&client, set("s14", b"c", b"b")).await,
+            refused(NotWritten::MemberExists)
+        );
+        assert_eq!(
+            run(&client, zset("z14", b"zz", b"y")).await,
+            refused(NotWritten::MemberGone)
+        );
+        assert_eq!(
+            run(&client, hash("h14:gone", b"a", b"b")).await,
+            refused(NotWritten::KeyGone)
+        );
+        assert_eq!(writer.exists::<i64, _>("h14:gone").await.unwrap(), 0);
+        let _ = client.quit().await;
+        let _ = writer.quit().await;
+    }
+}

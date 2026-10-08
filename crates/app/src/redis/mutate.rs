@@ -184,14 +184,29 @@ pub async fn execute(client: &Client, mutation: &Mutation) -> Result<MutationOut
             KeyCopy::TargetExists => MutationOutcome::NotWritten(NotWritten::TargetExists),
             KeyCopy::KeyGone => MutationOutcome::NotWritten(NotWritten::KeyGone),
         },
-        // Phase 3 replaces this stub.
-        Mutation::RenameHashField { .. }
-        | Mutation::RenameSetMember { .. }
-        | Mutation::RenameZSetMember { .. } => {
-            return Err(Error::new(
-                ErrorKind::Unknown,
-                "member rename: not wired yet",
-            ));
+        Mutation::RenameHashField { field, to, .. } => {
+            match rename_hash_field(client, key, field, to).await? {
+                ItemRename::Renamed => MutationOutcome::Done,
+                ItemRename::OldGone => MutationOutcome::NotWritten(NotWritten::FieldGone),
+                ItemRename::NewTaken => MutationOutcome::NotWritten(NotWritten::FieldExists),
+                ItemRename::KeyGone => MutationOutcome::NotWritten(NotWritten::KeyGone),
+            }
+        }
+        Mutation::RenameSetMember { member, to, .. } => {
+            match rename_set_member(client, key, member, to).await? {
+                ItemRename::Renamed => MutationOutcome::Done,
+                ItemRename::OldGone => MutationOutcome::NotWritten(NotWritten::MemberGone),
+                ItemRename::NewTaken => MutationOutcome::NotWritten(NotWritten::MemberExists),
+                ItemRename::KeyGone => MutationOutcome::NotWritten(NotWritten::KeyGone),
+            }
+        }
+        Mutation::RenameZSetMember { member, to, .. } => {
+            match rename_zset_member(client, key, member, to).await? {
+                ItemRename::Renamed => MutationOutcome::Done,
+                ItemRename::OldGone => MutationOutcome::NotWritten(NotWritten::MemberGone),
+                ItemRename::NewTaken => MutationOutcome::NotWritten(NotWritten::MemberExists),
+                ItemRename::KeyGone => MutationOutcome::NotWritten(NotWritten::KeyGone),
+            }
         }
         // Handled above, before `key` was ever computed — never reached.
         Mutation::ResetSlowlog => unreachable!("returned above"),
