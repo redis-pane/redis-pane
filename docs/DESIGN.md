@@ -171,7 +171,8 @@ recomputed each frame from which tile is focused, never a persisted scroll posit
 | `t` | Edit TTL (set / persist / extend) | value pane, focused |
 | `c` / `C` | Copy key or value / copy `redis-cli` command | key list, value pane |
 | `d` | Stage delete of the Selected key (`DEL`), (Hash, cursor on a field) of that field (`HDEL`), or (Slowlog view) `SLOWLOG RESET` | key list, value pane, slowlog view |
-| `R` | Rename the Selected key — opens a name capture prefilled with the current name, then stages `RENAMENX old new`. A group row, a gone row or a binary name shows a notice and stages nothing. The value pane's `R` (rename a field or member) is task 14's | key list |
+| `R` | Rename the Selected key — opens a name capture prefilled with the current name, then stages `RENAMENX old new`. A group row, a gone row or a binary name shows a notice and stages nothing | key list |
+| `R` | (Hash, Set or ZSet, cursor on a row) Rename that field or member inside the Open key — the same name capture, prefilled with the current name, then a guarded script that writes the new name before deleting the old. Value and field TTL (Hash) or score (ZSet) are kept. List, String, JSON, Binary and Stream show a notice and stage nothing | value pane, focused |
 | `D` | Duplicate the Selected key (`COPY`, Redis 6.2+) — the same name capture, prefilled with the name plus `:copy`, then stages `COPY src dst`. Below 6.2 it is dimmed in help with *needs Redis 6.2* and shows a notice. The selection and Open key stay on the source | key list |
 | `y` | Confirm a staged mutation (`Esc` dismisses) | global, only while one is staged |
 | `p` | Pause / resume consuming the `MONITOR` or Pub/Sub feed (the socket stays open; paused lines/messages are counted, not buffered) | Monitor view, Pub/Sub tail |
@@ -585,6 +586,25 @@ and a key that expired between `DUMP` and `PTTL` (`PTTL 0`) restores with 1 ms, 
 success only the new name is added to the Loaded set (through `scan_batch`); the selection and the
 Open key stay on the source. Read-only Mode refuses at confirm. `COPY` needs Redis 6.2, so on
 6.0/6.1 `D` stages nothing.
+
+**Rename a field or member (`R`, value pane, M2 task 14,
+`docs/plans/m2-task14-member-rename.md`).** With the cursor on a Hash field, Set member or ZSet
+member, `R` opens the same one-line capture, titled `rename field` or `rename member`, with an
+`in <key>` line above `from`/`to`. The reasons shown under the field are `name can't be empty`,
+`same as the current name`, and, for a name another row of the shown window already has, `already
+a field in this hash` / `already a member of this set` / `zset` (a name taken outside the window is
+the script's to refuse). A name that is not valid UTF-8 is refused with the same notice that type's
+`e` gives; a Hash field with a *binary value* is still renameable, since the value never enters a
+text buffer. Staging shows both effective commands, never the `EVAL`: `HSETNX key new <value>` +
+`HDEL key old`, `SADD key new` + `SREM key old`, or `ZADD key NX <score> new` + `ZREM key old`,
+then the guard line (*only if the field still exists · new name must be free · keeps its value
+and TTL*) and `old → new`. The script checks in a fixed order (key exists, old exists, new free)
+and then writes the new name before deleting the old, so it never recreates a gone key and never
+ends with both names or neither. A Hash field's own TTL moves with it on Redis 7.4+; below that
+there is none to move and the rename still lands. The refusals name the command and say `nothing
+written` (`field`/`member no longer exists`, `already exists`, `key no longer exists`). Read-only
+Mode refuses at confirm. After a success the value is re-read through the ordinary read path,
+which re-arms liveness, and the value cursor follows the new name if it is in the shown window.
 
 ### 6.6 Dashboard
 
