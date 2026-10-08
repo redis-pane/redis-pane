@@ -1,0 +1,52 @@
+# Pub/Sub
+
+`g p` opens Pub/Sub: you choose channels, and watch what is published to them. This is not
+Monitor. Monitor shows everything the server does. Pub/Sub shows only what you subscribed to.
+
+A row of chips at the top lists your subscriptions. Below it are the messages: time, channel and
+payload, with a detail strip for the selected message that pretty-prints JSON.
+
+## Subscribing
+
+`a` opens an input. Type a channel name and press `⏎`.
+
+- A name with `*`, `?` or `[` is a **pattern** (`PSUBSCRIBE`), such as `user:*`. Its chip carries
+  a trailing `*` mark.
+- Anything else is a **channel** (`SUBSCRIBE`). Start with `=` to force a channel when the name
+  contains one of those characters.
+- `Tab` in the form turns it into a **sharded** subscription (`SSUBSCRIBE`, Redis 7 and newer).
+  Its chip shows `§` (`#` in ASCII). A sharded channel is a single literal name, so `*` is an
+  ordinary character there. Below Redis 7, the toggle says it needs Redis 7.
+
+There is no warning banner and no question on `prod`: you pay only for what you chose.
+
+## Keys
+
+| Key | Does |
+| --- | --- |
+| `a` | Add a subscription, from either half. |
+| `Tab` | Move focus between the chips and the messages. |
+| `←` `→`, `d` | On the chips: pick one, unsubscribe it. |
+| `p` | Pause. Messages are counted and dropped, as in Monitor. |
+| `/` | Filter by channel or payload. |
+| `c` | Copy the selected payload. |
+| `End` | Follow the newest. |
+| `r` | Reopen after the feed has closed. |
+
+## What's remembered
+
+Your subscriptions are kept for the session and resubscribed when you come back with `g p`, but
+never written to disk. Leaving the view closes its connection, so nothing stays subscribed on the
+server behind you. The connection is opened only when you add the first subscription.
+
+The view keeps the latest 5,000 messages, each cut at 4 KiB.
+
+If two patterns you subscribed to match one channel, Redis delivers the message once per pattern.
+The detail strip then says `via user:* (or another matching pattern)`, because the client library
+can't say which delivery came from which.
+
+## On a Cluster
+
+A normal `PUBLISH` goes to the whole Cluster, so ordinary subscriptions work as they do anywhere.
+A sharded message is only delivered by the node that owns the channel's slot. `redis-pane`
+subscribes there, and moves with the channel through a failover or a slot move.

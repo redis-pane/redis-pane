@@ -1,0 +1,39 @@
+# Bulk delete
+
+## Mark, then delete
+
+1. `Space` marks the Selected key and moves down. Hold it to mark a run. Marked rows show `◆`
+   (`+` in ASCII), and the status line says `N marked`.
+2. `d` stages a delete of every marked key.
+3. `y` confirms. Before it runs, you see `DEL × N keys`, a guard line, and the first eight names
+   with `… and N more`.
+
+`Esc` clears the marks. A rescan clears them too, since the list renumbers.
+
+## On `prod` and `unknown`: type the count
+
+On `local` and `staging`, one `y` confirms. On `prod` and `unknown`, `y` opens a second step: you
+type the exact number of keys and press `⏎`. A wrong number keeps the dialog open and says so.
+Every other key is ignored, and `Esc` dismisses at any point.
+
+If you're in [Read-only Mode](../safety/read-only.md), you're refused at the first `y`, before
+you are asked to type a count for something that can't run.
+
+## While it runs
+
+`redis-pane` deletes the keys one at a time, in batches, with `deleting X of N` in the status line.
+It sends a `DEL` per key rather than one big `DEL`, so it also works on a
+[Cluster](../connecting/cluster.md).
+
+`Esc` stops it after the current batch. The report says how many were deleted and how many were
+already gone. A stopped or failed run unmarks only the keys it dealt with, so you can fix the
+problem and try again, and a failure names the command that failed and how far it got.
+
+## Loaded keys only
+
+Marking only reaches keys you've loaded and can see. There is no "select everything matching this
+filter", and you can't mark a whole tree group; a group row shows a notice instead. That is
+deliberate: deleting a subtree is the highest-blast-radius thing this could do.
+
+One consequence: a marked key that your filter now hides **is still deleted**, and the count in
+the dialog includes it.

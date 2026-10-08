@@ -1,0 +1,67 @@
+name: Docs
+
+# Builds the user guide (book/) and checks its links. On main it also publishes
+# the site to GitHub Pages. Pages is a repository setting that is enabled by
+# hand; until then the `deploy` job is allowed to fail (continue-on-error) so
+# the run stays green. Remove that line once Pages is on.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "book/**"
+      - ".github/workflows/docs.yml"
+  pull_request:
+    paths:
+      - "book/**"
+      - ".github/workflows/docs.yml"
+  workflow_dispatch: {}
+
+env:
+  MDBOOK_VERSION: "0.5.4"
+
+jobs:
+  build:
+    name: mdbook build · link check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install mdBook
+        uses: taiki-e/install-action@v2
+        with:
+          tool: mdbook@${{ env.MDBOOK_VERSION }}
+      - name: Build the book
+        run: mdbook build book
+      # Internal links and #fragments only: --offline never touches the network,
+      # so an external site being down cannot fail the build. 404.html is
+      # excluded because it links to the site root, which only exists on Pages.
+      - name: Check internal links
+        uses: lycheeverse/lychee-action@v2
+        with:
+          args: --offline --include-fragments --no-progress --exclude-path 404.html book/book
+          fail: true
+      - name: Upload the site
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: book/book
+
+  deploy:
+    name: deploy to GitHub Pages
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    # A separate job, so the build and the link check never depend on Pages.
+    continue-on-error: true
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

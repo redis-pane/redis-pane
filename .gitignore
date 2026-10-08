@@ -16,3 +16,6 @@ __pycache__/
 
 # Personal Claude Code overrides
 /.claude/settings.local.json
+
+# mdBook output
+/book/book/
