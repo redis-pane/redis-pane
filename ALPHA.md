@@ -14,7 +14,8 @@ Beyond the keyspace there are four views over the server itself: Monitor, Pub/Su
 the Dashboard. The beta also adds themes, an ASCII fallback and session restore, described under
 "What to try".
 
-Still not built: renaming or copying a key, and bulk operations across several keys. Treat a
+It can also rename a key (`R`), duplicate one (`D`), rename a field or member in place, and delete
+many keys at once (`Space` to mark, `d` to delete the marked set). Treat a
 `prod` or `unknown` target with the same care you would give any tool that can write to it.
 
 ## Install
@@ -116,6 +117,13 @@ redis-pane --profile mine --probe
   cursor); **`a`** — add a field or member; **`d`** — delete; **`t`** in the value pane — change
   the TTL. **`⌃S`** stages an edit, and **`y`** confirms it after showing the exact command it
   will run.
+- **`R`** — rename the key under the cursor; **`D`** — duplicate it under a new name (Redis
+  `COPY`, 6.2+). Neither ever overwrites an existing key: a taken name is refused. In the value
+  pane, **`R`** renames the Hash field, Set member or Sorted-set member under the cursor, keeping
+  its value or score.
+- **`Space`** — mark keys; **`d`** with marks deletes them all after one preview. On a `prod`
+  target you type the key count to confirm. `Esc` clears the marks, and stops a running bulk
+  delete between batches.
 - **`⌃R`** — toggle Read-only Mode (some environments start locked and say why).
 - **`?`** or **`F1`** — help for exactly where you are: the keys that work here, with anything
   Read-only Mode would refuse dimmed and the reason shown. `F1` works even while typing.
@@ -182,7 +190,9 @@ redis-pane --profile mine --probe
 
 ## What's not there yet, on purpose
 
-- No renaming or copying keys, and no bulk operations across several keys — coming next.
+- No moving a key to another database, and no `$EDITOR` round trip for values — both parked.
+- Bulk delete marks keys one at a time; marking a whole tree group at once is not there. A marked
+  key that the filter hides is still deleted (the preview counts it).
 - Large keyspaces, two small known gaps: restoring a saved session in tree mode at a million keys
   rebuilds once synchronously at startup, so it can pause briefly; and `Esc` does not cancel a
   running rebuild (the old list stays usable meanwhile). Filters with `*`/`?` and fuzzy filters

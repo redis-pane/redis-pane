@@ -279,7 +279,9 @@ config file; a **Connection** is a live session, which may be **ad-hoc** (no Pro
 - **M1 — Browse.** Scan-based keyspace browser, tree/flat views, all core type viewers, and
   liveness on the open key (R3.6–R3.11). *This is the milestone that already beats `redis-cli`
   for daily use.*
-- **M2 — Mutate.** Editing, TTL management, delete/rename/copy, read-only mode, safety rails.
+- **M2 — Mutate.** Editing, TTL management, delete/rename/copy, read-only mode, safety rails —
+  **done** (rename, duplicate, field/member rename and bulk delete landed after M6). Parked:
+  move-across-db and the `$EDITOR` escape hatch.
 - **M3 — Power.** Monitor, pub/sub, server dashboard, slowlog — **complete**, shipped by
   alpha.18. (Console cut from M3 — see §10's resolved open question. The command palette shipped
   in alpha.14 and was withdrawn — [ADR-0020](adr/0020-no-command-palette.md); contextual `?`/`F1`

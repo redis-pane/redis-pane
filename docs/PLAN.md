@@ -134,7 +134,12 @@ Proves: a mutation can be trusted — the reader always sees the real command an
 before it runs, Read-only Mode is enforced at exactly one point, and nothing here reopens the
 RedisInsight-shaped bugs M0/M1 were built to make structurally impossible.
 
-**Progress: in flight.** Task 1 was already done incidentally while building M0's title bar and
+**Progress: done, apart from what is parked.** Tasks 11–14 (rename, duplicate, field/member
+rename, multi-select and bulk delete) shipped on 2026-10-08, one PR each (#86–#89), from
+[`m2-remaining-planning.md`](plans/m2-remaining-planning.md). Still parked by decision: task 5
+(the `$EDITOR` escape hatch) and move-across-db.
+
+Task 1 was already done incidentally while building M0's title bar and
 Ctrl-R toggle — `ReadOnlyReason`, its precedence rules, and the DESIGN §6.9 chrome all shipped
 with golden-frame coverage before this table existed. Tasks 2–4 (the chokepoint, Delete, and
 String edit) are done. The rest is ordered per a grilling session with the user: value edit ships
@@ -305,8 +310,7 @@ random-order keys, a tree toggle (sort plus fold) takes ~373 ms, or ~482 ms with
 across frames, then a faster sort and fold — is milestone M6, after the beta:
 [`m6-perf-rebuild.md`](plans/m6-perf-rebuild.md), tasks in [`m6-planning.md`](plans/m6-planning.md).
 
-Still unbuilt after M4 and not part of it: rename, copy, bulk operations and Hash field rename (M2
-tasks 11–14, §5). Cluster support shipped in M5 (§7.2), rebuild cost at real `SCAN` order in M6
+Rename, copy, bulk delete and field/member rename (M2 tasks 11–14, §5) shipped after M6. Cluster support shipped in M5 (§7.2), rebuild cost at real `SCAN` order in M6
 (§7.3).
 
 | # | Task | Proves |
