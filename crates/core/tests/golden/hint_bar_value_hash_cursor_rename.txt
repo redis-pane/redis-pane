@@ -1,0 +1,1 @@
+e edit field   a add field   d delete field   c copy   t edit ttl   r refetch   C copy redis-cli command   ? F1 help

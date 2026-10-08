@@ -250,3 +250,22 @@ the server has now.
   outcome mapped to `FieldGone`/`MemberGone`, `FieldExists`/`MemberExists`, `KeyGone`). The write
   goes through the existing `execute_settled`, so the Cluster wedge handling applies unchanged. No
   deviations.
+- **Phase 3 fix.** The phase 3 commit added the scripts and wrappers but missed replacing the
+  stub arm in `execute` (cargo fmt had reflowed it, so the scripted edit did not match; clippy and
+  the build were still green because the wrappers are `pub`). The Docker tests caught it on first
+  run; a follow-up commit wires the dispatch.
+- **Phase 4 (tests).** Docker, `mod member_rename` in `crates/app/tests/integration.rs` (18
+  tests): per type, the rename lands and keeps value/score and the key TTL; a taken new name is
+  refused with nothing changed (and a taken ZSet member's score is not overwritten); a gone old
+  name is refused; a gone key is refused and not recreated; binary names round-trip at the shell
+  function (Hash with a binary value, Set, ZSet with its score); a Hash's only field renames
+  without losing the key; ZSet scores `1.5`, `-0.1`, `1e300`, `0.30000000000000004` and `inf`
+  survive; Hash field TTL moves with the name on 7.4 and 8.4 and a field with no TTL does not gain
+  one; all three scripts run on 6.2 (the `pcall` is harmless); all three work, refuse and do not
+  recreate on the cluster harness. Core: 20 new tests in `update/rename.rs` (`member_tests`), plus
+  the label test in `mutation.rs`. Golden: 11 new frames (three captures, two shown-duplicate
+  captures, the capture hint bar, three dialogs, a read-only dialog) and three value-pane hint-bar
+  frames. Only the help goldens changed (phase 2). **Deviation:** an attempt to rank `R` before `C
+  copy redis-cli command` so the hash bar would show it was reverted, because it pushed `C` off the
+  80/130-column bar, losing a more useful hint than `↑↓ jk move`. `R` is on the bar where it fits
+  (a Set at 130 columns) and always in help, as in the keys pane.

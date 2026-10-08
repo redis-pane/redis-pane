@@ -1,0 +1,21 @@
+─ redis-pane ─ ● staging · cache-01:6379/0 · from profile staging ───────────────────────────── READ-ONLY environment ⌃R  ● live ─
+
+ KEY                               TYPE        SIZE   TTL │ user:8812:session
+ ● user:8812:cart                  zset       412 B   12m │ hash · 5 fields · 2.1 KB
+ ● user:8812:profile               json       880 B     ∞ │ ttl 42m                                                        ● live
+ ● user:8812:session               hash      2.1 KB   42m ├
+ ● user:8813:session   ┌─ confirm ────────────────────────────────────────────────────────────────────────┐
+ ● cart:91af3c9d2e     │                                                                                  │
+ ● feed:global:hot     │ HSETNX user:8812:session gadget <value>                                          │
+                       │ HDEL user:8812:session device                                                    │
+                       │ only if the field still exists · new name must be free · keeps its value and TTL │
+                       │ device → gadget                                                                  │
+                       │                                                                                  │
+                       │ read-only (environment) · Esc dismiss                                            │
+                       └──────────────────────────────────────────────────────────────────────────────────┘
+                                                          │
+                                                          │
+                                                          │
+                                                          │
+                                                          │
+                                                          │
