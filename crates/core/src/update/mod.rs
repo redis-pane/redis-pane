@@ -756,10 +756,10 @@ fn dispatch_action(mut state: State, action: Action) -> (State, Vec<Command>) {
         // which tells the three apart itself.
         Action::Delete if state.keys_pane_focused() => delete_selected_key(state),
         Action::Delete => delete_value_row(state),
-        // `R` renames a key from the keys pane. In the Viewer it will rename
-        // a field or member (task 14); until then it does nothing there.
+        // `R` renames a key from the keys pane, and a Hash field, Set member
+        // or ZSet member from the value pane (task 14), like `d`.
         Action::Rename if state.keys_pane_focused() => begin_rename(state),
-        Action::Rename => (state, Vec::new()),
+        Action::Rename => begin_member_rename(state),
         // `D` duplicates a key from the keys pane (M2 task 12). It has no
         // meaning in the Viewer.
         Action::Duplicate if state.keys_pane_focused() => begin_copy(state),

@@ -33,6 +33,13 @@ pub enum NameKind {
     Rename,
     /// `D`: `COPY` (or `DUMP` + `RESTORE` across slots on a Cluster).
     Copy,
+    /// `R` in the value pane on a Hash field (M2 task 14,
+    /// `docs/plans/m2-task14-member-rename.md`).
+    Field,
+    /// `R` in the value pane on a Set member.
+    SetMember,
+    /// `R` in the value pane on a ZSet member.
+    ZSetMember,
 }
 
 impl NameKind {
@@ -41,6 +48,8 @@ impl NameKind {
         match self {
             NameKind::Rename => "rename",
             NameKind::Copy => "duplicate key (COPY)",
+            NameKind::Field => "rename field",
+            NameKind::SetMember | NameKind::ZSetMember => "rename member",
         }
     }
 
@@ -49,14 +58,33 @@ impl NameKind {
         match self {
             NameKind::Rename => "rename",
             NameKind::Copy => "duplicate",
+            NameKind::Field => "rename field",
+            NameKind::SetMember | NameKind::ZSetMember => "rename member",
         }
     }
 
     /// The key that starts it again, for "the key list changed" notices.
     pub fn key_label(&self) -> char {
         match self {
-            NameKind::Rename => 'R',
+            NameKind::Rename | NameKind::Field | NameKind::SetMember | NameKind::ZSetMember => 'R',
             NameKind::Copy => 'D',
+        }
+    }
+
+    /// Whether this renames something inside the Open key rather than a key.
+    pub fn is_member(&self) -> bool {
+        matches!(
+            self,
+            NameKind::Field | NameKind::SetMember | NameKind::ZSetMember
+        )
+    }
+
+    /// What the value is called in "already in this hash".
+    fn container(&self) -> &'static str {
+        match self {
+            NameKind::Field => "hash",
+            NameKind::SetMember => "set",
+            _ => "zset",
         }
     }
 }
@@ -81,6 +109,9 @@ pub enum SlotPath {
 pub enum RenameProblem {
     Empty,
     Unchanged,
+    /// Another field or member in the shown window already has the typed name
+    /// (task 14). A name taken outside the window is the script's to refuse.
+    Shown,
 }
 
 impl RenameProblem {
@@ -89,6 +120,12 @@ impl RenameProblem {
             (RenameProblem::Empty, _) => "name can't be empty",
             (RenameProblem::Unchanged, NameKind::Rename) => "same as the current name",
             (RenameProblem::Unchanged, NameKind::Copy) => "same as the source name",
+            (RenameProblem::Unchanged, _) => "same as the current name",
+            (RenameProblem::Shown, k) => match k.container() {
+                "hash" => "already a field in this hash",
+                "set" => "already a member of this set",
+                _ => "already a member of this zset",
+            },
         }
     }
 }
@@ -104,6 +141,10 @@ pub struct RenameCapture {
     /// staged mutation the way `DeleteKey` carries one.
     pub index: usize,
     pub from: KeyName,
+    /// The Open key a field or member belongs to (task 14); `None` for a
+    /// key-level rename or copy. For a field or member, `from` is the old
+    /// name's bytes and `index` is the value cursor row it was started from.
+    pub owner: Option<KeyName>,
     /// What has been typed. Starts as the current name (plus `:copy` for a
     /// duplicate); the cursor is always at the end.
     pub text: String,
@@ -122,8 +163,17 @@ impl RenameCapture {
             kind,
             index,
             from,
+            owner: None,
             text,
         })
+    }
+
+    /// A capture prefilled with a field's or member's current name, for the
+    /// Open key `owner` (task 14). `None` for a name that is not valid UTF-8.
+    pub fn member(kind: NameKind, owner: KeyName, row: usize, from: &[u8]) -> Option<Self> {
+        let mut capture = RenameCapture::new(kind, row, KeyName::from(from.to_vec()))?;
+        capture.owner = Some(owner);
+        Some(capture)
     }
 
     pub fn problem(&self) -> Option<RenameProblem> {

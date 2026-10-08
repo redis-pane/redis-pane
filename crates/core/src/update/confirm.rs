@@ -100,6 +100,9 @@ pub(super) fn mutation_settled(
             Mutation::DeleteKey { key } => key_deleted(state, index, key, at_ms),
             Mutation::RenameKey { key, to } => key_renamed(state, index, key, to, at_ms),
             Mutation::CopyKey { key, to } => key_copied(state, key, to, at_ms),
+            renamed @ (Mutation::RenameHashField { .. }
+            | Mutation::RenameSetMember { .. }
+            | Mutation::RenameZSetMember { .. }) => member_renamed(state, &renamed, at_ms),
             // No key, so none of `write_landed`'s open-key guarding applies —
             // this refetches the Slowlog view instead (D8,
             // `docs/plans/m3-slowlog.md`).
@@ -120,6 +123,18 @@ pub(super) fn mutation_settled(
             ) =>
         {
             rename_not_written(state, &mutation, index, why, at_ms)
+        }
+        // A field or member rename reports with its own wording: there is no
+        // edit buffer to hand back.
+        Ok(MutationOutcome::NotWritten(why))
+            if matches!(
+                mutation,
+                Mutation::RenameHashField { .. }
+                    | Mutation::RenameSetMember { .. }
+                    | Mutation::RenameZSetMember { .. }
+            ) =>
+        {
+            member_rename_not_written(state, &mutation, why, at_ms)
         }
         Ok(MutationOutcome::NotWritten(why)) => not_written(state, &mutation, why, at_ms),
         Ok(MutationOutcome::NothingToRemove) => nothing_to_remove(state, &mutation, at_ms),
@@ -260,7 +275,12 @@ pub(super) fn nothing_to_remove(
         | Mutation::ShiftTtl { .. }
         // Refuses via `NotWritten::TargetExists`/`KeyGone` (M2 task 11).
         | Mutation::RenameKey { .. }
-        | Mutation::CopyKey { .. } => "entry",
+        | Mutation::CopyKey { .. }
+        // Refuse via `FieldGone`/`MemberGone`/`FieldExists`/`MemberExists`/
+        // `KeyGone` (M2 task 14).
+        | Mutation::RenameHashField { .. }
+        | Mutation::RenameSetMember { .. }
+        | Mutation::RenameZSetMember { .. } => "entry",
         // Unreachable — the early return above already caught it, since it
         // has no key — but the match stays exhaustive over `Mutation`
         // (PLAN M2 task 8, D8) rather than a wildcard.

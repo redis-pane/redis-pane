@@ -1,7 +1,6 @@
 ─ redis-pane ─ ● staging · cache-01:6379/0 · from profile staging ───── ● live ─
 
  KEY                      TYPE      TTL │ user:8812:cart
- ● user:8812:cart         zset      12m ├ zset · 3 members · 2.1 KB
 ┌─ help · value pane · zset ───────────────────────────────────────────────────┐
 │ e         score                                                              │
 │ a         add member                                                         │
@@ -10,6 +9,7 @@
 │ t         edit ttl                                                           │
 │ r         refetch                                                            │
 │ C         copy redis-cli command                                             │
+│ R         rename member                                                      │
 │ ↑↓ jk     move                                                               │
 │ PgUp/PgDn page                                                               │
 │ Home/End  top/bottom                                                         │

@@ -184,6 +184,15 @@ pub async fn execute(client: &Client, mutation: &Mutation) -> Result<MutationOut
             KeyCopy::TargetExists => MutationOutcome::NotWritten(NotWritten::TargetExists),
             KeyCopy::KeyGone => MutationOutcome::NotWritten(NotWritten::KeyGone),
         },
+        // Phase 3 replaces this stub.
+        Mutation::RenameHashField { .. }
+        | Mutation::RenameSetMember { .. }
+        | Mutation::RenameZSetMember { .. } => {
+            return Err(Error::new(
+                ErrorKind::Unknown,
+                "member rename: not wired yet",
+            ));
+        }
         // Handled above, before `key` was ever computed — never reached.
         Mutation::ResetSlowlog => unreachable!("returned above"),
     })

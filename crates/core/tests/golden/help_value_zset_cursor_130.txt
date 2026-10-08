@@ -1,15 +1,15 @@
 ─ redis-pane ─ ● staging · cache-01:6379/0 · from profile staging ─────────────────────────────────────────────────────── ● live ─
 
  KEY                               TYPE        SIZE   TTL │ user:8812:cart
- ● user:8812:cart                  zset       412 B   12m ├ zset · 3 members · 2.1 KB
- ● use┌─ help · value pane · zset ─────────────────────────────────────────────────────────────────────────────────────────┐ live
- ● use│ e         score                                                                                                    │
+ ● use┌─ help · value pane · zset ─────────────────────────────────────────────────────────────────────────────────────────┐
+ ● use│ e         score                                                                                                    │ live
  ● use│ a         add member                                                                                               │
- ● car│ d         remove member                                                                                            │
- ● fee│ c         copy                                                                                                     │
-      │ t         edit ttl                                                                                                 │
+ ● use│ d         remove member                                                                                            │
+ ● car│ c         copy                                                                                                     │
+ ● fee│ t         edit ttl                                                                                                 │
       │ r         refetch                                                                                                  │
       │ C         copy redis-cli command                                                                                   │
+      │ R         rename member                                                                                            │
       │ ↑↓ jk     move                                                                                                     │
       │ PgUp/PgDn page                                                                                                     │
       │ Home/End  top/bottom                                                                                               │
@@ -21,4 +21,4 @@
                                                           │
                                                           │
 
- e score   a add member   d remove member   c copy   t edit ttl   r refetch   C copy redis-cli command   ↑↓ jk move   ? F1 help
+ e score   a add member   d remove member   c copy   t edit ttl   r refetch   C copy redis-cli command   ? F1 help

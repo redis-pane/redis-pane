@@ -9,6 +9,7 @@
 │ t         edit ttl                                                           │
 │ r         refetch                                                            │
 │ C         copy redis-cli command                                             │
+│ R         rename member                                                      │
 │ ↑↓ jk     move                                                               │
 │ PgUp/PgDn page                                                               │
 │ Home/End  top/bottom                                                         │
@@ -17,7 +18,6 @@
 │                                                                              │
 │ Tab keys · Esc close                                                         │
 └──────────────────────────────────────────────────────────────────────────────┘
-                                        │
                                         │
                                         │
 

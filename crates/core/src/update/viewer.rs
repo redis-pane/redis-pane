@@ -73,6 +73,7 @@ pub(super) fn value_loaded(mut state: State, read: ValueRead) -> (State, Vec<Com
             // asked to see, so it is not an update to hold (ADR-0006).
             if own_write {
                 open.apply(value, ttl_seconds, size_bytes, at_ms);
+                follow_renamed(open);
             } else {
                 open.absorb(value, ttl_seconds, size_bytes, at_ms);
             }
@@ -90,6 +91,30 @@ pub(super) fn value_loaded(mut state: State, read: ValueRead) -> (State, Vec<Com
         }
     }
     (state, Vec::new())
+}
+
+/// After this session's own field or member rename is read back, put the
+/// value cursor on the new name if it is in the window (M2 task 14). Taken
+/// either way, so it can never fire on a later read.
+fn follow_renamed(open: &mut OpenKey) {
+    let Some(name) = open.follow.take() else {
+        return;
+    };
+    let row = match &open.value {
+        Some(Value::Hash(h)) => h.pairs.iter().position(|(f, _)| *f == name),
+        Some(Value::Set(m)) => m.members.iter().position(|x| *x == name),
+        Some(Value::ZSet(z)) => z.entries.iter().position(|(m, _)| *m == name),
+        _ => None,
+    };
+    if let Some(row) = row {
+        open.cursor = row;
+        open.offset = crate::render::keys::Viewport {
+            offset: open.offset,
+            selected: row,
+        }
+        .scrolled_to_selection(VALUE_PAGE_ROWS)
+        .offset;
+    }
 }
 
 pub(super) fn value_gone(

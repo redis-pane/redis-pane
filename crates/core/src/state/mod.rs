@@ -482,6 +482,27 @@ pub enum PendingMutation {
         target: TargetCheck,
         slots: SlotPath,
     },
+    /// Rename one Hash field inside the Open key (M2 task 14,
+    /// `docs/plans/m2-task14-member-rename.md`): a guarded `HSETNX` of the
+    /// new name with the old one's value, then `HDEL`, carrying the field TTL
+    /// where the server has one. The value is read by the script, not carried.
+    RenameHashField {
+        name: crate::key::KeyName,
+        field: Vec<u8>,
+        to: Vec<u8>,
+    },
+    /// Rename one Set member (guarded `SADD` new, `SREM` old).
+    RenameSetMember {
+        name: crate::key::KeyName,
+        member: Vec<u8>,
+        to: Vec<u8>,
+    },
+    /// Rename one ZSet member, keeping its score (guarded `ZADD NX`, `ZREM`).
+    RenameZSetMember {
+        name: crate::key::KeyName,
+        member: Vec<u8>,
+        to: Vec<u8>,
+    },
 }
 
 impl Eq for PendingMutation {}
@@ -570,6 +591,16 @@ impl PendingMutation {
             PendingMutation::ResetSlowlog => "SLOWLOG RESET".to_string(),
             PendingMutation::RenameKey { name, to, .. } => format!("RENAMENX {name} {to}"),
             PendingMutation::CopyKey { name, to, .. } => format!("COPY {name} {to}"),
+            // The writing command; `command_lines` lists both halves.
+            PendingMutation::RenameHashField { name, to, .. } => {
+                format!("HSETNX {name} {} <value>", String::from_utf8_lossy(to))
+            }
+            PendingMutation::RenameSetMember { name, to, .. } => {
+                format!("SADD {name} {}", String::from_utf8_lossy(to))
+            }
+            PendingMutation::RenameZSetMember { name, to, .. } => {
+                format!("ZADD {name} NX <score> {}", String::from_utf8_lossy(to))
+            }
         }
     }
 
@@ -588,6 +619,18 @@ impl PendingMutation {
                 format!("DUMP {name}"),
                 format!("PTTL {name}"),
                 format!("RESTORE {to} <ttl> <payload>"),
+            ],
+            PendingMutation::RenameHashField { name, field, .. } => vec![
+                self.command_text(),
+                format!("HDEL {name} {}", String::from_utf8_lossy(field)),
+            ],
+            PendingMutation::RenameSetMember { name, member, .. } => vec![
+                self.command_text(),
+                format!("SREM {name} {}", String::from_utf8_lossy(member)),
+            ],
+            PendingMutation::RenameZSetMember { name, member, .. } => vec![
+                self.command_text(),
+                format!("ZREM {name} {}", String::from_utf8_lossy(member)),
             ],
             other => vec![other.command_text()],
         }
@@ -711,6 +754,17 @@ impl PendingMutation {
             PendingMutation::CopyKey { .. } => {
                 Some("only if the new name is free · carries its TTL".to_string())
             }
+            PendingMutation::RenameHashField { .. } => Some(
+                "only if the field still exists · new name must be free · keeps its value and TTL"
+                    .to_string(),
+            ),
+            PendingMutation::RenameSetMember { .. } => {
+                Some("only if the member still exists · new name must be free".to_string())
+            }
+            PendingMutation::RenameZSetMember { .. } => Some(
+                "only if the member still exists · new name must be free · keeps its score"
+                    .to_string(),
+            ),
         }
     }
 
@@ -876,6 +930,30 @@ impl PendingMutation {
             PendingMutation::CopyKey {
                 index, name, to, ..
             } => (Mutation::CopyKey { key: name, to }, Some(index)),
+            PendingMutation::RenameHashField { name, field, to } => (
+                Mutation::RenameHashField {
+                    key: name,
+                    field,
+                    to,
+                },
+                None,
+            ),
+            PendingMutation::RenameSetMember { name, member, to } => (
+                Mutation::RenameSetMember {
+                    key: name,
+                    member,
+                    to,
+                },
+                None,
+            ),
+            PendingMutation::RenameZSetMember { name, member, to } => (
+                Mutation::RenameZSetMember {
+                    key: name,
+                    member,
+                    to,
+                },
+                None,
+            ),
         };
         crate::Command::Execute { mutation, index }
     }
@@ -1517,6 +1595,28 @@ impl State {
             Link::Up { version, .. } => crate::server::Version::parse(version),
             _ => None,
         }
+    }
+
+    /// Why the name typed into the open capture cannot be staged, if it
+    /// cannot (M2 tasks 11 to 14). The capture's own empty/unchanged checks,
+    /// then, for a field or member, a name another row of the shown window
+    /// already has. A name taken outside the window is the script's to refuse.
+    pub fn rename_problem(&self) -> Option<RenameProblem> {
+        let capture = self.rename.as_ref()?;
+        if let Some(problem) = capture.problem() {
+            return Some(problem);
+        }
+        if !capture.kind.is_member() {
+            return None;
+        }
+        let typed = capture.text.as_bytes();
+        let taken = match self.open.as_ref().and_then(|o| o.value.as_ref()) {
+            Some(Value::Hash(h)) => h.pairs.iter().any(|(f, _)| f.as_slice() == typed),
+            Some(Value::Set(s)) => s.members.iter().any(|m| m.as_slice() == typed),
+            Some(Value::ZSet(z)) => z.entries.iter().any(|(m, _)| m.as_slice() == typed),
+            _ => false,
+        };
+        taken.then_some(RenameProblem::Shown)
     }
 
     /// Whether `COPY` may be offered (M2 task 12): it needs Redis 6.2, one

@@ -230,3 +230,18 @@ the server has now.
 ### Phase log
 
 (Appended as the phases land.)
+
+- **Phase 2 (core).** Landed as designed. Notes:
+  - `State::rename_problem()` replaced `capture.problem()` in the overlay and in staging; the
+    capture's own `problem()` stays for the empty/unchanged half.
+  - `OpenKey::follow` and `update/viewer.rs::follow_renamed` implement the cursor follow.
+  - The Hash field rename accepts a binary *value* (see "Binary names").
+  - Mutation labels are `HSETNX/HDEL <key> <old> <new>` (the Hash field names are shown, as in
+    `HSET`/`HDEL`), `SADD/SREM <key>`, `ZADD NX/ZREM <key>`.
+  - The shell has a stub (the three mutations error) so the workspace compiles at this commit.
+  - Goldens: only the four help overlays that list value-pane rows (`help_value_{hash,set,zset}_
+    cursor_{80,130}`, `help_read_only_dimmed_{80,130}`) changed, each gaining `R rename field` /
+    `R rename member`. In the 130-column ones the overlay's own bottom hint bar also loses its
+    trailing `↑↓ jk move`, which the new row pushes off (the bar stops at the first row that does
+    not fit; the keys pane's `R` made the same trade in task 11). No browser, dialog or other
+    hint-bar frame moved.

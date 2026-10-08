@@ -148,6 +148,29 @@ pub enum Mutation {
     /// target is `NotWritten::TargetExists`, a missing source
     /// `NotWritten::KeyGone`; Redis carries the TTL.
     CopyKey { key: KeyName, to: KeyName },
+    /// Guarded rename of one Hash field (M2 task 14,
+    /// `docs/plans/m2-task14-member-rename.md`). One script: the key exists,
+    /// the old field exists, the new one does not, then `HSETNX` new with the
+    /// old value (and its field TTL on 7.4+) and `HDEL` old. The value is
+    /// read server-side, so none is carried here.
+    RenameHashField {
+        key: KeyName,
+        field: Vec<u8>,
+        to: Vec<u8>,
+    },
+    /// Guarded rename of one Set member: `SADD` new, `SREM` old.
+    RenameSetMember {
+        key: KeyName,
+        member: Vec<u8>,
+        to: Vec<u8>,
+    },
+    /// Guarded rename of one ZSet member: `ZADD NX` new with the old score,
+    /// `ZREM` old. The score is read server-side.
+    RenameZSetMember {
+        key: KeyName,
+        member: Vec<u8>,
+        to: Vec<u8>,
+    },
 }
 
 impl Eq for Mutation {}
@@ -178,7 +201,10 @@ impl Mutation {
             | Mutation::PersistTtl { key }
             | Mutation::ShiftTtl { key, .. }
             | Mutation::RenameKey { key, .. }
-            | Mutation::CopyKey { key, .. } => Some(key),
+            | Mutation::CopyKey { key, .. }
+            | Mutation::RenameHashField { key, .. }
+            | Mutation::RenameSetMember { key, .. }
+            | Mutation::RenameZSetMember { key, .. } => Some(key),
             Mutation::ResetSlowlog => None,
         }
     }
@@ -234,6 +260,13 @@ impl Mutation {
             // command is only identifiable with its target.
             Mutation::RenameKey { key, to } => format!("RENAMENX {key} {to}"),
             Mutation::CopyKey { key, to } => format!("COPY {key} {to}"),
+            // A Hash field's name is shown, as `HSET`/`HDEL` show it; a Set or
+            // ZSet member never is (ADR-0016 D3), old or new.
+            Mutation::RenameHashField {
+                key, field: f, to, ..
+            } => format!("HSETNX/HDEL {key} {} {}", field(f), field(to)),
+            Mutation::RenameSetMember { key, .. } => format!("SADD/SREM {key}"),
+            Mutation::RenameZSetMember { key, .. } => format!("ZADD NX/ZREM {key}"),
         }
     }
 }
@@ -364,6 +397,30 @@ mod tests {
                     to: "user:2".into(),
                 },
                 "COPY user:1 user:2",
+            ),
+            (
+                Mutation::RenameHashField {
+                    key: key.clone(),
+                    field: b"old".to_vec(),
+                    to: b"new".to_vec(),
+                },
+                "HSETNX/HDEL user:1 old new",
+            ),
+            (
+                Mutation::RenameSetMember {
+                    key: key.clone(),
+                    member: b"old".to_vec(),
+                    to: b"new".to_vec(),
+                },
+                "SADD/SREM user:1",
+            ),
+            (
+                Mutation::RenameZSetMember {
+                    key: key.clone(),
+                    member: b"old".to_vec(),
+                    to: b"new".to_vec(),
+                },
+                "ZADD NX/ZREM user:1",
             ),
             (
                 Mutation::SetString {

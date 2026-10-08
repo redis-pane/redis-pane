@@ -912,6 +912,23 @@ fn value_rows(state: &State, open: Option<ValueContext>) -> Vec<HelpRow> {
         keys_for(state, Action::CopyCommand),
         "copy redis-cli command",
     ));
+    // `R` renames the item under the cursor (M2 task 14): Hash/Set/ZSet only,
+    // cursor on a row. Ranked last among the verbs, like the keys pane's
+    // `R`, so it cannot push `r` or `t` off an 80-column bar.
+    let rename_label = match open {
+        ValueContext::Hash { .. } if cursor_active => Some("rename field"),
+        ValueContext::Set { .. } | ValueContext::ZSet { .. } if cursor_active => {
+            Some("rename member")
+        }
+        _ => None,
+    };
+    if let Some(label) = rename_label {
+        rows.push(mutation_entry_row(
+            state,
+            keys_for(state, Action::Rename),
+            label,
+        ));
+    }
     if cursor_active {
         rows.push(HelpRow::new("↑↓ jk", "move"));
         rows.push(HelpRow::new("PgUp/PgDn", "page"));
