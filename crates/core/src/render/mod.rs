@@ -969,7 +969,32 @@ fn status_bar(state: &State, theme: &Theme, clock: &dyn Clock, area: Rect, buf: 
     } else {
         None
     };
+    // Marked rows and a bulk delete in flight (M2 task 13) belong to the
+    // browser like the scan readout does.
+    let marked = if on_keys && !state.marks.is_empty() {
+        Some(format!(
+            "{} marked",
+            crate::state::scan::thousands(state.marks.count() as u64)
+        ))
+    } else {
+        None
+    };
+    let deleting = match (&state.bulk, on_keys) {
+        (Some(b), true) => Some(format!(
+            "{} {} of {}",
+            if b.cancelling {
+                "stopping, deleted"
+            } else {
+                "deleting"
+            },
+            crate::state::scan::thousands(b.done as u64),
+            crate::state::scan::thousands(b.total as u64)
+        )),
+        _ => None,
+    };
     let quiet = readout.is_empty()
+        && marked.is_none()
+        && deleting.is_none()
         && rebuilding.is_none()
         && sort_readout.is_none()
         && state.notice_now(clock.now_epoch_ms()).is_none()
@@ -994,6 +1019,20 @@ fn status_bar(state: &State, theme: &Theme, clock: &dyn Clock, area: Rect, buf: 
     let mut line = g.text(&readout).into_owned();
     if let Some(sort) = sort_readout {
         line = format!("{line}   {}", g.text(&sort));
+    }
+    if let Some(marked) = marked {
+        line = if line.is_empty() {
+            marked
+        } else {
+            format!("{line}   {marked}")
+        };
+    }
+    if let Some(deleting) = deleting {
+        line = if line.is_empty() {
+            deleting
+        } else {
+            format!("{line}   {deleting}")
+        };
     }
     // A copy confirmation displaces the scan readout for a moment rather than
     // claiming another row (G7). A failure outranks both and stays until it is
@@ -1020,7 +1059,7 @@ fn status_bar(state: &State, theme: &Theme, clock: &dyn Clock, area: Rect, buf: 
         );
     }
     if on_keys
-        && state.scan.is_running()
+        && (state.scan.is_running() || state.bulk.is_some())
         && let Some(hint) = state.keymap.hint(crate::keymap::Action::Cancel)
     {
         put(
@@ -1340,10 +1379,22 @@ fn confirm_overlay(
     // A cross-slot rename can never run, whatever the mode: its dialog is an
     // explanation, and says so instead of offering `y`.
     let cross_slot = pending.blocks_confirm();
+    // A bulk delete on `prod` is a two-step gesture (M2 task 13): `y`, then
+    // the typed count, so the hint says which step this is.
+    let gate = match pending {
+        PendingMutation::DeleteKeys { gate, .. } => Some(gate),
+        _ => None,
+    };
     let hint = match refused {
         _ if cross_slot => "can't run on a Cluster · Esc cancel".to_string(),
         Some(reason) => format!("read-only ({}) · Esc dismiss", reason.label()),
-        None => "y confirm · Esc cancel".to_string(),
+        None => match gate {
+            Some(crate::state::CountGate::Required) => "y continue · Esc cancel".to_string(),
+            Some(crate::state::CountGate::Typing { .. }) => {
+                "⏎ delete · ⌫ edit · Esc cancel".to_string()
+            }
+            _ => "y confirm · Esc cancel".to_string(),
+        },
     };
     let g = theme.glyphs;
     let hint = g.text(&hint).into_owned();
@@ -1356,6 +1407,60 @@ fn confirm_overlay(
         // preview.
         PendingMutation::DeleteKey { .. } => {
             lines.push((pending.command_text(), Token::Text));
+        }
+        // Bulk delete (M2 task 13): the count, the guard, the first names and
+        // how many more there are; on `prod` the typed-count step.
+        PendingMutation::DeleteKeys { names, gate, .. } => {
+            let count = crate::state::scan::thousands(names.len() as u64);
+            lines.push((g.text(&pending.command_text()).into_owned(), Token::Danger));
+            if let Some(guard) = pending.guard_text() {
+                lines.push((g.text(&guard).into_owned(), Token::Muted));
+            }
+            for name in names.iter().take(crate::state::BULK_PREVIEW_NAMES) {
+                lines.push((format!("  {}", name.display()), Token::Text));
+            }
+            if names.len() > crate::state::BULK_PREVIEW_NAMES {
+                let more = names.len() - crate::state::BULK_PREVIEW_NAMES;
+                lines.push((
+                    format!(
+                        "  {ell} and {} more",
+                        crate::state::scan::thousands(more as u64)
+                    ),
+                    Token::Muted,
+                ));
+            }
+            match gate {
+                crate::state::CountGate::Open => {}
+                crate::state::CountGate::Required => lines.push((
+                    g.text(&format!(
+                        "⚠ {} — y asks you to type the count",
+                        state.connection.environment.label()
+                    ))
+                    .into_owned(),
+                    Token::Warn,
+                )),
+                crate::state::CountGate::Typing { text, wrong } => {
+                    lines.push((
+                        g.text(&format!(
+                            "⚠ type {} to delete {count} keys on {}",
+                            names.len(),
+                            state.connection.environment.label()
+                        ))
+                        .into_owned(),
+                        Token::Warn,
+                    ));
+                    lines.push((
+                        format!("count  {text}{}", g.get(Glyph::Cursor)),
+                        Token::Text,
+                    ));
+                    if *wrong {
+                        lines.push((
+                            g.text("·· doesn't match the number of keys").into_owned(),
+                            Token::Danger,
+                        ));
+                    }
+                }
+            }
         }
         // On a Cluster the one command runs on every node (M5 task 8), and
         // the preview says so: how many, not just that it is broad.

@@ -58,15 +58,23 @@ pub async fn execute(client: &Client, mutation: &Mutation) -> Result<MutationOut
         let _: () = client.slowlog_reset().await?;
         return Ok(MutationOutcome::Done);
     }
+    // PHASE 2 STUB, replaced in phase 3: the batched executor is not wired yet.
+    if matches!(mutation, Mutation::DeleteKeys { .. }) {
+        return Err(Error::new(
+            ErrorKind::Unknown,
+            "bulk delete is not wired to the shell yet",
+        ));
+    }
     let key = mutation
         .key()
-        .expect("ResetSlowlog returned above; every other Mutation has a key")
+        .expect("ResetSlowlog and DeleteKeys returned above; every other Mutation has a key")
         .as_bytes();
     Ok(match mutation {
         Mutation::DeleteKey { .. } => {
             delete_key(client, key).await?;
             MutationOutcome::Done
         }
+        Mutation::DeleteKeys { .. } => unreachable!("returned above"),
         Mutation::SetString { value, .. } => {
             if set_value(client, key, value).await? {
                 MutationOutcome::Done

@@ -584,6 +584,7 @@ impl Shell {
                 arm,
             } => self.read_key(key, index, token, arm),
             Command::Execute { mutation, index } => self.mutate(mutation, index),
+            Command::CancelBulkDelete => {}
             Command::CheckTarget { key } => self.check_target(key),
             Command::CopyToClipboard { text, label } => self.copy(text, label, term).await,
             Command::Notify { text } => {

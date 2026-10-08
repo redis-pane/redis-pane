@@ -88,6 +88,9 @@ pub enum Action {
     /// §4): opens the same name capture, prefilled with `:copy`, then stages
     /// `COPY`. Keys-pane scoped, key rows only. `Copy` is the clipboard.
     Duplicate,
+    /// Mark or unmark the Selected key for a bulk operation and move down
+    /// (`Space`, M2 task 13, DESIGN §4). Keys-pane scoped, key rows only.
+    ToggleMark,
     /// Confirm whatever mutation is currently staged and run it, or say why
     /// not if Read-only Mode refuses it. No-op with nothing staged.
     ConfirmMutation,
@@ -197,9 +200,11 @@ impl Action {
                 }
             }
             // The rest of the key list: reshaping it, or opening from it.
-            Action::Filter | Action::Sort | Action::CollapseGroup | Action::Open => {
-                state.pane_visible(Pane::Keys)
-            }
+            Action::Filter
+            | Action::Sort
+            | Action::CollapseGroup
+            | Action::Open
+            | Action::ToggleMark => state.pane_visible(Pane::Keys),
             // `d` is focus-dependent, like `c` (D4, PLAN M2 task 6): the keys
             // pane's Selected-key delete and the Viewer's Hash-field delete
             // are different commands on different targets, and whichever
@@ -270,6 +275,7 @@ impl Action {
             Action::Delete => "delete",
             Action::Rename => "rename",
             Action::Duplicate => "duplicate key (COPY)",
+            Action::ToggleMark => "mark",
             Action::ConfirmMutation => "confirm",
             Action::Edit => "edit",
             Action::Add => "add",
@@ -334,6 +340,7 @@ pub struct ChordBinding {
 /// the help overlay cannot disagree about how to spell a chord.
 pub fn key_label(key: &KeyPress) -> String {
     let base = match key.code {
+        KeyCode::Char(' ') => "Space".into(),
         KeyCode::Char(c) => c.to_string(),
         KeyCode::Enter => "⏎".into(),
         KeyCode::Esc => "Esc".into(),
@@ -530,6 +537,10 @@ impl Default for Keymap {
                 Binding {
                     key: KeyPress::plain(KeyCode::Char('D')),
                     action: Action::Duplicate,
+                },
+                Binding {
+                    key: KeyPress::plain(KeyCode::Char(' ')),
+                    action: Action::ToggleMark,
                 },
                 Binding {
                     key: KeyPress::plain(KeyCode::Char('y')),

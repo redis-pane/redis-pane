@@ -189,3 +189,10 @@ so cancellation is deterministic); perf in the M6 harness; goldens as listed.
 ### Phase log
 
 - Phase 1: this note. No code.
+- Phase 2: core. `state/marks.rs` (bitset, `CountGate`, `BulkDelete`), `Space`/`ToggleMark`, `update/bulk.rs`
+  (mark, stage, typed gate, progress, cancel, settle), `Mutation::DeleteKeys`, `MutationOutcome::BulkDeleted`,
+  `Command::CancelBulkDelete`, `Msg::BulkDeleteProgress`, glyphs `Marked`/`Times`, mark glyph in the left
+  margin, `N marked`/`deleting X of N` in the status line, dialog, help and hint rows. 36 core tests in
+  `update/bulk_tests.rs` plus 4 in `state/marks.rs`. The shell executor is a stub that fails loudly until
+  phase 3 (`execute` returns an error for `DeleteKeys`); nothing sends it yet outside tests. Six help
+  goldens re-recorded (the new `Space mark` row); no other golden moved.

@@ -10,6 +10,7 @@ pub mod copy;
 pub mod dashboard;
 pub mod editor;
 pub mod loaded;
+pub mod marks;
 pub mod monitor;
 pub mod open;
 pub mod pubsub;
@@ -36,6 +37,7 @@ pub use dashboard::{
 };
 pub use editor::{EditBuffer, EditTarget, FieldPart, is_valid_zset_score};
 pub use loaded::{KeyKind, LoadedSet};
+pub use marks::{BULK_PREVIEW_NAMES, BulkDelete, CountGate, Marks};
 pub use monitor::{
     FeedStatus, MONITOR_CAP, MONITOR_LINE_MAX, MonitorColumns, MonitorLine, MonitorState,
     StoppedNode,
@@ -303,6 +305,16 @@ pub enum PendingMutation {
         index: usize,
         name: crate::key::KeyName,
     },
+    /// Delete every marked key (M2 task 13,
+    /// `docs/plans/m2-task13-bulk-delete.md`). `indices` and `names` are
+    /// parallel, in ascending Loaded-set order, and `epoch` is the numbering
+    /// the indices belong to. `gate` is the `prod` typed-count state machine.
+    DeleteKeys {
+        indices: Vec<u32>,
+        names: Vec<crate::key::KeyName>,
+        epoch: crate::command::MetadataEpoch,
+        gate: CountGate,
+    },
     /// Overwrite a String value (`SET`), staged from an `$EDITOR` round trip
     /// (R3.2, R4.1). `was_json` is whether the *pre-edit* value was rendered
     /// through the JSON viewer — it is what the confirm dialog checks before
@@ -520,6 +532,10 @@ impl PendingMutation {
             PendingMutation::DeleteKey { name, .. } => {
                 format!("DEL {}", name)
             }
+            PendingMutation::DeleteKeys { names, .. } => format!(
+                "DEL × {} keys",
+                crate::state::scan::thousands(names.len() as u64)
+            ),
             PendingMutation::SetString { name, new, .. } => {
                 format!("SET {} {} KEEPTTL XX", name, String::from_utf8_lossy(new))
             }
@@ -638,6 +654,8 @@ impl PendingMutation {
 
     /// Whether `y` can never run this: a rename across slots on a Cluster.
     pub fn blocks_confirm(&self) -> bool {
+        // (A bulk delete never blocks `y` outright: its typed-count gate has
+        // its own key handling in `update::confirm`.)
         matches!(
             self,
             PendingMutation::RenameKey {
@@ -689,6 +707,9 @@ impl PendingMutation {
             PendingMutation::AddSetMember { .. } => {
                 Some("only if the key still exists · never duplicates a member".to_string())
             }
+            PendingMutation::DeleteKeys { .. } => Some(
+                "one DEL per key, in batches · Esc cancels between batches".to_string(),
+            ),
             PendingMutation::DeleteKey { .. }
             | PendingMutation::SetString { .. }
             | PendingMutation::DeleteHashField { .. }
@@ -804,6 +825,9 @@ impl PendingMutation {
         let (mutation, index) = match self {
             PendingMutation::DeleteKey { index, name } => {
                 (Mutation::DeleteKey { key: name }, Some(index))
+            }
+            PendingMutation::DeleteKeys { names, .. } => {
+                (Mutation::DeleteKeys { keys: names }, None)
             }
             PendingMutation::SetString { name, new, .. } => (
                 Mutation::SetString {
@@ -1141,6 +1165,11 @@ pub struct State {
     /// renumbered (`scan_started`'s clear), carried by every
     /// `Command::FetchMetadata`, and checked on the reply.
     pub metadata_epoch: crate::command::MetadataEpoch,
+    /// Rows marked with `Space` for a bulk operation (M2 task 13), by
+    /// Loaded-set index. Cleared with the numbering, in `scan_started`.
+    pub marks: Marks,
+    /// A bulk delete sent and not yet settled (M2 task 13).
+    pub bulk: Option<BulkDelete>,
     /// Which pane the reader is in (DESIGN §4). Below 70 columns it also
     /// decides which pane is drawn at all; see [`crate::render::layout::Pane`].
     pub focus: crate::render::layout::Pane,

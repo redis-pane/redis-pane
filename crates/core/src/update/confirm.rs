@@ -15,6 +15,10 @@ pub(super) fn confirm_key(
     pending: PendingMutation,
     key: KeyPress,
 ) -> (State, Vec<Command>) {
+    // A bulk delete has a gate of its own on `prod` (M2 task 13).
+    if matches!(pending, PendingMutation::DeleteKeys { .. }) {
+        return bulk_confirm_key(state, pending, key);
+    }
     match key.code {
         // A rename across slots on a Cluster can never run (`RENAME` fails
         // with `CROSSSLOT`): `y` does nothing and the dialog stays, so the
@@ -98,6 +102,9 @@ pub(super) fn mutation_settled(
         }
         Ok(MutationOutcome::Done) => match mutation {
             Mutation::DeleteKey { key } => key_deleted(state, index, key, at_ms),
+            // A bulk delete settles as `BulkDeleted`, never `Done`; this arm
+            // only keeps the match exhaustive.
+            Mutation::DeleteKeys { .. } => (state, Vec::new()),
             Mutation::RenameKey { key, to } => key_renamed(state, index, key, to, at_ms),
             Mutation::CopyKey { key, to } => key_copied(state, key, to, at_ms),
             renamed @ (Mutation::RenameHashField { .. }
@@ -138,6 +145,10 @@ pub(super) fn mutation_settled(
         }
         Ok(MutationOutcome::NotWritten(why)) => not_written(state, &mutation, why, at_ms),
         Ok(MutationOutcome::NothingToRemove) => nothing_to_remove(state, &mutation, at_ms),
+        Ok(MutationOutcome::BulkDeleted(report)) => match &mutation {
+            Mutation::DeleteKeys { keys } => bulk_settled(state, keys, report, at_ms),
+            _ => (state, Vec::new()),
+        },
     }
 }
 
@@ -156,19 +167,7 @@ pub(super) fn key_deleted(
     name: KeyName,
     at_ms: u64,
 ) -> (State, Vec<Command>) {
-    if let Some(index) = index
-        && state.keys.name(index) == Some(name.as_bytes())
-    {
-        state.keys.set_gone(index);
-    }
-    match &mut state.open {
-        Some(open) if open.name == name => {
-            open.deleted_at_ms = Some(at_ms);
-            open.pending = None;
-            staged_edit_found_key_gone(&mut state, &name, at_ms);
-        }
-        _ => {}
-    }
+    mark_deleted(&mut state, index, &name, at_ms);
     state.notice = Some((format!("deleted {name}"), at_ms));
     (state, Vec::new())
 }
@@ -255,6 +254,7 @@ pub(super) fn nothing_to_remove(
         // exists one type over.
         Mutation::PersistTtl { .. } => "expiry",
         Mutation::DeleteKey { .. }
+        | Mutation::DeleteKeys { .. }
         | Mutation::SetString { .. }
         | Mutation::SetHashField { .. }
         | Mutation::AddHashField { .. }

@@ -11,6 +11,7 @@
             │ C         copy redis-cli command                                                                       │
             │ R         rename                                                                                       │
             │ D         duplicate key (COPY)                                                                         │
+            │ Space     mark                                                                                         │
             │ ↑↓ jk     move                                                                                         │
             │ PgUp/PgDn page                                                                                         │
             │ Home/End  top/bottom                                                                                   │
@@ -19,6 +20,5 @@
             │                                                                                                        │
             │ Tab value keys · Esc close                                                                             │
             └────────────────────────────────────────────────────────────────────────────────────────────────────────┘
-                                                          │
 
  → open / expand   / filter   s sort   t tree view   d delete   c copy   r reconnect   C copy redis-cli command   ? F1 help

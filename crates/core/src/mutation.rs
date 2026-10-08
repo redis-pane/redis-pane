@@ -25,6 +25,11 @@ use crate::state::value::ListEnd;
 pub enum Mutation {
     /// `DEL key` (R4.3).
     DeleteKey { key: KeyName },
+    /// Many single-key `DEL`s, sent in pipelined batches (M2 task 13,
+    /// `docs/plans/m2-task13-bulk-delete.md`). Never one multi-key `DEL`: on a
+    /// Cluster that raises `CROSSSLOT`. No single key, so [`Mutation::key`] is
+    /// `None`, as for `ResetSlowlog`.
+    DeleteKeys { keys: Vec<KeyName> },
     /// `SET key value KEEPTTL XX`: overwrite a String, keeping its TTL and
     /// never recreating a key that is gone (ADR-0014).
     SetString { key: KeyName, value: Vec<u8> },
@@ -205,7 +210,7 @@ impl Mutation {
             | Mutation::RenameHashField { key, .. }
             | Mutation::RenameSetMember { key, .. }
             | Mutation::RenameZSetMember { key, .. } => Some(key),
-            Mutation::ResetSlowlog => None,
+            Mutation::ResetSlowlog | Mutation::DeleteKeys { .. } => None,
         }
     }
 
@@ -219,6 +224,12 @@ impl Mutation {
         let field = |f: &[u8]| String::from_utf8_lossy(f).into_owned();
         match self {
             Mutation::DeleteKey { key } => format!("DEL {key}"),
+            Mutation::DeleteKeys { keys } => {
+                format!(
+                    "DEL ({} keys)",
+                    crate::state::scan::thousands(keys.len() as u64)
+                )
+            }
             Mutation::SetString { key, .. } => format!("SET {key}"),
             Mutation::SetHashField { key, field: f, .. } => format!("HSET {key} {}", field(f)),
             Mutation::AddHashField { key, field: f, .. } => format!("HSETNX {key} {}", field(f)),
@@ -364,7 +375,7 @@ impl NotWritten {
 ///
 /// None of these is an error: the server did exactly as asked. An error is the
 /// `Err` beside this in [`crate::Msg::MutationSettled`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MutationOutcome {
     /// It did what it says. For `DEL` that includes a key already gone: the
     /// key is gone either way, which is the only fact the Viewer badges.
@@ -373,6 +384,39 @@ pub enum MutationOutcome {
     NotWritten(NotWritten),
     /// `HDEL` found no such field: nothing to remove, and nothing broken.
     NothingToRemove,
+    /// A bulk delete ended: finished, cancelled between batches, or stopped
+    /// by a failing batch (M2 task 13).
+    BulkDeleted(BulkReport),
+}
+
+/// How a bulk delete ended and how far it got (M2 task 13, R7.4).
+///
+/// `processed` is a contiguous prefix of the keys sent (whole batches plus the
+/// Ok replies before a failing batch's first error); the counts are over that
+/// prefix. `extra_ok` lists positions *after* the prefix that did succeed in
+/// the failing batch, so every deleted key can be badged and none is counted
+/// twice or missed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BulkReport {
+    pub total: usize,
+    pub processed: usize,
+    /// `DEL` replied `1`.
+    pub deleted: usize,
+    /// `DEL` replied `0`: the key was already gone.
+    pub already_gone: usize,
+    pub extra_ok: Vec<u32>,
+    pub stopped: BulkStop,
+}
+
+/// Why a bulk delete ended.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BulkStop {
+    /// Every key was sent.
+    Completed,
+    /// `Esc` between batches.
+    Cancelled,
+    /// A `DEL` failed: the failing command and the server's detail.
+    Failed { command: String, detail: String },
 }
 
 #[cfg(test)]
@@ -542,6 +586,15 @@ mod tests {
             assert_eq!(mutation.command_label(), label);
             assert_eq!(mutation.key(), Some(&key));
         }
+    }
+
+    #[test]
+    fn a_bulk_delete_has_no_single_key_and_a_counted_label() {
+        let m = Mutation::DeleteKeys {
+            keys: vec!["user:1".into(), "user:2".into()],
+        };
+        assert_eq!(m.key(), None);
+        assert_eq!(m.command_label(), "DEL (2 keys)");
     }
 
     #[test]

@@ -154,6 +154,7 @@ pub fn render(
         area,
         cols,
         now_s,
+        marks: &state.marks,
     };
     let mut y = area.y;
 
@@ -278,6 +279,8 @@ struct RowCtx<'a> {
     /// The clock in epoch seconds, so every row's TTL counts down from the same
     /// instant.
     now_s: u32,
+    /// Rows marked with `Space` (M2 task 13).
+    marks: &'a crate::state::Marks,
 }
 
 /// Where one row goes, and how it is marked.
@@ -382,6 +385,7 @@ fn key_row(keys: &LoadedSet, ctx: RowCtx<'_>, at: RowAt, i: usize, indent: u16, 
         area,
         cols,
         now_s,
+        marks,
     } = ctx;
     let RowAt {
         y,
@@ -390,6 +394,22 @@ fn key_row(keys: &LoadedSet, ctx: RowCtx<'_>, at: RowAt, i: usize, indent: u16, 
     } = at;
     if selected {
         fill_row(buf, area, y, theme.style(Token::Selected));
+    }
+    // A marked row carries a glyph in the pane's left margin (column 0, which
+    // no row otherwise uses), so no column moves and a selected row keeps its
+    // bar. A glyph rather than a hue, so it survives monochrome.
+    if marks.is_marked(i) {
+        super::put(
+            buf,
+            area.x,
+            y,
+            theme.glyphs.get(Glyph::Marked),
+            theme.style(if selected {
+                Token::Selected
+            } else {
+                Token::Warn
+            }),
+        );
     }
 
     let kind = keys.kind(i);
