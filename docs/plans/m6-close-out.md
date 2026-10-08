@@ -18,7 +18,9 @@ catch up with what shipped, and the version is bumped in the same change.
    what is now true, with the measured figures, and the `rebuilding N%` readout is described.
    The install URLs are re-pinned.
 4. **DESIGN.md** documents the rebuilding readout, if task 3 has not already done so.
-5. **Version:** the next beta (`0.1.0-beta.N`). The tag goes on the close-out merge commit, and
+5. **Release steps:** follow [`../RELEASING.md`](../RELEASING.md) (installer URLs in README,
+   `TESTING.md` and the book's installation page; `CHANGELOG.md` `Unreleased` moved under the version).
+5a. **Version:** the next beta (`0.1.0-beta.N`). The tag goes on the close-out merge commit, and
    it is pushed only after the user confirms.
 6. **`m6-perf-rebuild.md` and `m6-planning.md`** are marked done.
 

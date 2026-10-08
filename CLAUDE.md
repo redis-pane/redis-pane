@@ -11,6 +11,7 @@ product and design intent live in:
 - [docs/PRD.md](docs/PRD.md) — problem, users, requirements (R1.x–R7.x), milestones M0–M4
 - [docs/PLAN.md](docs/PLAN.md) — the M0/M1 task breakdown, workspace layout, and risk order
 - [docs/DESIGN.md](docs/DESIGN.md) — layout, navigation model, keymap, visual language, screens
+- [docs/RELEASING.md](docs/RELEASING.md) — the release checklist (version bump, installer URLs, CHANGELOG, tag)
 - [CONTEXT.md](CONTEXT.md) — the glossary. Read it before naming anything; several of these terms
   are deliberately distinguished and the distinctions are load-bearing
 - [docs/adr/](docs/adr/) — decisions with their rejected alternatives. Check for a relevant ADR

@@ -36,16 +36,31 @@ It needs Redis 6.0 or newer. Valkey works too.
 
 ## How it compares
 
-| You want to… | `redis-cli` | `redis-pane` |
-| --- | --- | --- |
-| See keys as a tree, with type, size and TTL | Names only (`--scan`) | Yes |
-| Open a key and read it by type | Run the type's read command yourself | Yes |
-| Watch a key change as it happens | No | Yes, pushed by the server |
-| Run any Redis command | Yes | No: [no console](limits.md) |
-| Run in a script or a pipeline | Yes | No |
-| Work over SSH, with the clipboard | Not applicable | Yes, via [OSC 52](viewing/copying.md) |
-| Edit with a preview of the exact command | No | Yes |
-| Be told which Environment you are pointed at | No | Always, in the title bar |
+| | redis-pane | `redis-cli` | RedisInsight |
+| --- | :---: | :---: | :---: |
+| Runs in a terminal and over SSH | ✓ | ✓ | ✗ [^1] |
+| Single binary | ✓ (2.7 MB download [^2]) | ✓ | ✗ [^3] |
+| The open key updates live, by push, with no refresh | ✓ | ✗ | partial [^4] |
+| A million keys browsable | ✓ (measured [^5]) | partial [^6] | not measured [^7] |
+| The exact command is shown before every write | ✓ | ✗ [^8] | ✗ [^9] |
+| Writes are locked by Environment | ✓ | ✗ [^8] | ✗ [^9] |
+| Cluster | ✓ | ✓ [^10] | ✓ [^11] |
+| Sentinel | ✓ | ✗ [^12] | ✓ [^11] |
+| Mouse optional | ✓ | ✓ | ✗ [^13] |
+
+[^1]: RedisInsight describes itself as a "desktop GUI client" built on Electron, also shipped as a Docker image. It has no terminal interface.
+[^2]: The `redis-pane-aarch64-apple-darwin.tar.xz` asset of release `0.1.0-beta.4` is 2.7 MB. The four platform downloads range from 2.7 MB to 5.5 MB (the Windows zip).
+[^3]: An Electron desktop application, or a Docker image, per its README.
+[^4]: Its documentation describes a configurable automatic refresh rate for Streams and for the Slow Log. It documents no push update for an open key's value.
+[^5]: `crates/core/tests/perf.rs` drives 1,000,000 keys in real `SCAN` order. No single update, which includes any slice of a rebuild, takes longer than the 16 ms frame budget.
+[^6]: `redis-cli --scan` streams the names of every key, with `--pattern` to filter. It doesn't browse, show types or open values.
+[^7]: We have not measured other tools and make no claim about them.
+[^8]: `redis-cli` runs what you type. Nothing previews it and nothing locks it.
+[^9]: Neither its README feature list nor its documentation mentions a command preview, a read-only mode or an Environment lock.
+[^10]: `redis-cli -c` follows `-MOVED` and `-ASK` redirections, and `--cluster` runs the cluster manager commands.
+[^11]: Its documentation says you can add "any Redis database running anywhere (including Redis Open Source cluster or sentinel)".
+[^12]: `redis-cli --help` has no Sentinel option. A Sentinel node can be queried as an ordinary server.
+[^13]: Its documentation describes using it by clicking, such as "click **>_ CLI**". It documents no keyboard navigation.
 
 `redis-pane` doesn't replace `redis-cli` for scripts or for commands it has no key for. Use
 both.
