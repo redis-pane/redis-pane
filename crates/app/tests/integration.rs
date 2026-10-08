@@ -8455,7 +8455,10 @@ mod copy {
     }
 
     /// One key of every type: how to build it and how to read it back whole.
-    fn every_type(key: &str) -> Vec<(&'static str, Vec<Vec<String>>, Vec<String>)> {
+    /// (type name, build commands, whole-read command)
+    type TypeCase = (&'static str, Vec<Vec<String>>, Vec<String>);
+
+    fn every_type(key: &str) -> Vec<TypeCase> {
         let c = |parts: &[&str]| parts.iter().map(|p| p.to_string()).collect::<Vec<_>>();
         vec![
             ("string", vec![c(&["SET", key, "value"])], c(&["GET", key])),

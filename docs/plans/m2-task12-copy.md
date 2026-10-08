@@ -1,6 +1,6 @@
 # M2 task 12: Copy (duplicate) a key
 
-Status: **in progress** (branch `m2-copy`).
+Status: **done.**
 
 ## Context
 
@@ -154,3 +154,51 @@ disambiguates with one `EXISTS src` before reporting.
   `update/rename.rs`; shell: 2 for `restore_ttl`. Golden: eight new frames (copy capture,
   typed, hint bar; dialog plain, target exists, cross-slot fallback, read-only) plus a test that
   the help row is dimmed `needs Redis 6.2` below 6.2. Only help goldens changed (phase 2).
+
+## Outcome
+
+Status: **done.** `D` in the keys pane duplicates the Selected key through the one mutation path.
+
+**Delivered, as designed:** the shared name capture (`NameKind::Copy`, prefilled `<name>:copy`);
+`Mutation::CopyKey` / `PendingMutation::CopyKey`; the `EXISTS` pre-check shared with rename;
+`SlotPath { SameSlot, CrossSlotRefused, CrossSlotFallback }` replacing rename's `cross_slot`
+bool; `COPY` standalone and same-slot; `DUMP` + `PTTL` + `RESTORE` (no `REPLACE`) across slots,
+with the TTL rule (`-1` -> 0, `-2` -> `KeyGone`, expired-in-between `0` -> 1 ms) in the pure,
+tested `restore_ttl`; the 6.2 version gate (`State::copy_available`, unknown allowed); Read-only
+refusal at confirm; the new key inserted via `scan_batch` with the selection and Open key left on
+the source.
+
+**Deviations from the plan text:**
+- **`HelpContext::Rename` became `Rename(NameKind)`** and `Refusal` gained a `needs` cause so a
+  help row can be dimmed for a reason other than Read-only Mode. The version gate wins over
+  Read-only dimming (a key that does nothing at all has no preview).
+- **Cluster error lines name `DUMP/RESTORE src dst`** instead of `COPY`, because that is what ran.
+- **The 6.0/6.1 gate is unit-tested, not Docker-tested:** no such image is in the suite and
+  `docker pull redis:6.0-alpine` hung here. A Docker test pins the 6.2 side.
+- **The shell, not `Mutation::CopyKey`, chooses COPY vs DUMP/RESTORE,** from
+  `client.is_clustered()` and `slot::key_slot`, the same function the core used for the preview.
+- **A `COPY` reply of 0 costs one `EXISTS src`** to tell a taken target from a gone source.
+- **Only the help goldens changed** (six `help_*` plus two `help_disconnected_*`, each gaining the
+  `D duplicate key (COPY)` row). Eight new frames were added.
+
+**Known limits:** as with rename, a scan still running may deliver the new name again, and a new
+name hidden by the filter or a collapsed group is loaded but not shown. `DUMP` and `PTTL` are two
+reads, not one atomic step; the 1 ms rule is the only place that gap can change a result. A
+Cluster copy is not atomic across the two nodes either, but it only ever *adds* the target.
+
+**Numbers:** core lib tests 1066 -> 1085, golden 267 -> 275, app unit 94 -> 96, Docker suite
+162 -> 173; fmt, clippy `-D warnings`, `cargo test --workspace` and the boundary check clean.
+
+**For task 14 (member rename) and task 13 (bulk delete):**
+- The name capture is `RenameCapture` in `state/rename.rs` with a `kind: NameKind`; task 14 can
+  add a `NameKind::Member` (or a sibling struct) and reuse typing/validation. `State::rename`,
+  `Mode::Renaming` and `HelpContext::Rename(kind)` are keyed by kind. `RenameProblem::reason`
+  takes the kind.
+- `insert_loaded_key` (`update/rename.rs`) is the helper for "a key appeared": it goes through
+  `scan_batch` and starts a rebuild when the key has no row. Task 13 does not need it.
+- `PendingMutation::blocks_confirm`, `command_lines` and `target_mut` are the generic hooks for a
+  dialog that cannot run, runs as several commands, or carries an `EXISTS` answer.
+- `Refusal` now has `needs: Option<&str>` for non-Read-only dimming; `settled_label` in
+  `update/confirm.rs` is where an error line's command name can differ from `command_label`.
+- Task 13 must handle `PendingMutation::CopyKey`/`RenameKey` only through the existing exhaustive
+  matches (`editor.rs` guard, `into_command`); `D` and `Space` do not collide.
