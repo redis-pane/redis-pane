@@ -10,8 +10,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use fred::prelude::*;
-use redis_pane_core::mutation::{Mutation, MutationOutcome, NotWritten};
+use redis_pane_core::key::KeyName;
+use redis_pane_core::mutation::{BulkReport, BulkStop, Mutation, MutationOutcome, NotWritten};
 use redis_pane_core::state::value::ListEnd;
+use tokio_util::sync::CancellationToken;
 
 /// What the shell sends back for one confirmed write: the outcome (or the
 /// failing command's detail, R7.4) and whether the failure means the client
@@ -44,6 +46,130 @@ pub async fn execute_settled(client: &Client, mutation: &Mutation) -> Settled {
     }
 }
 
+/// Keys per pipelined batch of a bulk delete (M2 task 13).
+pub const BULK_DELETE_BATCH: usize = 500;
+
+/// What a bulk delete did, and the error that stopped it, if one did.
+#[derive(Debug)]
+pub struct BulkRun {
+    pub report: BulkReport,
+    /// The client error behind a `BulkStop::Failed`, kept so the caller can ask
+    /// whether it is the Cluster wedge.
+    pub error: Option<Error>,
+}
+
+/// Delete `keys` with single-key `DEL`s in pipelined batches of `batch`.
+///
+/// Never one multi-key `DEL`: on a Cluster that raises `CROSSSLOT`, and `fred`
+/// routes each pipelined command by its own key's slot. A reply of `1` is a
+/// deleted key and `0` one that was already gone. `cancel` is checked before
+/// each batch (the batch in flight is allowed to finish, so its counts are
+/// not lost); `progress(done, total)` is called after each. A failing `DEL`
+/// stops the run after its batch and is reported with the command, never
+/// retried (R7.4). See `docs/plans/m2-task13-bulk-delete.md`.
+pub async fn delete_keys<P: FnMut(usize, usize)>(
+    client: &Client,
+    keys: &[KeyName],
+    batch: usize,
+    cancel: &CancellationToken,
+    mut progress: P,
+) -> BulkRun {
+    let total = keys.len();
+    let batch = batch.max(1);
+    let mut report = BulkReport {
+        total,
+        processed: 0,
+        deleted: 0,
+        already_gone: 0,
+        extra_ok: Vec::new(),
+        stopped: BulkStop::Completed,
+    };
+    let mut error = None;
+    for (b, chunk) in keys.chunks(batch).enumerate() {
+        if cancel.is_cancelled() {
+            report.stopped = BulkStop::Cancelled;
+            break;
+        }
+        let base = b * batch;
+        let pipeline = client.pipeline();
+        let mut queue_error = None;
+        for key in chunk {
+            let queued: Result<(), Error> = pipeline.del(Key::from(key.as_bytes())).await;
+            if let Err(e) = queued {
+                queue_error = Some(e);
+                break;
+            }
+        }
+        let replies: Vec<Result<i64, Error>> = match queue_error {
+            // Nothing was sent: the first command could not even be queued.
+            Some(e) => vec![Err(e)],
+            None => pipeline.try_all::<i64>().await,
+        };
+        let mut failed_at: Option<usize> = None;
+        for (j, key) in chunk.iter().enumerate() {
+            match replies.get(j) {
+                Some(Ok(n)) => {
+                    let (deleted, gone) = if *n > 0 { (1, 0) } else { (0, 1) };
+                    report.deleted += deleted;
+                    report.already_gone += gone;
+                    if failed_at.is_none() {
+                        report.processed = base + j + 1;
+                    } else {
+                        report.extra_ok.push((base + j) as u32);
+                    }
+                }
+                other => {
+                    if failed_at.is_none() {
+                        failed_at = Some(j);
+                        let e = match other {
+                            Some(Err(e)) => e.clone(),
+                            _ => replies
+                                .iter()
+                                .rev()
+                                .find_map(|r| r.as_ref().err().cloned())
+                                .unwrap_or_else(|| {
+                                    Error::new(ErrorKind::Unknown, "no reply to DEL")
+                                }),
+                        };
+                        report.stopped = BulkStop::Failed {
+                            command: format!("DEL {}", key.display()),
+                            detail: e.details().to_string(),
+                        };
+                        error = Some(e);
+                    }
+                }
+            }
+        }
+        if failed_at.is_some() {
+            break;
+        }
+        progress(report.processed, total);
+    }
+    BulkRun { report, error }
+}
+
+/// [`delete_keys`] plus the wedge check, as [`execute_settled`] is for a
+/// single write: the whole path the shell runs for a bulk delete.
+///
+/// A failure is reported inside the [`BulkReport`] (so progress is never lost
+/// behind an `Err`), and `link_lost` is set when it is the `fred` Cluster
+/// wedge, exactly as for any other write (ADR-0022).
+pub async fn execute_bulk_settled<P: FnMut(usize, usize)>(
+    client: &Client,
+    keys: &[KeyName],
+    cancel: &CancellationToken,
+    progress: P,
+) -> Settled {
+    let run = delete_keys(client, keys, BULK_DELETE_BATCH, cancel, progress).await;
+    Settled {
+        link_lost: run
+            .error
+            .as_ref()
+            .is_some_and(|e| crate::liveness::is_wedged(client, e)),
+        result: Ok(MutationOutcome::BulkDeleted(run.report)),
+    }
+}
+
 /// Execute a confirmed write.
 ///
 /// The caller must not treat success as the value now on screen: the core
@@ -58,11 +184,12 @@ pub async fn execute(client: &Client, mutation: &Mutation) -> Result<MutationOut
         let _: () = client.slowlog_reset().await?;
         return Ok(MutationOutcome::Done);
     }
-    // PHASE 2 STUB, replaced in phase 3: the batched executor is not wired yet.
+    // A bulk delete runs in batches with progress and cancellation, which a
+    // single `execute` cannot offer: the shell calls [`execute_bulk_settled`].
     if matches!(mutation, Mutation::DeleteKeys { .. }) {
         return Err(Error::new(
-            ErrorKind::Unknown,
-            "bulk delete is not wired to the shell yet",
+            ErrorKind::InvalidArgument,
+            "a bulk delete runs through execute_bulk_settled",
         ));
     }
     let key = mutation

@@ -196,3 +196,8 @@ so cancellation is deterministic); perf in the M6 harness; goldens as listed.
   `update/bulk_tests.rs` plus 4 in `state/marks.rs`. The shell executor is a stub that fails loudly until
   phase 3 (`execute` returns an error for `DeleteKeys`); nothing sends it yet outside tests. Six help
   goldens re-recorded (the new `Space mark` row); no other golden moved.
+- Phase 3: shell. `redis::mutate::delete_keys` (pipelined single-key `DEL` batches of 500 via `try_all`,
+  cancellation checked between batches, progress callback, failure reported inside the `BulkReport`),
+  `execute_bulk_settled` (the wedge check), `Shell::mutate` routing `DeleteKeys` to its own task with
+  `bulk_cancel` and `Msg::BulkDeleteProgress` (`try_send`, cosmetic), `Command::CancelBulkDelete`. A bulk
+  delete that fails outright (`Err`) also clears `State::bulk`. No Docker run yet; phase 4 covers it.

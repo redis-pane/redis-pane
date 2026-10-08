@@ -392,10 +392,10 @@ pub enum MutationOutcome {
 /// How a bulk delete ended and how far it got (M2 task 13, R7.4).
 ///
 /// `processed` is a contiguous prefix of the keys sent (whole batches plus the
-/// Ok replies before a failing batch's first error); the counts are over that
-/// prefix. `extra_ok` lists positions *after* the prefix that did succeed in
-/// the failing batch, so every deleted key can be badged and none is counted
-/// twice or missed.
+/// Ok replies before a failing batch's first error). `extra_ok` lists positions
+/// *after* the prefix that did succeed in the failing batch, so every deleted
+/// key can be badged. The counts cover the prefix and `extra_ok` together, so
+/// none is counted twice or missed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BulkReport {
     pub total: usize,

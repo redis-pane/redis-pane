@@ -671,4 +671,5 @@ fn a_failure_before_any_batch_settles_as_an_ordinary_error() {
         "DEL (2 keys): connection reset"
     );
     assert!(!state.keys.is_gone(1));
+    assert!(state.bulk.is_none(), "the in-flight record ends with it");
 }

@@ -80,7 +80,7 @@ pub(super) fn settled_label(state: &State, mutation: &Mutation) -> String {
 /// `Msg::MutationSettled`: the one place a write's outcome is given meaning
 /// (review H1). The shell only reports what the server said.
 pub(super) fn mutation_settled(
-    state: State,
+    mut state: State,
     mutation: Mutation,
     index: Option<usize>,
     result: Result<MutationOutcome, String>,
@@ -88,6 +88,11 @@ pub(super) fn mutation_settled(
 ) -> (State, Vec<Command>) {
     match result {
         Err(detail) => {
+            // A bulk delete that failed outright settles nothing else, so its
+            // in-flight record ends here.
+            if matches!(mutation, Mutation::DeleteKeys { .. }) {
+                state.bulk = None;
+            }
             let reset = matches!(mutation, Mutation::ResetSlowlog);
             let label = settled_label(&state, &mutation);
             let (state, commands) = failed(state, label, detail, at_ms);
