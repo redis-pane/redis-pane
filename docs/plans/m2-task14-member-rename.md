@@ -245,3 +245,8 @@ the server has now.
     trailing `↑↓ jk move`, which the new row pushes off (the bar stops at the first row that does
     not fit; the keys pane's `R` made the same trade in task 11). No browser, dialog or other
     hint-bar frame moved.
+- **Phase 3 (shell).** `redis::mutate::{rename_hash_field, rename_set_member, rename_zset_member}`
+  over three `EVAL` scripts exactly as in the design (shared `rename_item`, one `ItemRename`
+  outcome mapped to `FieldGone`/`MemberGone`, `FieldExists`/`MemberExists`, `KeyGone`). The write
+  goes through the existing `execute_settled`, so the Cluster wedge handling applies unchanged. No
+  deviations.
