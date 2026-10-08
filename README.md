@@ -87,8 +87,9 @@ redis-pane --host your-host --port 6379 --user default --password your-password 
 ```
 
 With no arguments, it connects to `127.0.0.1:6379`. For anything you connect to often, save it as
-a Profile in `~/.config/redis-pane/config.json` — see [ALPHA.md](ALPHA.md) for a full walkthrough,
-including how to keep passwords out of your shell history.
+a Profile in `~/.config/redis-pane/config.json` — see [Profiles and the config file](book/src/connecting/profiles.md) for a full
+walkthrough, and [Passwords and secrets](book/src/connecting/passwords.md) for keeping passwords out
+of your shell history.
 
 Once you're in:
 
@@ -99,7 +100,7 @@ Once you're in:
 - `t` to toggle tree/flat view, `s` to cycle sort order
 - `c` to copy the key name or the value, whichever pane is focused; `C` to copy a `redis-cli`
   command for the open key (locally this uses the system clipboard directly; over SSH it relies
-  on OSC 52 — see [ALPHA.md](ALPHA.md#copying) if a paste comes back empty)
+  on OSC 52 — see [Copying](book/src/viewing/copying.md) if a paste comes back empty)
 - `?` (or `F1`, which works even while typing) for help with what the keys do right where you are
 
 ![Folding a tree group with Left/Right, filtering down to one key, and moving a real cursor through its value with Enter and the arrow keys](navigation-demo.gif)
@@ -133,8 +134,8 @@ costs the server while it's open.*
 
 ## Trying it out
 
-See [ALPHA.md](ALPHA.md) for a fuller tour — connecting with a password, what to try, and what's
-not built yet.
+See [TESTING.md](TESTING.md) for what to try in this beta and how to report what you find, and the
+[user guide source](book/src/README.md) for everything else.
 
 ## Contributing
 

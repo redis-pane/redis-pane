@@ -1,0 +1,14 @@
+[book]
+title = "redis-pane"
+authors = ["Vinod Santharam"]
+description = "A terminal UI for browsing and editing Redis, with live updates."
+language = "en"
+src = "src"
+
+[output.html]
+git-repository-url = "https://github.com/vinodsantharam/redis-pane"
+edit-url-template = "https://github.com/vinodsantharam/redis-pane/edit/main/book/{path}"
+site-url = "/redis-pane/"
+
+[output.html.search]
+enable = true

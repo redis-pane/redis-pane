@@ -1,0 +1,44 @@
+# Filtering and sorting
+
+## Filter
+
+Press `/` and type. The list narrows as you type. `⏎` applies the filter and gives the keyboard back
+to the list. `Esc` clears it.
+
+The status line shows how many keys match (`3,410 of 41,203`).
+
+A filter is matched against the key names you have loaded:
+
+- **Plain text is a substring match**, ignoring upper and lower case. `session` matches
+  `user:8812:session` and `SESSION:9`.
+- **`*` and `?` make it a glob**, as in Redis: `*` matches any run of characters and `?`
+  exactly one. `user:*:session` matches keys that start with `user:` and end with `:session`.
+
+Filtering looks only at the keys in the Loaded set. It doesn't ask the server. While a scan is
+still running, a filter also covers keys as they arrive.
+
+Case-insensitive matching treats plain ASCII letters only.
+
+On a very large keyspace the list can take a moment to catch up. See
+[Large keyspaces](large-keyspaces.md).
+
+## Sort
+
+`s` cycles the order of the flat list:
+
+1. scan order (as the server returned keys, which is neither stable nor meaningful)
+2. name
+3. TTL
+4. size
+5. type
+
+In tree view the keys are in name order and `s` does nothing. Press `t` for the flat list first.
+
+Sorting by TTL, size or type depends on the row details that load as rows scroll into view. Until
+they have, the status bar says so, for example `sorted by size · 1,204 of 41,203 known`.
+
+## What filter and sort act on
+
+Both work on the **Loaded set**: the keys this session has scanned and holds. They don't search
+the whole server. If the scan hasn't finished or has stopped at its limit, a missing key might
+be one `redis-pane` hasn't seen. The status bar tells you which of those you are looking at.

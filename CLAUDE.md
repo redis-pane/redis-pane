@@ -18,7 +18,8 @@ product and design intent live in:
 
 Requirements are numbered so code and commits can cite them (e.g. "implements R2.1"). When a
 feature diverges from these docs, update the doc in the same change — the docs are the spec, not
-a historical artifact.
+a historical artifact. That includes the user guide in [book/](book/src/README.md): a change to
+what a user sees, types or configures updates its chapter in the same change.
 
 ## What this is
 
@@ -61,6 +62,18 @@ cargo test --workspace                  # all tests
 cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all                         # format
 cargo fmt --all -- --check              # verify formatting, as CI does
+mdbook serve book                       # preview the user guide (cargo install mdbook --locked)
+mdbook build book                       # build it; the `docs` CI job also link-checks the output
+```
+
+Two pages of the guide are generated, never hand-edited: `book/src/reference/keybindings.md` (from
+the keymap) and `book/src/reference/cli.md` (from the `clap` definition). After changing a key or
+a flag, regenerate them; CI fails if they are stale. Every ```` ```json ```` block in `book/src`
+is parsed by the real config parser (`json,invalid` marks one that must be refused):
+
+```bash
+UPDATE_DOCS=1 cargo test -p redis-pane-core --test docs_reference
+UPDATE_DOCS=1 cargo test -p redis-pane --test docs_reference
 ```
 
 Run a **single** test by path:
@@ -209,7 +222,7 @@ they are expensive to retrofit:
   not monochrome); it is applied by one post-pass at the end of `render::frame`, so a new overlay
   needs nothing to avoid a hole — do not paint backgrounds anywhere else.
 - **Terminal capability degrades gracefully.** Truecolor → 256 → monochrome; Nerd Font → ASCII;
-  ≥140 cols → 80 cols → single-pane. Layout breakpoints are in DESIGN.md §2.
+  ≥120 cols → 90 → 70 → single-pane. Layout breakpoints are in DESIGN.md §2.
 - **Keybindings are data.** The keymap, the help overlay and the on-screen hint bar all read from
   one source, so hints always show the *effective* binding after user overrides.
 - **Screen space is a budget, not a canvas.** The layout is two panes (PRD R7.7, G7). A new

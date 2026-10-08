@@ -24,7 +24,7 @@
 # configured in ~/.config/redis-pane/config.json, a bare `redis-pane` will
 # try that instead of the disposable Redis this tape just seeded.
 #
-# Keybindings below match ALPHA.md's "What to try" section as of this
+# Keybindings below match book/src/reference/keybindings.md as of this
 # writing. Keybindings are data (CLAUDE.md) and user-overridable, so if a
 # step doesn't do what its comment says, check `?` in a live session and
 # adjust the tape rather than assuming the recording is stale.
@@ -63,7 +63,7 @@ Type "t"
 Sleep 1200ms
 
 # Filter down to the one key this demo cares about. Esc clears the filter
-# (ALPHA.md), so open the match with the filter still active — do not Esc
+# (book/src/browsing/filter-sort.md), so open the match with the filter still active — do not Esc
 # first.
 Type "/"
 Sleep 300ms

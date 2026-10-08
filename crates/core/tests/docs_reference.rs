@@ -475,28 +475,52 @@ fn json_blocks(text: &str) -> Vec<(bool, usize, String)> {
     blocks
 }
 
+/// Every `.md` file under `book/src`, so a ```` ```json ```` block in any chapter
+/// is held to the real parser, not only the ones in the reference.
+fn book_pages() -> Vec<PathBuf> {
+    fn walk(dir: &std::path::Path, out: &mut Vec<PathBuf>) {
+        for entry in std::fs::read_dir(dir).expect("book/src must be readable") {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                walk(&path, out);
+            } else if path.extension().is_some_and(|e| e == "md") {
+                out.push(path);
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(&book_path("..").canonicalize().unwrap(), &mut out);
+    out.sort();
+    out
+}
+
 #[test]
 fn config_examples_parse_with_the_real_parser() {
-    let text = std::fs::read_to_string(book_path("configuration.md"))
+    let reference = std::fs::read_to_string(book_path("configuration.md"))
         .expect("book/src/reference/configuration.md must exist");
-    let blocks = json_blocks(&text);
     assert!(
-        blocks.iter().any(|(invalid, _, _)| !invalid),
+        json_blocks(&reference)
+            .iter()
+            .any(|(invalid, _, _)| !invalid),
         "configuration.md must contain at least one valid ```json example"
     );
-    for (invalid, line, body) in blocks {
-        let result = config::parse(&body);
-        if invalid {
-            assert!(
-                result.is_err(),
-                "configuration.md:{line}: a `json,invalid` example parsed, but should be refused"
-            );
-        } else {
-            assert!(
-                result.is_ok(),
-                "configuration.md:{line}: example does not parse: {:?}",
-                result.err()
-            );
+    for page in book_pages() {
+        let text = std::fs::read_to_string(&page).unwrap();
+        for (invalid, line, body) in json_blocks(&text) {
+            let result = config::parse(&body);
+            let at = format!("{}:{line}", page.display());
+            if invalid {
+                assert!(
+                    result.is_err(),
+                    "{at}: a `json,invalid` example parsed, but should be refused"
+                );
+            } else {
+                assert!(
+                    result.is_ok(),
+                    "{at}: example does not parse: {:?}",
+                    result.err()
+                );
+            }
         }
     }
 }
