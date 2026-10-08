@@ -187,7 +187,7 @@ reads, not one atomic step; the 1 ms rule is the only place that gap can change 
 Cluster copy is not atomic across the two nodes either, but it only ever *adds* the target.
 
 **Numbers:** core lib tests 1066 -> 1085, golden 267 -> 275, app unit 94 -> 96, Docker suite
-162 -> 173; fmt, clippy `-D warnings`, `cargo test --workspace` and the boundary check clean.
+162 -> 173 (all pass, 351s); fmt, clippy `-D warnings`, `cargo test --workspace` and the boundary check clean.
 
 **For task 14 (member rename) and task 13 (bulk delete):**
 - The name capture is `RenameCapture` in `state/rename.rs` with a `kind: NameKind`; task 14 can
