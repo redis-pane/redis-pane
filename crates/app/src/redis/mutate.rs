@@ -179,6 +179,11 @@ pub async fn execute(client: &Client, mutation: &Mutation) -> Result<MutationOut
             KeyRename::TargetExists => MutationOutcome::NotWritten(NotWritten::TargetExists),
             KeyRename::KeyGone => MutationOutcome::NotWritten(NotWritten::KeyGone),
         },
+        Mutation::CopyKey { to, .. } => match copy_key(client, key, to.as_bytes()).await? {
+            KeyCopy::Copied => MutationOutcome::Done,
+            KeyCopy::TargetExists => MutationOutcome::NotWritten(NotWritten::TargetExists),
+            KeyCopy::KeyGone => MutationOutcome::NotWritten(NotWritten::KeyGone),
+        },
         // Handled above, before `key` was ever computed — never reached.
         Mutation::ResetSlowlog => unreachable!("returned above"),
     })
@@ -240,6 +245,86 @@ pub async fn rename_key(client: &Client, from: &[u8], to: &[u8]) -> Result<KeyRe
             Ok(KeyRename::KeyGone)
         }
         Err(e) => Err(e),
+    }
+}
+
+/// What a duplicate did on the server ([`copy_key`], M2 task 12).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyCopy {
+    /// The new key exists with the source's value and TTL.
+    Copied,
+    /// A key with the new name already existed; nothing was written.
+    TargetExists,
+    /// The source key was gone; nothing was written, nothing created.
+    KeyGone,
+}
+
+/// The `RESTORE` ttl argument (milliseconds, relative) for a source whose
+/// `PTTL` answered `pttl`, or `None` when the source is gone (M2 task 12,
+/// decision 3, `docs/plans/m2-task12-copy.md`).
+///
+/// - `-2`: the key is gone. Nothing is restored.
+/// - `-1`: no expiry. `0` means exactly that to `RESTORE`.
+/// - `0`: the key had under a millisecond left, or expired between `DUMP` and
+///   `PTTL`. `0` here would *remove* the expiry and make a dying key permanent,
+///   so it becomes `1`: the copy expires at once, as the source was about to.
+/// - otherwise the milliseconds left.
+pub fn restore_ttl(pttl: i64) -> Option<i64> {
+    match pttl {
+        -2 => None,
+        -1 => Some(0),
+        0 => Some(1),
+        n if n < -2 => Some(0),
+        n => Some(n),
+    }
+}
+
+/// Duplicate a key without overwriting (M2 task 12,
+/// `docs/plans/m2-task12-copy.md`).
+///
+/// Standalone, or on a Cluster with both names in one slot: `COPY from to`
+/// (no `REPLACE`, no `DB`). It answers `1` for a copy and `0` for both "the
+/// target exists" and "the source is missing", so a `0` is told apart with one
+/// `EXISTS from`. Redis carries the TTL itself.
+///
+/// On a Cluster across slots `COPY` is refused by the server, so this runs
+/// `DUMP from` + `PTTL from`, then `RESTORE to <ttl> <payload>` with no
+/// `REPLACE`: `BUSYKEY` is a refusal (`TargetExists`), a nil `DUMP` or a
+/// `PTTL` of `-2` is `KeyGone`. The payload lives only in this function and is
+/// dropped when it returns; it is never logged and never reaches the core.
+///
+/// Names are built as single binary-safe `Key`s ([`delete_key`] explains the
+/// trap).
+pub async fn copy_key(client: &Client, from: &[u8], to: &[u8]) -> Result<KeyCopy, Error> {
+    use redis_pane_core::slot::key_slot;
+    let (src, dst) = (fred::types::Key::from(from), fred::types::Key::from(to));
+    if client.is_clustered() && key_slot(from) != key_slot(to) {
+        let payload: Value = client.dump(src.clone()).await?;
+        if payload.is_null() {
+            return Ok(KeyCopy::KeyGone);
+        }
+        let pttl: i64 = client.pttl(src).await?;
+        let Some(ttl) = restore_ttl(pttl) else {
+            return Ok(KeyCopy::KeyGone);
+        };
+        return match client
+            .restore::<(), _>(dst, ttl, payload, false, false, None, None)
+            .await
+        {
+            Ok(()) => Ok(KeyCopy::Copied),
+            Err(e) if e.details().to_ascii_uppercase().contains("BUSYKEY") => {
+                Ok(KeyCopy::TargetExists)
+            }
+            Err(e) => Err(e),
+        };
+    }
+    let copied: i64 = client.copy(src.clone(), dst, None, false).await?;
+    if copied == 1 {
+        Ok(KeyCopy::Copied)
+    } else if key_exists(client, from).await? {
+        Ok(KeyCopy::TargetExists)
+    } else {
+        Ok(KeyCopy::KeyGone)
     }
 }
 
@@ -1030,4 +1115,30 @@ pub async fn shift_ttl(
         -3 => ShiftTtlWrite::WouldExpireNow,
         _ => ShiftTtlWrite::Written,
     })
+}
+
+#[cfg(test)]
+mod copy_tests {
+    use super::restore_ttl;
+
+    #[test]
+    fn the_restore_ttl_rule() {
+        assert_eq!(restore_ttl(-2), None, "gone: nothing is restored");
+        assert_eq!(restore_ttl(-1), Some(0), "no expiry stays no expiry");
+        assert_eq!(
+            restore_ttl(0),
+            Some(1),
+            "expired between DUMP and PTTL: 1 ms, never 0 (which means no expiry)"
+        );
+        assert_eq!(restore_ttl(1), Some(1));
+        assert_eq!(restore_ttl(86_400_000), Some(86_400_000));
+    }
+
+    #[test]
+    fn a_ttl_is_never_zero_unless_the_source_had_none() {
+        for pttl in -1..=1000 {
+            let ttl = restore_ttl(pttl).expect("not gone");
+            assert_eq!(ttl == 0, pttl == -1, "pttl {pttl}");
+        }
+    }
 }

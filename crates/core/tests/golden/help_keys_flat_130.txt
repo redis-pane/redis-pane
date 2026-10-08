@@ -1,16 +1,16 @@
 ─ redis-pane ─ ● staging · cache-01:6379/0 · from profile staging ─────────────────────────────────────────────────────── ● live ─
 
- KEY                               TYPE        SIZE   TTL │ → to open
- ● user:8812┌─ help · keys pane ─────────────────────────────────────────────────────────────────────────────────────┐
+ KEY        ┌─ help · keys pane ─────────────────────────────────────────────────────────────────────────────────────┐
  ● user:8812│ →         open / expand                                                                                │
  ● user:8812│ /         filter                                                                                       │
- ● user:8813│ s         sort                                                                                         │
- ● cart:91af│ t         tree view                                                                                    │
- ● feed:glob│ d         delete                                                                                       │
-            │ c         copy                                                                                         │
+ ● user:8812│ s         sort                                                                                         │
+ ● user:8813│ t         tree view                                                                                    │
+ ● cart:91af│ d         delete                                                                                       │
+ ● feed:glob│ c         copy                                                                                         │
             │ r         rescan                                                                                       │
             │ C         copy redis-cli command                                                                       │
             │ R         rename                                                                                       │
+            │ D         duplicate key (COPY)                                                                         │
             │ ↑↓ jk     move                                                                                         │
             │ PgUp/PgDn page                                                                                         │
             │ Home/End  top/bottom                                                                                   │

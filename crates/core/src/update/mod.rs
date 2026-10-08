@@ -760,6 +760,10 @@ fn dispatch_action(mut state: State, action: Action) -> (State, Vec<Command>) {
         // a field or member (task 14); until then it does nothing there.
         Action::Rename if state.keys_pane_focused() => begin_rename(state),
         Action::Rename => (state, Vec::new()),
+        // `D` duplicates a key from the keys pane (M2 task 12). It has no
+        // meaning in the Viewer.
+        Action::Duplicate if state.keys_pane_focused() => begin_copy(state),
+        Action::Duplicate => (state, Vec::new()),
         // Nothing is staged — `key_press` intercepts every keypress before
         // this match while `state.confirm` is `Some`, so `y` only ever
         // reaches here with nothing to confirm.

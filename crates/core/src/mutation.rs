@@ -142,6 +142,12 @@ pub enum Mutation {
     /// Redis keeps the TTL itself. `ERR no such key` is `NotWritten::KeyGone`;
     /// a `0` reply is `NotWritten::TargetExists`.
     RenameKey { key: KeyName, to: KeyName },
+    /// `COPY key to` without `REPLACE` or `DB` (M2 task 12,
+    /// `docs/plans/m2-task12-copy.md`). On a Cluster across slots the shell
+    /// runs `DUMP` + `PTTL` + `RESTORE` (no `REPLACE`) instead. A taken
+    /// target is `NotWritten::TargetExists`, a missing source
+    /// `NotWritten::KeyGone`; Redis carries the TTL.
+    CopyKey { key: KeyName, to: KeyName },
 }
 
 impl Eq for Mutation {}
@@ -171,7 +177,8 @@ impl Mutation {
             | Mutation::SetTtl { key, .. }
             | Mutation::PersistTtl { key }
             | Mutation::ShiftTtl { key, .. }
-            | Mutation::RenameKey { key, .. } => Some(key),
+            | Mutation::RenameKey { key, .. }
+            | Mutation::CopyKey { key, .. } => Some(key),
             Mutation::ResetSlowlog => None,
         }
     }
@@ -226,6 +233,7 @@ impl Mutation {
             // Both names: they are key names, not values, and the failing
             // command is only identifiable with its target.
             Mutation::RenameKey { key, to } => format!("RENAMENX {key} {to}"),
+            Mutation::CopyKey { key, to } => format!("COPY {key} {to}"),
         }
     }
 }
@@ -272,8 +280,9 @@ pub enum NotWritten {
     /// `ElementMoved` register: like that one, this is a *race* refusal a
     /// reader meets on a key under churn, not a broken write.
     WouldExpireNow,
-    /// A `RenameKey` found the target name already taken (M2 task 11).
-    /// Nothing was written: `RENAMENX` refuses atomically, and overwriting
+    /// A `RenameKey` or `CopyKey` found the target name already taken (M2
+    /// tasks 11, 12). Nothing was written: `RENAMENX`, `COPY` and `RESTORE`
+    /// (no `REPLACE`) all refuse atomically, and overwriting
     /// is out of scope (`docs/plans/m2-remaining-planning.md`).
     TargetExists,
 }
@@ -348,6 +357,13 @@ mod tests {
                     to: "user:2".into(),
                 },
                 "RENAMENX user:1 user:2",
+            ),
+            (
+                Mutation::CopyKey {
+                    key: key.clone(),
+                    to: "user:2".into(),
+                },
+                "COPY user:1 user:2",
             ),
             (
                 Mutation::SetString {

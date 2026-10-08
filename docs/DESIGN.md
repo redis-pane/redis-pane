@@ -172,6 +172,7 @@ recomputed each frame from which tile is focused, never a persisted scroll posit
 | `c` / `C` | Copy key or value / copy `redis-cli` command | key list, value pane |
 | `d` | Stage delete of the Selected key (`DEL`), (Hash, cursor on a field) of that field (`HDEL`), or (Slowlog view) `SLOWLOG RESET` | key list, value pane, slowlog view |
 | `R` | Rename the Selected key — opens a name capture prefilled with the current name, then stages `RENAMENX old new`. A group row, a gone row or a binary name shows a notice and stages nothing. The value pane's `R` (rename a field or member) is task 14's | key list |
+| `D` | Duplicate the Selected key (`COPY`, Redis 6.2+) — the same name capture, prefilled with the name plus `:copy`, then stages `COPY src dst`. Below 6.2 it is dimmed in help with *needs Redis 6.2* and shows a notice. The selection and Open key stay on the source | key list |
 | `y` | Confirm a staged mutation (`Esc` dismisses) | global, only while one is staged |
 | `p` | Pause / resume consuming the `MONITOR` or Pub/Sub feed (the socket stays open; paused lines/messages are counted, not buffered) | Monitor view, Pub/Sub tail |
 | `a` | Add a subscription (`Tab` in the form: sharded, Redis 7+) | Pub/Sub view, either half |
@@ -569,6 +570,21 @@ rename the old row is badged gone, the new name enters the Loaded set through th
 (so the cap is still enforced in one place; a full list says the key is *not listed*), the
 selection moves to the new row, and an open key follows to the new name and re-reads through the
 ordinary read path, which re-arms liveness.
+
+**Duplicate (`D`, keys pane).** `D` opens the rename capture titled `duplicate key (COPY)`,
+prefilled with the name plus `:copy` (an unchanged name is refused: *same as the source name*).
+Staging shows `COPY src dst`, the guard line *only if the new name is free · carries its TTL*, and
+`src → dst`; the `EXISTS` pre-check warns about a taken target exactly as rename does, and `y`
+still runs the atomic `COPY` (no `REPLACE`, no `DB`), whose `0` reply is `TargetExists` (or
+`KeyGone` when one `EXISTS src` says the source vanished). **On a Cluster across slots** `COPY`
+is refused by the server, so the dialog lists `DUMP src`, `PTTL src` and `RESTORE dst <ttl>
+<payload>` and says it runs as `DUMP` + `RESTORE`; `y` is *not* blocked. `RESTORE` has no
+`REPLACE` (`BUSYKEY` is `TargetExists`), a nil `DUMP` is `KeyGone`, and the payload never reaches
+the core or the screen. The TTL rule: `PTTL -1` restores with `0` (no expiry), `-2` is `KeyGone`,
+and a key that expired between `DUMP` and `PTTL` (`PTTL 0`) restores with 1 ms, never 0. After a
+success only the new name is added to the Loaded set (through `scan_batch`); the selection and the
+Open key stay on the source. Read-only Mode refuses at confirm. `COPY` needs Redis 6.2, so on
+6.0/6.1 `D` stages nothing.
 
 ### 6.6 Dashboard
 

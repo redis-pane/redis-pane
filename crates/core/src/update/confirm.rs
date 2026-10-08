@@ -20,7 +20,7 @@ pub(super) fn confirm_key(
         // with `CROSSSLOT`): `y` does nothing and the dialog stays, so the
         // reader reads why. Checked before Read-only Mode, which would
         // otherwise close the dialog on an explanation of the wrong problem.
-        KeyCode::Char('y') if !key.ctrl && !key.alt && is_cross_slot_rename(&pending) => {
+        KeyCode::Char('y') if !key.ctrl && !key.alt && pending.blocks_confirm() => {
             state.confirm = Some(pending);
             (state, Vec::new())
         }
@@ -61,14 +61,16 @@ pub(super) fn confirm_key(
     }
 }
 
-fn is_cross_slot_rename(pending: &PendingMutation) -> bool {
-    matches!(
-        pending,
-        PendingMutation::RenameKey {
-            cross_slot: true,
-            ..
-        }
-    )
+/// The command an error line names. A Cluster copy across slots ran as
+/// `DUMP` + `PTTL` + `RESTORE`, not `COPY`, so it says so (R7.4).
+pub(super) fn settled_label(state: &State, mutation: &Mutation) -> String {
+    if let Mutation::CopyKey { key, to } = mutation
+        && state.on_cluster()
+        && crate::slot::key_slot(key.as_bytes()) != crate::slot::key_slot(to.as_bytes())
+    {
+        return format!("DUMP/RESTORE {key} {to}");
+    }
+    mutation.command_label()
 }
 
 /// `Msg::MutationSettled`: the one place a write's outcome is given meaning
@@ -83,7 +85,8 @@ pub(super) fn mutation_settled(
     match result {
         Err(detail) => {
             let reset = matches!(mutation, Mutation::ResetSlowlog);
-            let (state, commands) = failed(state, mutation.command_label(), detail, at_ms);
+            let label = settled_label(&state, &mutation);
+            let (state, commands) = failed(state, label, detail, at_ms);
             // A reset that reached only some of a Cluster's nodes still
             // emptied those: show what is left rather than the old list.
             if reset && state.on_cluster() && state.screen == crate::state::View::Slowlog {
@@ -96,6 +99,7 @@ pub(super) fn mutation_settled(
         Ok(MutationOutcome::Done) => match mutation {
             Mutation::DeleteKey { key } => key_deleted(state, index, key, at_ms),
             Mutation::RenameKey { key, to } => key_renamed(state, index, key, to, at_ms),
+            Mutation::CopyKey { key, to } => key_copied(state, key, to, at_ms),
             // No key, so none of `write_landed`'s open-key guarding applies —
             // this refetches the Slowlog view instead (D8,
             // `docs/plans/m3-slowlog.md`).
@@ -107,9 +111,14 @@ pub(super) fn mutation_settled(
                     .expect("ResetSlowlog is handled above; every other Mutation has a key"),
             ),
         },
-        // A rename is about the Selected key, not the Open one, so it reports
+        // A rename or copy is about the Selected key, not the Open one, so it reports
         // whether or not the key is open (`not_written` is silent otherwise).
-        Ok(MutationOutcome::NotWritten(why)) if matches!(mutation, Mutation::RenameKey { .. }) => {
+        Ok(MutationOutcome::NotWritten(why))
+            if matches!(
+                mutation,
+                Mutation::RenameKey { .. } | Mutation::CopyKey { .. }
+            ) =>
+        {
             rename_not_written(state, &mutation, index, why, at_ms)
         }
         Ok(MutationOutcome::NotWritten(why)) => not_written(state, &mutation, why, at_ms),
@@ -250,7 +259,8 @@ pub(super) fn nothing_to_remove(
         | Mutation::SetTtl { .. }
         | Mutation::ShiftTtl { .. }
         // Refuses via `NotWritten::TargetExists`/`KeyGone` (M2 task 11).
-        | Mutation::RenameKey { .. } => "entry",
+        | Mutation::RenameKey { .. }
+        | Mutation::CopyKey { .. } => "entry",
         // Unreachable — the early return above already caught it, since it
         // has no key — but the match stays exhaustive over `Mutation`
         // (PLAN M2 task 8, D8) rather than a wildcard.

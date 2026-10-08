@@ -8382,7 +8382,7 @@ mod rename {
         assert!(matches!(
             state.confirm,
             Some(PendingMutation::RenameKey {
-                cross_slot: true,
+                slots: redis_pane_core::state::SlotPath::CrossSlotRefused,
                 ..
             })
         ));
@@ -8404,6 +8404,380 @@ mod rename {
             other => panic!("expected CROSSSLOT, got {other:?}"),
         }
         assert_eq!(writer.get::<String, _>(&from).await.unwrap(), "v");
+        let _ = client.quit().await;
+        let _ = writer.quit().await;
+    }
+}
+
+// ── M2 task 12 — duplicate (COPY) a key ─────────────────────────────────────
+
+mod copy {
+    use super::Credentials;
+    use super::support::cluster::start_cluster;
+    use fred::prelude::*;
+    use redis_pane::redis::mutate::execute_settled;
+    use redis_pane_core::mutation::{Mutation, MutationOutcome, NotWritten};
+
+    async fn setup_on(
+        tag: &str,
+    ) -> (
+        testcontainers::ContainerAsync<testcontainers::GenericImage>,
+        Client,
+        Client,
+    ) {
+        let (c, url) = super::start("redis", tag).await;
+        let writer = Builder::from_config(Config::from_url(&url).unwrap())
+            .build()
+            .unwrap();
+        writer.init().await.unwrap();
+        let (client, _) = redis_pane::redis::connect(&url).await.unwrap();
+        (c, client, writer)
+    }
+
+    fn copy(from: &[u8], to: &[u8]) -> Mutation {
+        Mutation::CopyKey {
+            key: from.into(),
+            to: to.into(),
+        }
+    }
+
+    /// Any command, any reply, so every type is read the same way.
+    async fn raw(client: &Client, args: &[&str]) -> Value {
+        let (name, rest) = args.split_first().unwrap();
+        let name: &'static str = Box::leak(name.to_string().into_boxed_str());
+        client
+            .custom(
+                fred::types::CustomCommand::new_static(name, None, false),
+                rest.iter().map(|a| a.to_string()).collect::<Vec<_>>(),
+            )
+            .await
+            .unwrap()
+    }
+
+    /// One key of every type: how to build it and how to read it back whole.
+    /// (type name, build commands, whole-read command)
+    type TypeCase = (&'static str, Vec<Vec<String>>, Vec<String>);
+
+    fn every_type(key: &str) -> Vec<TypeCase> {
+        let c = |parts: &[&str]| parts.iter().map(|p| p.to_string()).collect::<Vec<_>>();
+        vec![
+            ("string", vec![c(&["SET", key, "value"])], c(&["GET", key])),
+            (
+                "hash",
+                vec![c(&["HSET", key, "a", "1", "b", "2"])],
+                c(&["HGETALL", key]),
+            ),
+            (
+                "list",
+                vec![c(&["RPUSH", key, "x", "y", "z"])],
+                c(&["LRANGE", key, "0", "-1"]),
+            ),
+            (
+                "set",
+                vec![c(&["SADD", key, "m1", "m2", "m3"])],
+                c(&["SMEMBERS", key]),
+            ),
+            (
+                "zset",
+                vec![c(&["ZADD", key, "1", "one", "2.5", "two"])],
+                c(&["ZRANGE", key, "0", "-1", "WITHSCORES"]),
+            ),
+            (
+                "stream",
+                vec![
+                    c(&["XADD", key, "1-1", "f", "v"]),
+                    c(&["XADD", key, "2-1", "g", "w"]),
+                ],
+                c(&["XRANGE", key, "-", "+"]),
+            ),
+        ]
+    }
+
+    async fn run(client: &Client, args: &[String]) -> Value {
+        let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+        raw(client, &refs).await
+    }
+
+    #[tokio::test]
+    #[ignore = "needs docker"]
+    async fn a_copy_lands_with_the_same_value_and_ttl_for_every_type() {
+        let (_c, client, writer) = setup_on("7-alpine").await;
+        for (ty, build, read) in every_type("src") {
+            let _: i64 = writer.del("src").await.unwrap();
+            let _: i64 = writer.del("dst").await.unwrap();
+            for cmd in &build {
+                run(&writer, cmd).await;
+            }
+            let _: bool = writer.expire("src", 1000, None).await.unwrap();
+
+            let settled = execute_settled(&client, &copy(b"src", b"dst")).await;
+            assert!(!settled.link_lost, "{ty}");
+            assert_eq!(settled.result, Ok(MutationOutcome::Done), "{ty}");
+
+            let read_of = |k: &str| read.iter().map(|a| a.replace("src", k)).collect::<Vec<_>>();
+            let src_val = run(&writer, &read_of("src")).await;
+            let dst_val = run(&writer, &read_of("dst")).await;
+            assert!(!dst_val.is_null() && dst_val.array_len() != Some(0), "{ty}");
+            assert_eq!(src_val, dst_val, "{ty}: same contents");
+            let dst_type: String = writer.r#type("dst").await.unwrap();
+            let src_type: String = writer.r#type("src").await.unwrap();
+            assert_eq!(dst_type, src_type, "{ty}");
+            let ttl: i64 = writer.pttl("dst").await.unwrap();
+            assert!(
+                (1..=1_000_000).contains(&ttl),
+                "{ty}: TTL carried, got {ttl}"
+            );
+            let src_ttl: i64 = writer.pttl("src").await.unwrap();
+            assert!(src_ttl > 0, "{ty}: the source keeps its TTL");
+        }
+        let _ = client.quit().await;
+        let _ = writer.quit().await;
+    }
+
+    #[tokio::test]
+    #[ignore = "needs docker"]
+    async fn a_copy_of_a_key_without_a_ttl_has_none() {
+        let (_c, client, writer) = setup_on("7-alpine").await;
+        let _: () = writer.set("src", "v", None, None, false).await.unwrap();
+        let settled = execute_settled(&client, &copy(b"src", b"dst")).await;
+        assert_eq!(settled.result, Ok(MutationOutcome::Done));
+        assert_eq!(writer.ttl::<i64, _>("dst").await.unwrap(), -1);
+        let _ = client.quit().await;
+        let _ = writer.quit().await;
+    }
+
+    #[tokio::test]
+    #[ignore = "needs docker"]
+    async fn a_taken_target_is_refused_and_both_keys_are_unchanged() {
+        let (_c, client, writer) = setup_on("7-alpine").await;
+        let _: () = writer.set("src", "mine", None, None, false).await.unwrap();
+        let _: bool = writer.expire("src", 500, None).await.unwrap();
+        let _: () = writer
+            .set("dst", "theirs", None, None, false)
+            .await
+            .unwrap();
+
+        let settled = execute_settled(&client, &copy(b"src", b"dst")).await;
+        assert_eq!(
+            settled.result,
+            Ok(MutationOutcome::NotWritten(NotWritten::TargetExists))
+        );
+        assert_eq!(writer.get::<String, _>("src").await.unwrap(), "mine");
+        assert_eq!(writer.get::<String, _>("dst").await.unwrap(), "theirs");
+        assert!(writer.ttl::<i64, _>("src").await.unwrap() > 0);
+        assert_eq!(writer.ttl::<i64, _>("dst").await.unwrap(), -1);
+        let _ = client.quit().await;
+        let _ = writer.quit().await;
+    }
+
+    #[tokio::test]
+    #[ignore = "needs docker"]
+    async fn a_gone_source_is_key_gone_and_creates_nothing() {
+        let (_c, client, writer) = setup_on("7-alpine").await;
+        let settled = execute_settled(&client, &copy(b"ghost", b"dst")).await;
+        assert_eq!(
+            settled.result,
+            Ok(MutationOutcome::NotWritten(NotWritten::KeyGone))
+        );
+        assert_eq!(writer.exists::<i64, _>("dst").await.unwrap(), 0);
+        assert_eq!(writer.dbsize::<i64>().await.unwrap(), 0);
+        let _ = client.quit().await;
+        let _ = writer.quit().await;
+    }
+
+    /// Byte-valued names: the `Vec<u8>` -> keys-per-byte trap again.
+    #[tokio::test]
+    #[ignore = "needs docker"]
+    async fn binary_names_copy_without_touching_decoys() {
+        let (_c, client, writer) = setup_on("7-alpine").await;
+        let bin: &[u8] = &[7, 8];
+        let _: () = writer.set(bin, "bin", None, None, false).await.unwrap();
+        let _: () = writer.set("7", "decoy7", None, None, false).await.unwrap();
+        let _: () = writer.set("8", "decoy8", None, None, false).await.unwrap();
+        let settled = execute_settled(&client, &copy(bin, &[9, 10])).await;
+        assert_eq!(settled.result, Ok(MutationOutcome::Done));
+        assert_eq!(
+            writer.get::<Vec<u8>, _>(&[9u8, 10][..]).await.unwrap(),
+            b"bin"
+        );
+        assert_eq!(writer.get::<String, _>("7").await.unwrap(), "decoy7");
+        assert_eq!(writer.dbsize::<i64>().await.unwrap(), 4);
+        let _ = client.quit().await;
+        let _ = writer.quit().await;
+    }
+
+    /// The version gate against the probed version of a real server. The gate
+    /// below 6.2 is covered by core unit tests, because no 6.0/6.1 image is
+    /// part of this suite (and the floor, 6.0, cannot be probed without one).
+    #[tokio::test]
+    #[ignore = "needs docker"]
+    async fn on_redis_6_2_the_probed_version_leaves_d_available() {
+        use redis_pane_core::msg::{KeyCode, KeyPress};
+        use redis_pane_core::state::{Link, Tracking};
+        use redis_pane_core::{Msg, State, update};
+
+        let (_c, url) = super::start("redis", "6.2-alpine").await;
+        let (client, established) = redis_pane::redis::connect(&url).await.unwrap();
+        let state = State {
+            cols: 130,
+            rows: 30,
+            link: Link::Up {
+                version: established.version.to_string(),
+                tracking: Tracking::Armed,
+            },
+            ..State::default()
+        };
+        assert!(state.copy_available(), "6.2 is the first with COPY");
+        let (state, _) = update(
+            state,
+            Msg::ScanBatch {
+                keys: vec![b"k".to_vec()],
+            },
+        );
+        let (state, _) = update(state, Msg::Key(KeyPress::plain(KeyCode::Char('D'))));
+        assert!(state.rename.is_some());
+
+        // And the server really has COPY (the 6.2 floor is not a guess).
+        let writer = Builder::from_config(Config::from_url(&url).unwrap())
+            .build()
+            .unwrap();
+        writer.init().await.unwrap();
+        let _: () = writer.set("k", "v", None, None, false).await.unwrap();
+        let r: i64 = writer.copy("k", "k2", None, false).await.unwrap();
+        assert_eq!(r, 1);
+        let _ = writer.quit().await;
+        let _ = client.quit().await;
+    }
+
+    async fn cluster_pair() -> (
+        super::support::cluster::Cluster,
+        Client,
+        Client,
+        String,
+        String,
+    ) {
+        let cluster = start_cluster().await;
+        let client = redis_pane::redis::connect_with(&cluster.seed_url(), &Credentials::default())
+            .await
+            .expect("cluster client")
+            .0;
+        let writer = cluster.client().await;
+        let primaries = cluster.primaries().await;
+        let from = cluster.key_in_slot_of(primaries[0].port).await;
+        let to = cluster.key_in_slot_of(primaries[1].port).await;
+        assert_ne!(
+            redis_pane_core::slot::key_slot(from.as_bytes()),
+            redis_pane_core::slot::key_slot(to.as_bytes())
+        );
+        (cluster, client, writer, from, to)
+    }
+
+    #[tokio::test]
+    #[ignore = "needs docker"]
+    async fn on_a_cluster_a_same_slot_copy_goes_through_copy() {
+        let cluster = start_cluster().await;
+        let client = redis_pane::redis::connect_with(&cluster.seed_url(), &Credentials::default())
+            .await
+            .expect("cluster client")
+            .0;
+        let writer = cluster.client().await;
+        let _: i64 = writer.hset("{rp12}a", [("f", "1")]).await.unwrap();
+        let _: bool = writer.expire("{rp12}a", 800, None).await.unwrap();
+        let settled = execute_settled(&client, &copy(b"{rp12}a", b"{rp12}b")).await;
+        assert!(!settled.link_lost);
+        assert_eq!(settled.result, Ok(MutationOutcome::Done));
+        assert_eq!(
+            writer.hget::<String, _, _>("{rp12}b", "f").await.unwrap(),
+            "1"
+        );
+        let ttl: i64 = writer.ttl("{rp12}b").await.unwrap();
+        assert!(ttl > 0 && ttl <= 800, "{ttl}");
+        assert_eq!(writer.exists::<i64, _>("{rp12}a").await.unwrap(), 1);
+
+        // Taken, and gone, on a Cluster.
+        let settled = execute_settled(&client, &copy(b"{rp12}a", b"{rp12}b")).await;
+        assert_eq!(
+            settled.result,
+            Ok(MutationOutcome::NotWritten(NotWritten::TargetExists))
+        );
+        let settled = execute_settled(&client, &copy(b"{rp12}ghost", b"{rp12}c")).await;
+        assert_eq!(
+            settled.result,
+            Ok(MutationOutcome::NotWritten(NotWritten::KeyGone))
+        );
+        assert_eq!(writer.exists::<i64, _>("{rp12}c").await.unwrap(), 0);
+        let _ = client.quit().await;
+        let _ = writer.quit().await;
+    }
+
+    /// `COPY` itself is refused across slots (so the fallback is real), and the
+    /// fallback keeps the value and the TTL.
+    #[tokio::test]
+    #[ignore = "needs docker"]
+    async fn on_a_cluster_a_cross_slot_copy_falls_back_to_dump_restore_keeping_value_and_ttl() {
+        let (_cluster, client, writer, from, to) = cluster_pair().await;
+        let _: i64 = writer.hset(&from, [("a", "1"), ("b", "2")]).await.unwrap();
+        let _: bool = writer.expire(&from, 900, None).await.unwrap();
+
+        let plain: Result<i64, _> = client.copy(&from, &to, None, false).await;
+        assert!(
+            plain.is_err(),
+            "COPY across slots must be refused by the server: {plain:?}"
+        );
+
+        let settled = execute_settled(&client, &copy(from.as_bytes(), to.as_bytes())).await;
+        assert!(!settled.link_lost);
+        assert_eq!(settled.result, Ok(MutationOutcome::Done));
+        let got: std::collections::BTreeMap<String, String> = writer.hgetall(&to).await.unwrap();
+        assert_eq!(got.len(), 2);
+        assert_eq!(got["a"], "1");
+        let ttl: i64 = writer.ttl(&to).await.unwrap();
+        assert!((1..=900).contains(&ttl), "TTL carried: {ttl}");
+        assert_eq!(writer.exists::<i64, _>(&from).await.unwrap(), 1);
+        let _ = client.quit().await;
+        let _ = writer.quit().await;
+    }
+
+    #[tokio::test]
+    #[ignore = "needs docker"]
+    async fn on_a_cluster_a_cross_slot_copy_of_a_key_without_a_ttl_stays_without() {
+        let (_cluster, client, writer, from, to) = cluster_pair().await;
+        let _: () = writer.set(&from, "v", None, None, false).await.unwrap();
+        let settled = execute_settled(&client, &copy(from.as_bytes(), to.as_bytes())).await;
+        assert_eq!(settled.result, Ok(MutationOutcome::Done));
+        assert_eq!(writer.get::<String, _>(&to).await.unwrap(), "v");
+        assert_eq!(writer.ttl::<i64, _>(&to).await.unwrap(), -1);
+        let _ = client.quit().await;
+        let _ = writer.quit().await;
+    }
+
+    #[tokio::test]
+    #[ignore = "needs docker"]
+    async fn on_a_cluster_a_cross_slot_copy_onto_an_existing_target_is_target_exists() {
+        let (_cluster, client, writer, from, to) = cluster_pair().await;
+        let _: () = writer.set(&from, "mine", None, None, false).await.unwrap();
+        let _: () = writer.set(&to, "theirs", None, None, false).await.unwrap();
+        let settled = execute_settled(&client, &copy(from.as_bytes(), to.as_bytes())).await;
+        assert_eq!(
+            settled.result,
+            Ok(MutationOutcome::NotWritten(NotWritten::TargetExists))
+        );
+        assert_eq!(writer.get::<String, _>(&from).await.unwrap(), "mine");
+        assert_eq!(writer.get::<String, _>(&to).await.unwrap(), "theirs");
+        let _ = client.quit().await;
+        let _ = writer.quit().await;
+    }
+
+    #[tokio::test]
+    #[ignore = "needs docker"]
+    async fn on_a_cluster_a_cross_slot_copy_of_a_gone_source_creates_nothing() {
+        let (_cluster, client, writer, from, to) = cluster_pair().await;
+        let settled = execute_settled(&client, &copy(from.as_bytes(), to.as_bytes())).await;
+        assert_eq!(
+            settled.result,
+            Ok(MutationOutcome::NotWritten(NotWritten::KeyGone))
+        );
+        assert_eq!(writer.exists::<i64, _>(&to).await.unwrap(), 0);
         let _ = client.quit().await;
         let _ = writer.quit().await;
     }

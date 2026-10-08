@@ -23,6 +23,59 @@ pub enum TargetCheck {
     Taken,
 }
 
+/// Which key-level verb the one-line name capture is serving. The capture's
+/// typing, validation and staging are shared; this decides the prefill, the
+/// title and the staged mutation (M2 task 12,
+/// `docs/plans/m2-task12-copy.md`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NameKind {
+    /// `R`: `RENAMENX`.
+    Rename,
+    /// `D`: `COPY` (or `DUMP` + `RESTORE` across slots on a Cluster).
+    Copy,
+}
+
+impl NameKind {
+    /// The capture's title, as drawn on its border and in the help overlay.
+    pub fn title(&self) -> &'static str {
+        match self {
+            NameKind::Rename => "rename",
+            NameKind::Copy => "duplicate key (COPY)",
+        }
+    }
+
+    /// What the notices say before the colon: `rename: select a key first`.
+    pub fn verb(&self) -> &'static str {
+        match self {
+            NameKind::Rename => "rename",
+            NameKind::Copy => "duplicate",
+        }
+    }
+
+    /// The key that starts it again, for "the key list changed" notices.
+    pub fn key_label(&self) -> char {
+        match self {
+            NameKind::Rename => 'R',
+            NameKind::Copy => 'D',
+        }
+    }
+}
+
+/// How a staged key-level command relates the two names' Cluster slots.
+/// Computed once at staging, on a Cluster only; anywhere else it is
+/// [`SlotPath::SameSlot`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SlotPath {
+    /// Standalone, or both names hash to one slot: the plain command runs.
+    SameSlot,
+    /// Different slots, and the command cannot cross them (`RENAME` fails
+    /// with `CROSSSLOT`): `y` does nothing and only `Esc` leaves.
+    CrossSlotRefused,
+    /// Different slots, and the command has a fallback: a copy runs as
+    /// `DUMP` + `PTTL` + `RESTORE` behind the same confirmation.
+    CrossSlotFallback,
+}
+
 /// Why the typed name cannot be staged, shown under the field.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RenameProblem {
@@ -31,23 +84,28 @@ pub enum RenameProblem {
 }
 
 impl RenameProblem {
-    pub fn reason(&self) -> &'static str {
-        match self {
-            RenameProblem::Empty => "name can't be empty",
-            RenameProblem::Unchanged => "same as the current name",
+    pub fn reason(&self, kind: NameKind) -> &'static str {
+        match (self, kind) {
+            (RenameProblem::Empty, _) => "name can't be empty",
+            (RenameProblem::Unchanged, NameKind::Rename) => "same as the current name",
+            (RenameProblem::Unchanged, NameKind::Copy) => "same as the source name",
         }
     }
 }
 
-/// `R` is capturing a new name for the key at `index`.
+/// What a duplicate's name starts with after the source name.
+pub const COPY_SUFFIX: &str = ":copy";
+
+/// `R` or `D` is capturing a new name for the key at `index`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RenameCapture {
+    pub kind: NameKind,
     /// The Loaded set row the rename was started from, carried through to the
     /// staged mutation the way `DeleteKey` carries one.
     pub index: usize,
     pub from: KeyName,
-    /// What has been typed. Starts as the current name; the cursor is always
-    /// at the end.
+    /// What has been typed. Starts as the current name (plus `:copy` for a
+    /// duplicate); the cursor is always at the end.
     pub text: String,
 }
 
@@ -55,9 +113,17 @@ impl RenameCapture {
     /// A capture prefilled with the current name. `None` for a name that is
     /// not valid UTF-8: no capture accepts byte escapes, so a binary name is
     /// refused rather than lossily rewritten (ADR-0017's rule for List edit).
-    pub fn new(index: usize, from: KeyName) -> Option<Self> {
-        let text = from.as_str()?.to_string();
-        Some(RenameCapture { index, from, text })
+    pub fn new(kind: NameKind, index: usize, from: KeyName) -> Option<Self> {
+        let mut text = from.as_str()?.to_string();
+        if kind == NameKind::Copy {
+            text.push_str(COPY_SUFFIX);
+        }
+        Some(RenameCapture {
+            kind,
+            index,
+            from,
+            text,
+        })
     }
 
     pub fn problem(&self) -> Option<RenameProblem> {

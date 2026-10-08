@@ -1044,7 +1044,7 @@ fn context_title(ctx: help::HelpContext) -> String {
             format!("keys pane{}", if tree { " · tree" } else { "" })
         }
         HelpContext::Filter => "filter".to_string(),
-        HelpContext::Rename => "rename".to_string(),
+        HelpContext::Rename(kind) => kind.title().to_string(),
         HelpContext::Value(None) => "value pane".to_string(),
         HelpContext::Value(Some(vc)) => {
             let ty = match vc {
@@ -1339,13 +1339,7 @@ fn confirm_overlay(
     let refused = state.read_only;
     // A cross-slot rename can never run, whatever the mode: its dialog is an
     // explanation, and says so instead of offering `y`.
-    let cross_slot = matches!(
-        pending,
-        PendingMutation::RenameKey {
-            cross_slot: true,
-            ..
-        }
-    );
+    let cross_slot = pending.blocks_confirm();
     let hint = match refused {
         _ if cross_slot => "can't run on a Cluster · Esc cancel".to_string(),
         Some(reason) => format!("read-only ({}) · Esc dismiss", reason.label()),
@@ -1378,7 +1372,7 @@ fn confirm_overlay(
             name,
             to,
             target,
-            cross_slot,
+            slots,
             ..
         } => {
             lines.push((pending.command_text(), Token::Text));
@@ -1394,7 +1388,7 @@ fn confirm_overlay(
                 ),
                 Token::Text,
             ));
-            if *cross_slot {
+            if *slots == crate::state::SlotPath::CrossSlotRefused {
                 lines.push((
                     g.text("⚠ RENAME across slots fails with CROSSSLOT on a Cluster")
                         .into_owned(),
@@ -1408,6 +1402,53 @@ fn confirm_overlay(
                     Token::Muted,
                 ));
             } else if *target == crate::state::TargetCheck::Taken {
+                lines.push((
+                    g.text(&format!(
+                        "⚠ {to} already exists — y will be refused, nothing is overwritten"
+                    ))
+                    .into_owned(),
+                    Token::Warn,
+                ));
+            }
+        }
+        // Duplicate (M2 task 12): the same shape as rename, except that across
+        // slots on a Cluster the copy runs as three commands behind the same
+        // `y`, which the dialog lists (the payload as a placeholder).
+        PendingMutation::CopyKey {
+            name,
+            to,
+            target,
+            slots,
+            ..
+        } => {
+            for line in pending.command_lines() {
+                lines.push((line, Token::Text));
+            }
+            if let Some(guard) = pending.guard_text() {
+                lines.push((g.text(&guard).into_owned(), Token::Muted));
+            }
+            lines.push((
+                format!(
+                    "{} {} {}",
+                    name.display(),
+                    g.get(Glyph::Right),
+                    to.display()
+                ),
+                Token::Text,
+            ));
+            if *slots == crate::state::SlotPath::CrossSlotFallback {
+                lines.push((
+                    g.text("COPY can't cross slots on a Cluster — runs as DUMP + RESTORE")
+                        .into_owned(),
+                    Token::Warn,
+                ));
+                lines.push((
+                    g.text("the key's TTL is carried; the payload is never shown")
+                        .into_owned(),
+                    Token::Muted,
+                ));
+            }
+            if *target == crate::state::TargetCheck::Taken {
                 lines.push((
                     g.text(&format!(
                         "⚠ {to} already exists — y will be refused, nothing is overwritten"
@@ -1692,7 +1733,8 @@ fn rename_overlay(
     ];
     if let Some(problem) = capture.problem() {
         lines.push((
-            g.text(&format!("·· {}", problem.reason())).into_owned(),
+            g.text(&format!("·· {}", problem.reason(capture.kind)))
+                .into_owned(),
             Token::Warn,
         ));
     }
@@ -1701,7 +1743,7 @@ fn rename_overlay(
         lines,
         hint,
         Token::BorderFocus,
-        " rename ",
+        &format!(" {} ", capture.kind.title()),
         theme,
         area,
         buf,
