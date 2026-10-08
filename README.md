@@ -23,11 +23,10 @@ binary that runs in the terminal you are already in, driven from the keyboard.
 | Single binary | ✓ (2.7 MB download [^2]) | ✓ | ✗ [^3] |
 | The open key updates live, by push, with no refresh | ✓ | ✗ | partial [^4] |
 | A million keys browsable | ✓ (measured [^5]) | partial [^6] | not measured [^7] |
-| The exact command is shown before every write | ✓ | ✗ [^8] | ✗ [^9] |
-| Writes are locked by Environment | ✓ | ✗ [^8] | ✗ [^9] |
+| The exact command is shown before every write | ✓ | ✗ [^8] | not documented [^9] |
+| Writes are locked by Environment | ✓ | ✗ [^8] | not documented [^9] |
 | Cluster | ✓ | ✓ [^10] | ✓ [^11] |
 | Sentinel | ✓ | ✗ [^12] | ✓ [^11] |
-| Mouse optional | ✓ | ✓ | ✗ [^13] |
 
 [^1]: RedisInsight describes itself as a "desktop GUI client" built on Electron, also shipped as a Docker image. It has no terminal interface.
 [^2]: The `redis-pane-aarch64-apple-darwin.tar.xz` asset of release `0.1.0-beta.4` is 2.7 MB. The four platform downloads range from 2.7 MB to 5.5 MB (the Windows zip).
@@ -37,11 +36,10 @@ binary that runs in the terminal you are already in, driven from the keyboard.
 [^6]: `redis-cli --scan` streams the names of every key, with `--pattern` to filter. It doesn't browse, show types or open values.
 [^7]: We have not measured other tools and make no claim about them.
 [^8]: `redis-cli` runs what you type. Nothing previews it and nothing locks it.
-[^9]: Neither its README feature list nor its documentation mentions a command preview, a read-only mode or an Environment lock.
+[^9]: We found no mention of a command preview, a read-only mode or an Environment lock in its README or documentation. We have not tested it, so this is "not documented", not "absent".
 [^10]: `redis-cli -c` follows `-MOVED` and `-ASK` redirections, and `--cluster` runs the cluster manager commands.
 [^11]: Its documentation says you can add "any Redis database running anywhere (including Redis Open Source cluster or sentinel)".
 [^12]: `redis-cli --help` has no Sentinel option. A Sentinel node can be queried as an ordinary server.
-[^13]: Its documentation describes using it by clicking, such as "click **>_ CLI**". It documents no keyboard navigation.
 
 ## Features
 
