@@ -121,8 +121,8 @@ redis-pane --profile mine --probe
   `COPY`, 6.2+). Neither ever overwrites an existing key: a taken name is refused. In the value
   pane, **`R`** renames the Hash field, Set member or Sorted-set member under the cursor, keeping
   its value or score.
-- **`Space`** — mark keys; **`d`** with marks deletes them all after one preview. On a `prod`
-  target you type the key count to confirm. `Esc` clears the marks, and stops a running bulk
+- **`Space`** — mark keys; **`d`** with marks deletes them all after one preview. On a `prod` or
+  `unknown` target you type the key count to confirm. `Esc` clears the marks, and stops a running bulk
   delete between batches.
 - **`⌃R`** — toggle Read-only Mode (some environments start locked and say why).
 - **`?`** or **`F1`** — help for exactly where you are: the keys that work here, with anything

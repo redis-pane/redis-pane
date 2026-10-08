@@ -379,6 +379,26 @@ fn off_prod_other_keys_are_ignored_and_esc_dismisses() {
     assert_eq!(state.marks.count(), 2, "dismissing keeps the marks");
 }
 
+#[test]
+fn unknown_gets_the_typed_gate_like_prod() {
+    let mut state = mark_rows(loaded(10, Environment::Unknown), &[1, 2]);
+    state.read_only = None; // lifted, as a reader would to write on unknown
+    let (state, _) = press(state, 'd');
+    assert_eq!(staged(&state).2, &CountGate::Required);
+    let (state, commands) = press(state, 'y');
+    assert!(
+        commands.is_empty(),
+        "y opens the typed gate on unknown, it runs nothing"
+    );
+    let state = type_digits(state, "2");
+    let (state, commands) = code(state, KeyCode::Enter);
+    match executed(&commands) {
+        Some(Mutation::DeleteKeys { keys }) => assert_eq!(keys.len(), 2),
+        other => panic!("expected DeleteKeys, got {other:?}"),
+    }
+    assert!(state.confirm.is_none());
+}
+
 fn prod_dialog(n: usize) -> State {
     let rows: Vec<usize> = (0..n).collect();
     let mut state = mark_rows(loaded(n.max(10), Environment::Prod), &rows);

@@ -64,7 +64,14 @@ pub(super) fn stage_bulk_delete(mut state: State) -> (State, Vec<Command>) {
     if names.is_empty() {
         return notify(state, "nothing left to delete — the marked keys are gone");
     }
-    let gate = if state.connection.environment == Environment::Prod {
+    // The typed count guards the two Environments that start in Read-only
+    // Mode: `prod`, and `unknown` — the one we know least about, so it gets
+    // at least `prod`'s friction once someone lifts the lock (user decision,
+    // 2026-10-08; PRD R4.6).
+    let gate = if matches!(
+        state.connection.environment,
+        Environment::Prod | Environment::Unknown
+    ) {
         CountGate::Required
     } else {
         CountGate::Open

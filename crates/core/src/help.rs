@@ -1021,7 +1021,7 @@ fn editor_rows(state: &State, ctx: EditorContext) -> Vec<HelpRow> {
 }
 
 fn confirm_rows(state: &State) -> Vec<HelpRow> {
-    // The `prod` typed count for a bulk delete (M2 task 13): once `y` has
+    // The typed count for a bulk delete on `prod`/`unknown` (M2 task 13): once `y` has
     // opened it, the keys are digits, `⏎` and `Esc`.
     if let Some(crate::state::PendingMutation::DeleteKeys {
         gate: crate::state::CountGate::Typing { .. },

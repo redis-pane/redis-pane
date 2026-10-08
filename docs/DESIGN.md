@@ -468,7 +468,7 @@ and it is the same rule as everywhere else: losing colour must lose emphasis, ne
 Every mutation is staged, previewed, then confirmed — one chokepoint, whether it deletes a key or
 rewrites a value. Committing shows a **command preview**: the literal command that will be sent.
 Confirmation friction scales with blast radius — a single-key `y` for one non-prod delete, a
-typed key-count for a bulk prod delete. Read-only Mode refuses at the preview, not at the keypress: the dialog composes the real
+typed key-count for a bulk delete on `prod` or `unknown`. Read-only Mode refuses at the preview, not at the keypress: the dialog composes the real
 command and its blast radius first, and only then says you cannot run it. You learn what you
 were about to do before you learn that you are not allowed to. `Esc` always discards, at any
 stage — consistent with every other overlay in the app, at the cost of losing a draft to a
@@ -615,8 +615,9 @@ and is deliberately out of scope. Marks are indices into the Loaded set, so filt
 tree toggle and rebuild jobs leave them alone, and a rescan (which renumbers) clears them. **A marked
 row the current filter hides is still deleted**; the dialog's count includes it. `d` with marks stages
 one bulk delete; without marks it is the single-key delete above, unchanged. The dialog shows `DEL × N
-keys`, the guard line, the first eight names and `… and N more`. Off `prod`, one `y` confirms. On
-`prod`, `y` opens a typed step: type the count exactly and press `⏎`; a wrong count keeps the dialog
+keys`, the guard line, the first eight names and `… and N more`. On `local` and `staging`, one `y`
+confirms. On `prod` and `unknown` (the two Environments that start in Read-only Mode; `unknown`
+added 2026-10-08), `y` opens a typed step: type the count exactly and press `⏎`; a wrong count keeps the dialog
 open and says so, `y` and every other key are ignored, `Esc` dismisses at any stage. Read-only Mode
 refuses at the first `y`, after the dialog has been composed, so a reader is never asked to type a
 count for something that cannot run. The shell sends one single-key `DEL` per key, pipelined in
