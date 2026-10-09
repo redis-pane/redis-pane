@@ -6,9 +6,10 @@
  ● user:8812:session      hash      42m ├
  ● user:8813:session      hash      56m │  FIELD  id
  ● cart:91af3c9d2e        ┌─ help · editor · field ─┐2
- ● feed:global:hot        │ Enter     stage         │
+ ● feed:global:hot        │ ⏎         stage         │
                           │ ⌃Z        undo          │
                           │ Esc       cancel        │
+                          │ ⌃Y        redo          │
                           │                         │
                           │ F1 help                 │
                           │                         │
@@ -19,6 +20,5 @@
                                         │
                                         │
                                         │
-                                        │
 
- Enter stage   ⌃Z undo   Esc cancel   F1 help
+ ⏎ stage   ⌃Z undo   Esc cancel   ⌃Y redo   F1 help

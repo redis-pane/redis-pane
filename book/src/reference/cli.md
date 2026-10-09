@@ -12,7 +12,11 @@
 It never prompts. The title bar always shows the target and where it came from.
 
 ```text
-A terminal UI for Redis
+A terminal UI for Redis.
+
+The target is chosen in this order: flags (--profile, --url, --host and --port), then the default Profile in the config file, then the environment (REDIS_URL, or REDIS_HOST, REDIS_PORT, REDIS_USER and REDIS_PASSWORD), then 127.0.0.1:6379. It never prompts; the title bar always shows the target and where it came from.
+
+A Profile named on the command line that the config file doesn't define is an error, not a fallback.
 
 Usage: redis-pane [OPTIONS] [PROFILE]
 
@@ -28,13 +32,13 @@ Options:
           Connect to this URL, used wholesale
 
       --host <HOST>
-          
+          Connect to this host. Combine with --port; the port defaults to 6379
 
       --port <PORT>
-          
+          Connect to this port. Combine with --host; the host defaults to 127.0.0.1
 
       --db <N>
-          Database index. Fixed at launch; there is no in-app switcher (ADR-0005)
+          Database index. The database is fixed at launch; there is no way to change it from inside the app
 
       --user <NAME>
           ACL username. Always wins over a Profile's or the environment's
@@ -61,7 +65,7 @@ Options:
           Colour theme: `dark`, `light`, `high-contrast`, or one defined under `themes` in the config. Beats the config's `theme`
 
   -h, --help
-          Print help
+          Print help (see a summary with '-h')
 
   -V, --version
           Print version

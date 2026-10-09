@@ -1,5 +1,4 @@
 ─ redis-pane ─ ● staging · cache-01:6379/0 · from profile staging ───── ● live ─
-
 ┌─ help · keys pane · tree ────────────────────────────────────────────────────┐
 │ →         open / expand                                                      │
 │ /         filter                                                             │
@@ -15,10 +14,11 @@
 │ ↑↓ jk     move                                                               │
 │ PgUp/PgDn page                                                               │
 │ Home/End  top/bottom                                                         │
+│ ⏎         open & move in                                                     │
+│ ← h       collapse / parent                                                  │
 │                                                                              │
 │ ⌃R read-only   g s slowlog   g m monitor   g p pub/sub   g d dashboard   Esc b
 │                                                                              │
 │ Tab value keys · Esc close                                                   │
 └──────────────────────────────────────────────────────────────────────────────┘
-    sorted by name
  → open / expand   / filter   s sort   t flat view   d delete   ? F1 help

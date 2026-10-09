@@ -425,7 +425,7 @@ fn rebinding_quit_changes_the_hint_bar_and_the_help_overlay() {
         ..base()
     };
     assert!(
-        hint_bar(&before, before.cols).contains("q quit"),
+        hint_bar(&before, before.cols).contains("q ⌃C quit"),
         "{}",
         hint_bar(&before, before.cols)
     );
@@ -439,21 +439,19 @@ fn rebinding_quit_changes_the_hint_bar_and_the_help_overlay() {
     };
 
     assert!(
-        hint_bar(&after, after.cols).contains("⌃X quit"),
+        hint_bar(&after, after.cols).contains("⌃X q ⌃C quit"),
         "{}",
         hint_bar(&after, after.cols)
     );
-    assert!(
-        !hint_bar(&after, after.cols).contains("q quit"),
-        "the stale label must be gone"
-    );
+    // Rebinding adds a key rather than replacing one, so `q` and `⌃C` still
+    // quit and are still listed: the label never names a key that does nothing.
     // `help_lines` (the flat list of every binding) is gone with the
     // contextual overlay — `help::everywhere`'s "quit" row is the same proof
     // now: the rebinding shows up wherever help reads the keymap from.
     assert!(
         help::everywhere(&after)
             .iter()
-            .any(|r| r.label == "quit" && r.keys == "⌃X")
+            .any(|r| r.label == "quit" && r.keys == "⌃X q ⌃C")
     );
 }
 
@@ -1833,7 +1831,7 @@ fn golden_editor_hint_bar() {
     // help discoverable, including the editor, where `?` no longer opens it.
     assert_eq!(
         hint_bar(&state, state.cols),
-        "⌃S stage   ⌃Z undo   Esc cancel   F1 help"
+        "⌃S stage   ⌃Z undo   Esc cancel   ⌃Y redo   F1 help"
     );
 }
 

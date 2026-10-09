@@ -1,23 +1,23 @@
 ─ redis-pane ─ ● staging · cache-01:6379/0 · from profile staging ─────────────────────────────────────────────────────── ● live ─
 
  KEY                               TYPE        SIZE   TTL │ user:8812:cart
- ● use┌─ help · value pane · zset ─────────────────────────────────────────────────────────────────────────────────────────┐
- ● use│ e         score                                                                                                    │ live
- ● use│ a         add member                                                                                               │
- ● use│ d         remove member                                                                                            │
- ● car│ c         copy                                                                                                     │
- ● fee│ t         edit ttl                                                                                                 │
-      │ r         refetch                                                                                                  │
-      │ C         copy redis-cli command                                                                                   │
-      │ R         rename member                                                                                            │
-      │ ↑↓ jk     move                                                                                                     │
-      │ PgUp/PgDn page                                                                                                     │
-      │ Home/End  top/bottom                                                                                               │
-      │                                                                                                                    │
-      │ Tab focus   ⌃R read-only   g s slowlog   g m monitor   g p pub/sub   g d dashboard   Esc back   q quit   ? F1 help │
-      │                                                                                                                    │
-      │ Tab keys · Esc close                                                                                               │
-      └────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+┌─ help · value pane · zset ─────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│ e         score                                                                                                                │
+│ a         add member                                                                                                           │
+│ d         remove member                                                                                                        │
+│ c         copy                                                                                                                 │
+│ t         edit ttl                                                                                                             │
+│ r         refetch                                                                                                              │
+│ C         copy redis-cli command                                                                                               │
+│ R         rename member                                                                                                        │
+│ ↑↓ jk     move                                                                                                                 │
+│ PgUp/PgDn page                                                                                                                 │
+│ Home/End  top/bottom                                                                                                           │
+│                                                                                                                                │
+│ Tab focus   ⌃R read-only   g s slowlog   g m monitor   g p pub/sub   g d dashboard   Esc back   q ⌃C quit   ⌃← ⌃→ narrow / widen
+│                                                                                                                                │
+│ Tab keys · Esc close                                                                                                           │
+└────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
                                                           │
                                                           │
 

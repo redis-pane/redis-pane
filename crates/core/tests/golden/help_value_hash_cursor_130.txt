@@ -1,23 +1,23 @@
 ─ redis-pane ─ ● staging · cache-01:6379/0 · from profile staging ─────────────────────────────────────────────────────── ● live ─
 
  KEY                               TYPE        SIZE   TTL │ user:8812:session
- ● use┌─ help · value pane · hash ─────────────────────────────────────────────────────────────────────────────────────────┐
- ● use│ e         edit field                                                                                               │ live
- ● use│ a         add field                                                                                                │
- ● use│ d         delete field                                                                                             │
- ● car│ c         copy                                                                                                     │
- ● fee│ t         edit ttl                                                                                                 │
-      │ r         refetch                                                                                                  │
-      │ C         copy redis-cli command                                                                                   │
-      │ R         rename field                                                                                             │
-      │ ↑↓ jk     move                                                                                                     │
-      │ PgUp/PgDn page                                                                                                     │
-      │ Home/End  top/bottom                                                                                               │
-      │                                                                                                                    │
-      │ Tab focus   ⌃R read-only   g s slowlog   g m monitor   g p pub/sub   g d dashboard   Esc back   q quit   ? F1 help │
-      │                                                                                                                    │
-      │ Tab keys · Esc close                                                                                               │
-      └────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+┌─ help · value pane · hash ─────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│ e         edit field                                                                                                           │
+│ a         add field                                                                                                            │
+│ d         delete field                                                                                                         │
+│ c         copy                                                                                                                 │
+│ t         edit ttl                                                                                                             │
+│ r         refetch                                                                                                              │
+│ C         copy redis-cli command                                                                                               │
+│ R         rename field                                                                                                         │
+│ ↑↓ jk     move                                                                                                                 │
+│ PgUp/PgDn page                                                                                                                 │
+│ Home/End  top/bottom                                                                                                           │
+│                                                                                                                                │
+│ Tab focus   ⌃R read-only   g s slowlog   g m monitor   g p pub/sub   g d dashboard   Esc back   q ⌃C quit   ⌃← ⌃→ narrow / widen
+│                                                                                                                                │
+│ Tab keys · Esc close                                                                                                           │
+└────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
                                                           │
                                                           │
 

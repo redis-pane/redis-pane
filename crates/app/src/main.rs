@@ -155,7 +155,12 @@ fn main() {
         password: cli.password,
         tls: cli.tls,
     };
-    let resolution = resolve(&flags, config.as_ref(), &env_vars());
+    // A Profile named on the command line that doesn't exist is a refusal, not
+    // a fallback: before the target is printed or dialled (ADR-0001).
+    let resolution = resolve(&flags, config.as_ref(), &env_vars()).unwrap_or_else(|err| {
+        eprintln!("redis-pane: {err}");
+        std::process::exit(exit::CONFIG);
+    });
     let connection = resolution.connection.clone();
     // The displayed target is redacted; connecting needs the original, so the
     // two are deliberately kept apart rather than reconstructed from the label.

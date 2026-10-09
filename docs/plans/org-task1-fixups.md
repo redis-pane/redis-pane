@@ -15,7 +15,7 @@ closes all of them except `--db`, which the user postponed.
      && let Some(profile) = …`), and connect to localhost with Source `from default`.
    - **The rule:** a Profile named on the command line that doesn't exist is an error that names
      it and lists the available Profiles. When no config file exists, it says that instead.
-   - **Exit code 2**, the same as other startup refusals; check `main.rs`/`connect_or_exit` for the
+   - **Exit code 3**, matching `--theme` (changed in review; the plan first said 2). Originally: the same as other startup refusals; check `main.rs`/`connect_or_exit` for the
      existing convention.
    - **Matches the spirit of ADR-0001 and ADR-0002:** a typo in a hand-authored config is never
      silently dropped, and the same goes for a typo on the command line.
@@ -66,7 +66,7 @@ closes all of them except `--db`, which the user postponed.
   `cargo test --workspace`, including the docs-reference tests after regeneration.
 - `mdbook build book` with no warnings.
 - **By hand:**
-  - `cargo run -p redis-pane -- --profile nope --print-target` exits 2 with the message;
+  - `cargo run -p redis-pane -- --profile nope --print-target` exits 3 with the message;
   - with a valid Profile, it still resolves;
   - `--help` shows host and port descriptions.
 - The Docker integration suite is required if the startup path in `main.rs` changes:

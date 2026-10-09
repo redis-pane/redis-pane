@@ -103,10 +103,79 @@ impl EnvVars {
 const DEFAULT_HOST: &str = "127.0.0.1";
 const DEFAULT_PORT: u16 = 6379;
 
+/// Why resolution refused to pick a target.
+///
+/// There is one case: a Profile named on the command line that the config does
+/// not define. Falling through to the next rule would connect somewhere the
+/// user did not ask for, and a typo on the command line deserves the same
+/// refusal as a typo in the hand-authored config (ADR-0001, ADR-0002).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ResolveError {
+    UnknownProfile {
+        name: String,
+        /// Profile names defined by the config, sorted. Empty when there is no
+        /// config file or it defines none.
+        available: Vec<String>,
+        /// Whether a config file was loaded at all.
+        has_config: bool,
+    },
+}
+
+impl std::fmt::Display for ResolveError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ResolveError::UnknownProfile {
+                name,
+                available,
+                has_config,
+            } => {
+                if !*has_config {
+                    write!(
+                        f,
+                        "no Profile named \"{name}\": there is no config file, so no Profiles are defined"
+                    )
+                } else if available.is_empty() {
+                    write!(
+                        f,
+                        "no Profile named \"{name}\": the config file defines no Profiles"
+                    )
+                } else {
+                    write!(
+                        f,
+                        "no Profile named \"{name}\"; available Profiles: {}",
+                        available.join(", ")
+                    )
+                }
+            }
+        }
+    }
+}
+
+impl std::error::Error for ResolveError {}
+
 /// Resolve a Connection from flags, config and environment.
 ///
-/// Never fails and never prompts: the fallback is always `127.0.0.1:6379`.
-pub fn resolve(flags: &Flags, config: Option<&Config>, env: &EnvVars) -> Resolution {
+/// Never prompts. It fails only when `--profile` (or the positional name)
+/// names a Profile the config does not define; otherwise the fallback is
+/// always `127.0.0.1:6379`.
+pub fn resolve(
+    flags: &Flags,
+    config: Option<&Config>,
+    env: &EnvVars,
+) -> Result<Resolution, ResolveError> {
+    if let Some(name) = &flags.profile
+        && !config.is_some_and(|c| c.profiles.contains_key(name))
+    {
+        let mut available: Vec<String> = config
+            .map(|c| c.profiles.keys().cloned().collect())
+            .unwrap_or_default();
+        available.sort();
+        return Err(ResolveError::UnknownProfile {
+            name: name.clone(),
+            available,
+            has_config: config.is_some(),
+        });
+    }
     let mut resolution = resolve_target(flags, config, env);
     // `--user`/`--password`/`--tls` always win, on top of whatever the target
     // resolution above produced — a Profile's stored password included. This
@@ -121,7 +190,7 @@ pub fn resolve(flags: &Flags, config: Option<&Config>, env: &EnvVars) -> Resolut
     if flags.tls {
         resolution.credentials.tls = true;
     }
-    resolution
+    Ok(resolution)
 }
 
 fn resolve_target(flags: &Flags, config: Option<&Config>, env: &EnvVars) -> Resolution {
@@ -345,6 +414,11 @@ fn infer_environment(target: &str) -> Environment {
 mod tests {
     use super::*;
 
+    /// `resolve`, for cases where the Profile is known to exist.
+    fn resolved(flags: &Flags, config: Option<&Config>, env: &EnvVars) -> Resolution {
+        resolve(flags, config, env).expect("resolves")
+    }
+
     fn config_with_default() -> Config {
         crate::config::parse(
             r#"{
@@ -431,7 +505,7 @@ mod tests {
         ];
 
         for c in cases {
-            let got = resolve(&c.flags, c.config, &c.env).connection;
+            let got = resolved(&c.flags, c.config, &c.env).connection;
             assert_eq!(got.target, c.target, "{}", c.why);
             assert_eq!(got.source, c.source, "{}", c.why);
         }
@@ -446,7 +520,7 @@ mod tests {
             redis_port: Some("9999".into()),
             ..EnvVars::default()
         };
-        let got = resolve(&Flags::default(), None, &env).connection;
+        let got = resolved(&Flags::default(), None, &env).connection;
         assert_eq!(got.target, "redis://real-target:6379");
         assert!(!got.target.contains("stale-leftover"));
         assert!(!got.target.contains("9999"));
@@ -460,7 +534,7 @@ mod tests {
             ..EnvVars::default()
         };
         assert_eq!(
-            resolve(&Flags::default(), None, &env).connection.target,
+            resolved(&Flags::default(), None, &env).connection.target,
             "box:6390/0"
         );
     }
@@ -470,7 +544,7 @@ mod tests {
         // Every combination resolves to something. There is no "ask the user".
         for config in [None, Some(&config_with_default())] {
             for env in [EnvVars::default(), env_url("redis://x:1")] {
-                let got = resolve(&Flags::default(), config, &env).connection;
+                let got = resolved(&Flags::default(), config, &env).connection;
                 assert!(!got.target.is_empty());
             }
         }
@@ -483,7 +557,7 @@ mod tests {
             ..Flags::default()
         };
         assert_eq!(
-            resolve(&flags, None, &EnvVars::default())
+            resolved(&flags, None, &EnvVars::default())
                 .connection
                 .environment,
             Environment::Unknown
@@ -498,7 +572,7 @@ mod tests {
                 ..Flags::default()
             };
             assert_eq!(
-                resolve(&flags, None, &EnvVars::default())
+                resolved(&flags, None, &EnvVars::default())
                     .connection
                     .environment,
                 Environment::Local
@@ -525,7 +599,7 @@ mod tests {
                 ..Flags::default()
             };
             assert_eq!(
-                resolve(&flags, None, &EnvVars::default())
+                resolved(&flags, None, &EnvVars::default())
                     .connection
                     .environment,
                 Environment::Local,
@@ -547,7 +621,7 @@ mod tests {
                 ..Flags::default()
             };
             assert_eq!(
-                resolve(&flags, None, &EnvVars::default())
+                resolved(&flags, None, &EnvVars::default())
                     .connection
                     .environment,
                 Environment::Unknown,
@@ -564,7 +638,7 @@ mod tests {
             ..Flags::default()
         };
         assert_eq!(
-            resolve(&flags, None, &EnvVars::default())
+            resolved(&flags, None, &EnvVars::default())
                 .connection
                 .environment,
             Environment::Local
@@ -574,7 +648,7 @@ mod tests {
             ..Flags::default()
         };
         assert_eq!(
-            resolve(&flags, None, &EnvVars::default())
+            resolved(&flags, None, &EnvVars::default())
                 .connection
                 .environment,
             Environment::Unknown
@@ -587,27 +661,83 @@ mod tests {
         // declared Environment is a statement of fact, not a guess.
         let cfg = config_with_default();
         assert_eq!(
-            resolve(&Flags::default(), Some(&cfg), &EnvVars::default())
+            resolved(&Flags::default(), Some(&cfg), &EnvVars::default())
                 .connection
                 .environment,
             Environment::Staging
         );
     }
 
+    fn unknown(flags: &Flags, config: Option<&Config>) -> ResolveError {
+        resolve(flags, config, &EnvVars::default()).expect_err("an unknown Profile is refused")
+    }
+
     #[test]
-    fn an_unknown_profile_name_falls_through_rather_than_failing() {
+    fn a_misspelled_profile_flag_is_an_error_listing_the_available_ones() {
         let cfg = config_with_default();
         let flags = Flags {
-            profile: Some("nonexistent".into()),
+            profile: Some("stagin".into()),
             ..Flags::default()
         };
-        // Falls through to the default Profile; the name is validated at load.
+        let err = unknown(&flags, Some(&cfg));
         assert_eq!(
-            resolve(&flags, Some(&cfg), &EnvVars::default())
-                .connection
-                .source,
-            Source::Profile("staging".into())
+            err.to_string(),
+            "no Profile named \"stagin\"; available Profiles: prod, staging"
         );
+    }
+
+    /// The flag and the positional name arrive as the same `Flags::profile`
+    /// (the shell merges them), so one case covers both; `tests/startup.rs`
+    /// in the app crate runs both spellings through the binary.
+    #[test]
+    fn a_misspelled_profile_is_refused_even_beside_an_explicit_target() {
+        let cfg = config_with_default();
+        let flags = Flags {
+            profile: Some("nope".into()),
+            host: Some("somewhere".into()),
+            ..Flags::default()
+        };
+        assert!(matches!(
+            unknown(&flags, Some(&cfg)),
+            ResolveError::UnknownProfile { .. }
+        ));
+    }
+
+    #[test]
+    fn a_profile_name_with_no_config_file_says_so() {
+        let flags = Flags {
+            profile: Some("prod".into()),
+            ..Flags::default()
+        };
+        let err = unknown(&flags, None);
+        assert_eq!(
+            err.to_string(),
+            "no Profile named \"prod\": there is no config file, so no Profiles are defined"
+        );
+    }
+
+    #[test]
+    fn a_config_with_no_profiles_says_so() {
+        let cfg = crate::config::parse(r#"{"profiles":{}}"#).unwrap();
+        let flags = Flags {
+            profile: Some("prod".into()),
+            ..Flags::default()
+        };
+        assert_eq!(
+            unknown(&flags, Some(&cfg)).to_string(),
+            "no Profile named \"prod\": the config file defines no Profiles"
+        );
+    }
+
+    #[test]
+    fn a_correctly_spelled_profile_still_resolves() {
+        let cfg = config_with_default();
+        let flags = Flags {
+            profile: Some("prod".into()),
+            ..Flags::default()
+        };
+        let got = resolve(&flags, Some(&cfg), &EnvVars::default()).unwrap();
+        assert_eq!(got.connection.source, Source::Profile("prod".into()));
     }
 
     #[test]
@@ -619,7 +749,7 @@ mod tests {
             ..Flags::default()
         };
         assert_eq!(
-            resolve(&flags, Some(&cfg), &EnvVars::default())
+            resolved(&flags, Some(&cfg), &EnvVars::default())
                 .connection
                 .target,
             "redis.prod:6380/7"
@@ -635,6 +765,11 @@ mod credential_tests {
 
     use super::*;
 
+    /// `resolve`, for cases where the Profile is known to exist.
+    fn resolved(flags: &Flags, config: Option<&Config>, env: &EnvVars) -> Resolution {
+        resolve(flags, config, env).expect("resolves")
+    }
+
     fn config(json: &str) -> Config {
         crate::config::parse(json).unwrap()
     }
@@ -645,7 +780,7 @@ mod credential_tests {
             profile: Some(profile.into()),
             ..Flags::default()
         };
-        resolve(&flags, Some(&cfg), &EnvVars::default()).credentials
+        resolved(&flags, Some(&cfg), &EnvVars::default()).credentials
     }
 
     #[test]
@@ -705,7 +840,7 @@ mod credential_tests {
             redis_password: Some("s3cret".into()),
             ..EnvVars::default()
         };
-        let c = resolve(&Flags::default(), None, &env).credentials;
+        let c = resolved(&Flags::default(), None, &env).credentials;
         assert_eq!(c.username.as_deref(), Some("app"));
         assert_eq!(c.password, PasswordSource::Literal("s3cret".into()));
     }
@@ -724,7 +859,7 @@ mod credential_tests {
             profile: Some("p".into()),
             ..Flags::default()
         };
-        let c = resolve(&flags, Some(&cfg), &env).credentials;
+        let c = resolved(&flags, Some(&cfg), &env).credentials;
         assert_eq!(c.password, PasswordSource::Env("PROFILE_PW".into()));
         assert!(c.username.is_none(), "the stale username must not leak in");
     }
@@ -741,7 +876,7 @@ mod credential_tests {
             password: Some("override-me".into()),
             ..Flags::default()
         };
-        let c = resolve(&flags, Some(&cfg), &EnvVars::default()).credentials;
+        let c = resolved(&flags, Some(&cfg), &EnvVars::default()).credentials;
         assert_eq!(c.password, PasswordSource::Literal("override-me".into()));
     }
 
@@ -754,7 +889,7 @@ mod credential_tests {
             password: Some("hunter2".into()),
             ..Flags::default()
         };
-        let c = resolve(&flags, None, &EnvVars::default()).credentials;
+        let c = resolved(&flags, None, &EnvVars::default()).credentials;
         assert_eq!(c.password, PasswordSource::Literal("hunter2".into()));
     }
 
@@ -766,7 +901,7 @@ mod credential_tests {
             tls: true,
             ..Flags::default()
         };
-        let c = resolve(&flags, None, &EnvVars::default()).credentials;
+        let c = resolved(&flags, None, &EnvVars::default()).credentials;
         assert_eq!(c.username.as_deref(), Some("app"));
         assert!(c.tls);
     }
@@ -783,7 +918,7 @@ mod credential_tests {
             host: Some("cache-01".into()),
             ..Flags::default()
         };
-        let c = resolve(&flags, None, &env).credentials;
+        let c = resolved(&flags, None, &env).credentials;
         assert_eq!(c.password, PasswordSource::Literal("from-env".into()));
     }
 }
@@ -794,6 +929,11 @@ mod redaction_tests {
     //! (ADR-0001), so anything in it is on screen for the whole session.
 
     use super::*;
+
+    /// `resolve`, for cases where the Profile is known to exist.
+    fn resolved(flags: &Flags, config: Option<&Config>, env: &EnvVars) -> Resolution {
+        resolve(flags, config, env).expect("resolves")
+    }
 
     #[test]
     fn a_password_in_a_url_is_replaced() {
@@ -827,7 +967,7 @@ mod redaction_tests {
             redis_url: Some("rediss://default:hunter2@h.upstash.io:6379".into()),
             ..EnvVars::default()
         };
-        let target = resolve(&Flags::default(), None, &env).connection.target;
+        let target = resolved(&Flags::default(), None, &env).connection.target;
         assert!(
             !target.contains("hunter2"),
             "leaked into the title bar: {target}"
@@ -837,7 +977,9 @@ mod redaction_tests {
             url: Some("rediss://default:hunter2@h:6379".into()),
             ..Flags::default()
         };
-        let target = resolve(&flags, None, &EnvVars::default()).connection.target;
+        let target = resolved(&flags, None, &EnvVars::default())
+            .connection
+            .target;
         assert!(
             !target.contains("hunter2"),
             "leaked into the title bar: {target}"

@@ -9,9 +9,9 @@ the SmartScreen prompt. See [Installation](getting-started/installation.md).
 ## It connected to the wrong place
 
 Read the title bar. It shows the target, the Environment and the Source. `from default` means
-nothing else applied and you're on `127.0.0.1:6379`. A `--profile` name that isn't in your config
-file is skipped without an error, so a typo gets you `from default`. Check with
-`redis-pane --print-target`. See [How the target is chosen](connecting/target.md).
+nothing else applied and you're on `127.0.0.1:6379`. Check with `redis-pane --print-target`. A
+`--profile` name that isn't in your config file is an error (`no Profile named "..."`, exit code
+`3`), not a fallback. See [How the target is chosen](connecting/target.md).
 
 ## The config file is refused
 

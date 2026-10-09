@@ -27,9 +27,15 @@ and where the target came from.
 Resolving silently is what makes zero configuration possible, and that readout is the safeguard
 for it. Read it before you press a key that writes.
 
-> **A misspelled Profile name doesn't stop you.** If `--profile` names something the config file
-> doesn't define, that flag is skipped and the next rule applies. A typo can land you on
-> `from default`, a local Redis. The Source in the title bar is how you notice.
+**A Profile you name has to exist.** If `--profile` (or a bare name) isn't defined in the config
+file, `redis-pane` stops with an error that names it and lists the Profiles it does have, and exits
+with code `3`. It does not fall through to the next rule, because a typo would then land you on a
+local Redis. If there is no config file at all, the error says so.
+
+```text
+$ redis-pane --profile stagin
+redis-pane: no Profile named "stagin"; available Profiles: prod, staging
+```
 
 ## `REDIS_URL` is used whole
 
@@ -82,5 +88,5 @@ and the reason. It does not open an empty error screen. The exit code tells scri
 | --- | --- |
 | `0` | Success. |
 | `2` | The target couldn't be reached, or refused the credentials. |
-| `3` | The [config file](profiles.md) was malformed or refused. |
+| `3` | The [config file](profiles.md) was malformed or refused, or the Profile you named on the command line isn't defined in it. |
 | `4` | The server is older than Redis 6.0, or doesn't speak RESP3. |

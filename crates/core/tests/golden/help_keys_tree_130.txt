@@ -1,24 +1,24 @@
 ─ redis-pane ─ ● staging · cache-01:6379/0 · from profile staging ─────────────────────────────────────────────────────── ● live ─
-
- KEY        ┌─ help · keys pane · tree ──────────────────────────────────────────────────────────────────────────────┐
- ▾ cart:    │ →         open / expand                                                                                │
-   ● 91af3c9│ /         filter                                                                                       │
- ▾ feed:    │ s         sort                                                                                         │
-   ▾ global:│ t         flat view                                                                                    │
-     ● hot  │ d         delete                                                                                       │
- ▾ user:    │ c         copy                                                                                         │
-   ▾ 8812:  │ r         rescan                                                                                       │
-     ● cart │ C         copy redis-cli command                                                                       │
-     ● profi│ R         rename                                                                                       │
-     ● sessi│ D         duplicate key (COPY)                                                                         │
-   ▾ 8813:  │ Space     mark                                                                                         │
-     ● sessi│ ↑↓ jk     move                                                                                         │
-            │ PgUp/PgDn page                                                                                         │
-            │ Home/End  top/bottom                                                                                   │
-            │                                                                                                        │
-            │ ⌃R read-only   g s slowlog   g m monitor   g p pub/sub   g d dashboard   Esc back   q quit   ? F1 help │
-            │                                                                                                        │
-            │ Tab value keys · Esc close                                                                             │
-            └────────────────────────────────────────────────────────────────────────────────────────────────────────┘
-    sorted by name
+┌─ help · keys pane · tree ──────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│ →         open / expand                                                                                                        │
+│ /         filter                                                                                                               │
+│ s         sort                                                                                                                 │
+│ t         flat view                                                                                                            │
+│ d         delete                                                                                                               │
+│ c         copy                                                                                                                 │
+│ r         rescan                                                                                                               │
+│ C         copy redis-cli command                                                                                               │
+│ R         rename                                                                                                               │
+│ D         duplicate key (COPY)                                                                                                 │
+│ Space     mark                                                                                                                 │
+│ ↑↓ jk     move                                                                                                                 │
+│ PgUp/PgDn page                                                                                                                 │
+│ Home/End  top/bottom                                                                                                           │
+│ ⏎         open & move in                                                                                                       │
+│ ← h       collapse / parent                                                                                                    │
+│                                                                                                                                │
+│ ⌃R read-only   g s slowlog   g m monitor   g p pub/sub   g d dashboard   Esc back   q ⌃C quit   ⌃← ⌃→ narrow / widen keys   ? F1
+│                                                                                                                                │
+│ Tab value keys · Esc close                                                                                                     │
+└────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
  → open / expand   / filter   s sort   t flat view   d delete   c copy   r rescan   C copy redis-cli command   ? F1 help

@@ -19,6 +19,7 @@ use std::borrow::Cow;
 
 use crate::State;
 use crate::keymap::{Action, key_label};
+use crate::msg::{KeyCode, KeyPress};
 use crate::render::layout::Pane;
 use crate::state::value::Value;
 use crate::state::{EditTarget, FieldPart, Link, OpenKey, ReadOnlyReason};
@@ -411,6 +412,24 @@ fn keys_for(state: &State, action: Action) -> String {
     state.keymap.hint(action).unwrap_or_default()
 }
 
+/// A literal key's label, spelled by [`key_label`] so `Enter` is `⏎` here as it
+/// is on the hint bar and in the keymap table — one spelling everywhere.
+fn lit(code: KeyCode) -> String {
+    key_label(&KeyPress::plain(code))
+}
+
+/// Every key bound to `action`, merged (`q ⌃C`), the way `? F1` already is.
+fn all_keys_for(state: &State, action: Action) -> String {
+    state
+        .keymap
+        .bindings()
+        .iter()
+        .filter(|b| b.action == action)
+        .map(|b| key_label(&b.key))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 /// A row for a plain, rebindable `Action` with an explicit label.
 fn action_row(state: &State, action: Action, label: &'static str) -> HelpRow {
     HelpRow::new(keys_for(state, action), label)
@@ -422,14 +441,7 @@ fn action_row(state: &State, action: Action, label: &'static str) -> HelpRow {
 /// really do open help there. Outside Normal mode only `F1` does
 /// (`f1_help_keys`), so this is Normal-mode-only.
 fn help_keys(state: &State) -> String {
-    state
-        .keymap
-        .bindings()
-        .iter()
-        .filter(|b| b.action == Action::Help)
-        .map(|b| key_label(&b.key))
-        .collect::<Vec<_>>()
-        .join(" ")
+    all_keys_for(state, Action::Help)
 }
 
 /// The literal `F1` binding(s), filtered to just the ones spelled `F1` —
@@ -477,7 +489,7 @@ pub fn here(state: &State, ctx: HelpContext) -> Vec<HelpRow> {
         HelpContext::PubSubAdding => vec![
             HelpRow::new(keys_for(state, Action::EnterValueCursor), "subscribe"),
             HelpRow::new(
-                "Tab",
+                lit(KeyCode::Tab),
                 if state.sharded_available() {
                     "sharded"
                 } else {
@@ -750,6 +762,18 @@ fn keys_rows(state: &State, tree: bool, filtered: bool) -> Vec<HelpRow> {
     rows.push(HelpRow::new("↑↓ jk", "move"));
     rows.push(HelpRow::new("PgUp/PgDn", "page"));
     rows.push(HelpRow::new("Home/End", "top/bottom"));
+    // Ranked below the motions, so a short terminal clips these before the
+    // motions: they are the keys a reader learns last. `⏎` opens the key and
+    // moves into its value (`enter_value_cursor`); `←`/`h` collapses a group
+    // or steps to its parent.
+    rows.push(HelpRow::new(
+        keys_for(state, Action::EnterValueCursor),
+        "open & move in",
+    ));
+    rows.push(HelpRow::new(
+        all_keys_for(state, Action::CollapseGroup),
+        Action::CollapseGroup.label(),
+    ));
     rows
 }
 
@@ -968,6 +992,8 @@ fn value_rows(state: &State, open: Option<ValueContext>) -> Vec<HelpRow> {
 fn editor_rows(state: &State, ctx: EditorContext) -> Vec<HelpRow> {
     let cancel = HelpRow::new(keys_for(state, Action::Cancel), "cancel");
     let undo = HelpRow::new(keys_for(state, Action::EditorUndo), "undo");
+    // Ranked after `cancel`, so it cannot push the way out off a narrow bar.
+    let redo = HelpRow::new(keys_for(state, Action::EditorRedo), "redo");
     let stage_row = |state: &State, keys: String, label: &'static str| {
         let row = HelpRow::new(keys, label);
         match Refusal::read_only(state, true) {
@@ -980,14 +1006,20 @@ fn editor_rows(state: &State, ctx: EditorContext) -> Vec<HelpRow> {
             stage_row(state, keys_for(state, Action::EditorStage), "stage"),
             undo,
             cancel,
+            redo,
         ],
-        EditorContext::Field => vec![stage_row(state, "Enter".to_string(), "stage"), undo, cancel],
+        EditorContext::Field => vec![
+            stage_row(state, lit(KeyCode::Enter), "stage"),
+            undo,
+            cancel,
+            redo,
+        ],
         // The next half's noun differs by form (`hint_bar`'s own distinction,
         // today: "Enter value" for the Hash add form's name part, "Enter
         // score" for the ZSet add form's member part) — D6, ADR-0018.
         EditorContext::AddFormName { zset } => {
             let next = if zset { "next: score" } else { "next: value" };
-            vec![HelpRow::new("Enter", next), cancel]
+            vec![HelpRow::new(lit(KeyCode::Enter), next), cancel]
         }
         EditorContext::AddFormValue { zset } => {
             let back = if zset {
@@ -996,22 +1028,25 @@ fn editor_rows(state: &State, ctx: EditorContext) -> Vec<HelpRow> {
                 "back to field"
             };
             vec![
-                stage_row(state, "Enter".to_string(), "stage"),
-                HelpRow::new("↑", back),
+                stage_row(state, lit(KeyCode::Enter), "stage"),
+                HelpRow::new(lit(KeyCode::Up), back),
                 undo,
                 cancel,
+                redo,
             ]
         }
         EditorContext::ListAdd => vec![
-            stage_row(state, "Enter".to_string(), "stage"),
-            HelpRow::new("Tab", "head/tail"),
+            stage_row(state, lit(KeyCode::Enter), "stage"),
+            HelpRow::new(lit(KeyCode::Tab), "head/tail"),
             undo,
             cancel,
+            redo,
         ],
         EditorContext::ZSetScore => vec![
             stage_row(state, keys_for(state, Action::EditorStage), "stage"),
             undo,
             cancel,
+            redo,
         ],
         EditorContext::Ttl => vec![
             stage_row(state, keys_for(state, Action::EditorStage), "apply"),
@@ -1144,7 +1179,23 @@ pub fn everywhere(state: &State) -> Vec<HelpRow> {
                 rows.push(HelpRow::new(keys, Action::OpenKeysView.label()));
             }
             rows.push(action_row(state, Action::Cancel, "back"));
-            rows.push(action_row(state, Action::Quit, "quit"));
+            rows.push(HelpRow::new(all_keys_for(state, Action::Quit), "quit"));
+            // `⌃←`/`⌃→` resize the two panes, so they belong to the browser
+            // (not a full-screen view) and only where there are two panes on
+            // screen (`State::split_is_adjustable`, the gate `update`
+            // applies). Listed here rather than under HERE, last before
+            // `help`: a HERE row would sit ahead of `⌃R` and the view chords
+            // on the hint bar and push them off it.
+            if state.screen == crate::state::View::Keys && state.split_is_adjustable() {
+                rows.push(HelpRow::new(
+                    format!(
+                        "{} {}",
+                        keys_for(state, Action::NarrowKeysPane),
+                        keys_for(state, Action::WidenKeysPane)
+                    ),
+                    "narrow / widen keys",
+                ));
+            }
             rows.push(HelpRow::new(help_keys(state), "help"));
             rows
         }
@@ -1511,7 +1562,39 @@ mod tests {
             .iter()
             .find(|r| r.label == "quit")
             .expect("quit row");
-        assert_eq!(quit.keys, "x");
+        // The new key leads; `q` and `⌃C` still quit, so they still show.
+        assert_eq!(quit.keys, "x q ⌃C");
+    }
+
+    #[test]
+    fn quit_shows_ctrl_c_beside_q() {
+        let s = State::default();
+        let quit = everywhere(&s)
+            .into_iter()
+            .find(|r| r.label == "quit")
+            .expect("quit row");
+        assert_eq!(quit.keys, "q ⌃C");
+    }
+
+    #[test]
+    fn the_keys_pane_lists_enter_and_collapse() {
+        let s = State::default();
+        let rows = here(&s, context(&s));
+        let find = |label: &str| {
+            rows.iter()
+                .find(|r| r.label == label)
+                .map(|r| r.keys.clone())
+        };
+        assert_eq!(find("open & move in").as_deref(), Some("⏎"));
+        assert_eq!(find("collapse / parent").as_deref(), Some("← h"));
+    }
+
+    #[test]
+    fn the_editor_lists_redo_and_spells_enter_as_the_keymap_does() {
+        let s = State::default();
+        let rows = here(&s, HelpContext::Editor(EditorContext::Field));
+        assert!(rows.iter().any(|r| r.label == "redo" && r.keys == "⌃Y"));
+        assert!(rows.iter().any(|r| r.label == "stage" && r.keys == "⏎"));
     }
 
     // ── row-count bound at 80×24 ─────────────────────────────────────────
