@@ -21,3 +21,13 @@ The release steps. The tag push is the only irreversible one, and it waits for t
 8. **Verify the assets:** `gh release view <tag> --json assets` lists the four platform archives,
    their checksums and both installers. Run the installer and confirm `redis-pane --version`
    prints the new version.
+
+## First release from the org
+
+A one-off checklist for the first release after the move to `redis-pane/redis-pane`. Remove this
+section once it is done.
+
+- [ ] `dist plan` resolves `redis-pane/redis-pane`.
+- [ ] The new release's installer URLs and asset links point at the org.
+- [ ] The README release badge shows the new version.
+- [ ] The old `vinodsantharam/redis-pane` installer URL still redirects.
