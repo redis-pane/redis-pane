@@ -6,8 +6,8 @@ language = "en"
 src = "src"
 
 [output.html]
-git-repository-url = "https://github.com/vinodsantharam/redis-pane"
-edit-url-template = "https://github.com/vinodsantharam/redis-pane/edit/main/book/{path}"
+git-repository-url = "https://github.com/redis-pane/redis-pane"
+edit-url-template = "https://github.com/redis-pane/redis-pane/edit/main/book/{path}"
 site-url = "/redis-pane/"
 
 [output.html.search]

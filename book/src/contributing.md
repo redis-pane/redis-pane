@@ -1,7 +1,7 @@
 # Contributing
 
 Working on the code? These are where to start, all in the
-[repository](https://github.com/vinodsantharam/redis-pane):
+[repository](https://github.com/redis-pane/redis-pane):
 
 - **`CLAUDE.md`** has the architecture notes, the commands to build and test, and the
   conventions. Despite the name, it's the guide for any contributor.

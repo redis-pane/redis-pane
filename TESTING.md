@@ -3,7 +3,7 @@
 Thanks for trying `redis-pane`. This is `0.1.0-beta.4`. It's early, so expect rough edges, and
 please say so when you hit one.
 
-The full guide is the [user guide](https://vinodsantharam.github.io/redis-pane). Its source is in
+The full guide is the [user guide](https://redis-pane.github.io/redis-pane). Its source is in
 [`book/src`](book/src/README.md).
 
 ## Install

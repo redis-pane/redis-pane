@@ -1,7 +1,7 @@
 # redis-pane
 
-[![CI](https://github.com/vinodsantharam/redis-pane/actions/workflows/ci.yml/badge.svg)](https://github.com/vinodsantharam/redis-pane/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/vinodsantharam/redis-pane?include_prereleases)](https://github.com/vinodsantharam/redis-pane/releases)
+[![CI](https://github.com/redis-pane/redis-pane/actions/workflows/ci.yml/badge.svg)](https://github.com/redis-pane/redis-pane/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/redis-pane/redis-pane?include_prereleases)](https://github.com/redis-pane/redis-pane/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 A terminal UI for Redis: see your keyspace, open a key, watch it change, edit it safely.
@@ -49,13 +49,13 @@ binary that runs in the terminal you are already in, driven from the keyboard.
 - Type, memory and TTL fill in as you scroll. Every Redis type has its own view.
 - Your pane split, filter, sort and selected key come back when you relaunch.
 
-→ [docs](https://vinodsantharam.github.io/redis-pane/browsing/key-list.html)
+→ [docs](https://redis-pane.github.io/redis-pane/browsing/key-list.html)
 
 **See it live**
 - The open key updates the moment another client changes it, pushed by the server.
 - If live updates ever stop working, the header says so. It never goes quietly stale.
 
-→ [docs](https://vinodsantharam.github.io/redis-pane/viewing/live-updates.html)
+→ [docs](https://redis-pane.github.io/redis-pane/viewing/live-updates.html)
 
 **Edit safely**
 - Edit Strings, Hash fields, List elements, Set members and Sorted set scores in place.
@@ -64,13 +64,13 @@ binary that runs in the terminal you are already in, driven from the keyboard.
 - Each target has an Environment (`local`, `staging`, `prod`, `unknown`). `prod` and `unknown`
   start in Read-only Mode.
 
-→ [docs](https://vinodsantharam.github.io/redis-pane/editing/values.html)
+→ [docs](https://redis-pane.github.io/redis-pane/editing/values.html)
 
 **Watch the server**
 - A Dashboard of memory, hit ratio, ops/sec, clients and replication.
 - A live Monitor tail, Pub/Sub (sharded too) and the Slowlog, each a keystroke away.
 
-→ [docs](https://vinodsantharam.github.io/redis-pane/server/dashboard.html)
+→ [docs](https://redis-pane.github.io/redis-pane/server/dashboard.html)
 
 ![The Monitor view: a live tail of commands streaming in under a warning banner, paused while the skipped count climbs, then filtered down to HSET commands](monitor-demo.gif)
 
@@ -79,7 +79,7 @@ binary that runs in the terminal you are already in, driven from the keyboard.
   open key stays live on its owner through failovers.
 - A `redis-sentinel://` URL resolves to the current master.
 
-→ [docs](https://vinodsantharam.github.io/redis-pane/connecting/cluster.html)
+→ [docs](https://redis-pane.github.io/redis-pane/connecting/cluster.html)
 
 **Fits any terminal**
 - Dark, light and high-contrast themes, plus your own.
@@ -87,7 +87,7 @@ binary that runs in the terminal you are already in, driven from the keyboard.
 - The mouse works but is never required.
 - Copy goes to your local clipboard over SSH using OSC 52.
 
-→ [docs](https://vinodsantharam.github.io/redis-pane/appearance/terminal-sizes.html)
+→ [docs](https://redis-pane.github.io/redis-pane/appearance/terminal-sizes.html)
 
 ## What it doesn't do
 
@@ -102,20 +102,20 @@ binary that runs in the terminal you are already in, driven from the keyboard.
   target and where it came from, so read it.
 - Not a server manager, an alerting tool or a metrics store, and no multi-server workspace.
 
-The full list is [Limits and non-goals](https://vinodsantharam.github.io/redis-pane/limits.html).
+The full list is [Limits and non-goals](https://redis-pane.github.io/redis-pane/limits.html).
 
 ## Install
 
-Download the binary for your OS from the [Releases page](https://github.com/vinodsantharam/redis-pane/releases) — macOS, Linux, and Windows are all covered. Or run the install script:
+Download the binary for your OS from the [Releases page](https://github.com/redis-pane/redis-pane/releases) — macOS, Linux, and Windows are all covered. Or run the install script:
 
 ```bash
-curl --proto '=https' --tlsv1.2 -LsSf https://github.com/vinodsantharam/redis-pane/releases/download/v0.1.0-beta.4/redis-pane-installer.sh | sh
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/redis-pane/redis-pane/releases/download/v0.1.0-beta.4/redis-pane-installer.sh | sh
 ```
 
 On Windows, from PowerShell:
 
 ```powershell
-irm https://github.com/vinodsantharam/redis-pane/releases/download/v0.1.0-beta.4/redis-pane-installer.ps1 | iex
+irm https://github.com/redis-pane/redis-pane/releases/download/v0.1.0-beta.4/redis-pane-installer.ps1 | iex
 ```
 
 These beta builds are unsigned, so your OS may flag them on first run — on macOS, right-click the
@@ -124,7 +124,7 @@ binary → Open → confirm; on Windows, click "More info" → "Run anyway" in t
 Prefer to build it yourself? You'll need [Rust](https://rustup.rs):
 
 ```bash
-git clone https://github.com/vinodsantharam/redis-pane.git
+git clone https://github.com/redis-pane/redis-pane.git
 cd redis-pane
 cargo build --release
 ```
@@ -147,17 +147,17 @@ The keys that matter:
 - `g m`, `g p`, `g s` and `g d` open Monitor, Pub/Sub, Slowlog and Dashboard. `q` quits.
 
 `?` shows every key that works where you are. The full list is the
-[keybindings reference](https://vinodsantharam.github.io/redis-pane/reference/keybindings.html).
+[keybindings reference](https://redis-pane.github.io/redis-pane/reference/keybindings.html).
 
 ![Folding a tree group with Left/Right, filtering down to one key, and moving a real cursor through its value with Enter and the arrow keys](navigation-demo.gif)
 
 ## Documentation
 
-The user guide is at **<https://vinodsantharam.github.io/redis-pane>**. Start with
-[Connecting](https://vinodsantharam.github.io/redis-pane/connecting/target.html),
-[Environments and safety](https://vinodsantharam.github.io/redis-pane/safety/environments.html),
-[Editing](https://vinodsantharam.github.io/redis-pane/editing/values.html) and the
-[reference](https://vinodsantharam.github.io/redis-pane/reference/cli.html) pages.
+The user guide is at **<https://redis-pane.github.io/redis-pane>**. Start with
+[Connecting](https://redis-pane.github.io/redis-pane/connecting/target.html),
+[Environments and safety](https://redis-pane.github.io/redis-pane/safety/environments.html),
+[Editing](https://redis-pane.github.io/redis-pane/editing/values.html) and the
+[reference](https://redis-pane.github.io/redis-pane/reference/cli.html) pages.
 Its source is in [`book/src`](book/src/README.md).
 
 ## Compatibility
