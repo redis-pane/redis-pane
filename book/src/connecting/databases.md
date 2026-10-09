@@ -23,6 +23,7 @@ redis-pane --url redis://localhost:6379/3
 
 > **`--db` doesn't change a URL.** With `--url`, a Profile's `url`, or `REDIS_URL`, `--db` and a
 > Profile's `db` are not applied to the connection, even though the title bar then shows the
-> number. Put the database in the URL itself.
+> number. Put the database in the URL itself. This is a known bug, recorded in
+> [`docs/UI_TASKS.md`](https://github.com/redis-pane/redis-pane/blob/main/docs/UI_TASKS.md).
 
 On a [Cluster](cluster.md) there is only database 0.

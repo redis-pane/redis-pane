@@ -8,6 +8,16 @@ promise a stable interface.
 
 ### Changed
 
+- A Profile named on the command line that the config file doesn't define, by `--profile` or as a
+  bare name, is now an error that names it and lists the available Profiles. It exits with code
+  `2`. Before, it silently fell back to `127.0.0.1:6379`.
+- The help overlay lists `Enter` (open into the value), `←`/`h` (collapse or parent), `⌃←`/`⌃→`
+  (resize the panes) and `⌃Y` (redo, in the editor), and shows `⌃C` beside `q`. `Enter` is spelled
+  `⏎` everywhere.
+- `redis-pane --help` describes `--host` and `--port`, explains how the target is chosen, and no
+  longer cites an internal document under `--db`.
+- The keybindings reference no longer says you can override bindings. Keys can't be rebound.
+
 - Bulk delete on an `unknown` Environment now asks you to type the count of keys, as it already
   did on `prod`.
 

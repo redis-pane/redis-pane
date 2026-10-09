@@ -97,9 +97,8 @@ binary that runs in the terminal you are already in, driven from the keyboard.
 - Keys can't be rebound. The keymap is fixed in this release.
 - Streams are a read-only list of the newest 500 entries.
 - Keys beyond 2,000,000 aren't loaded. Bulk delete marks only loaded keys, one at a time.
-- `--db` is ignored when the target is a URL. Put the database in the URL instead.
-- A misspelled `--profile` name falls back to `127.0.0.1:6379` without an error. The title bar shows the
-  target and where it came from, so read it.
+- `--db` is ignored when the target is a URL, though the title bar shows it. Put the database in the
+  URL instead. Known bug, tracked in [`docs/UI_TASKS.md`](docs/UI_TASKS.md).
 - Not a server manager, an alerting tool or a metrics store, and no multi-server workspace.
 
 The full list is [Limits and non-goals](https://redis-pane.github.io/redis-pane/limits.html).

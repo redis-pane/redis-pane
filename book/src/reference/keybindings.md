@@ -2,7 +2,7 @@
 
 > Generated from the keymap; do not edit. Regenerate with `UPDATE_DOCS=1 cargo test -p redis-pane-core --test docs_reference`.
 
-These are the default bindings. The help overlay (`?` or `F1`) and the hint bar show the bindings in force, including any you have overridden. Where a key does a different thing depending on state, the row shows both, separated by `/`.
+These are the bindings. Keys can't be rebound from the config file. The help overlay (`?` or `F1`) and the hint bar show what the keys do in the context you are in. Where a key does a different thing depending on state, the row shows both, separated by `/`.
 
 ## Everywhere
 
@@ -17,7 +17,7 @@ Keys that work in every view while no prompt or dialog has the keyboard. While a
 | `g p` | pub/sub |
 | `g d` | dashboard |
 | `Esc` | back |
-| `q` | quit |
+| `q ⌃C` | quit |
 | `? F1` | help |
 | `g k` | keys |
 
@@ -41,6 +41,8 @@ The left pane. With keys marked, `d` deletes all of them and `Esc` lets them go.
 | `↑↓ jk` | move |
 | `PgUp/PgDn` | page |
 | `Home/End` | top/bottom |
+| `⏎` | open & move in |
+| `← h` | collapse / parent |
 
 ### Filter prompt
 
@@ -205,6 +207,7 @@ Editing a whole String or JSON value.
 | `⌃S` | stage |
 | `⌃Z` | undo |
 | `Esc` | cancel |
+| `⌃Y` | redo |
 
 ### Field or element
 
@@ -212,9 +215,10 @@ Editing a Hash field, a List element, or capturing a Set member.
 
 | Key | Action |
 | --- | --- |
-| `Enter` | stage |
+| `⏎` | stage |
 | `⌃Z` | undo |
 | `Esc` | cancel |
+| `⌃Y` | redo |
 
 ### New Hash field: name
 
@@ -222,7 +226,7 @@ The first half of the add-field form.
 
 | Key | Action |
 | --- | --- |
-| `Enter` | next: value |
+| `⏎` | next: value |
 | `Esc` | cancel |
 
 ### New Hash field: value
@@ -231,10 +235,11 @@ The second half of the add-field form.
 
 | Key | Action |
 | --- | --- |
-| `Enter` | stage |
+| `⏎` | stage |
 | `↑` | back to field |
 | `⌃Z` | undo |
 | `Esc` | cancel |
+| `⌃Y` | redo |
 
 ### New sorted-set member: name
 
@@ -242,7 +247,7 @@ The first half of the add-member form.
 
 | Key | Action |
 | --- | --- |
-| `Enter` | next: score |
+| `⏎` | next: score |
 | `Esc` | cancel |
 
 ### New sorted-set member: score
@@ -251,10 +256,11 @@ The second half of the add-member form.
 
 | Key | Action |
 | --- | --- |
-| `Enter` | stage |
+| `⏎` | stage |
 | `↑` | back to member |
 | `⌃Z` | undo |
 | `Esc` | cancel |
+| `⌃Y` | redo |
 
 ### New List element
 
@@ -262,10 +268,11 @@ Adding an element at the head or tail.
 
 | Key | Action |
 | --- | --- |
-| `Enter` | stage |
+| `⏎` | stage |
 | `Tab` | head/tail |
 | `⌃Z` | undo |
 | `Esc` | cancel |
+| `⌃Y` | redo |
 
 ### Sorted-set score
 
@@ -276,6 +283,7 @@ Editing an existing member's score.
 | `⌃S` | stage |
 | `⌃Z` | undo |
 | `Esc` | cancel |
+| `⌃Y` | redo |
 
 ### TTL
 

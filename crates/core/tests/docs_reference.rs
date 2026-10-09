@@ -116,9 +116,9 @@ fn render_keybindings() -> String {
     out.push_str(
         "# Keybindings\n\n\
 > Generated from the keymap; do not edit. Regenerate with `UPDATE_DOCS=1 cargo test -p redis-pane-core --test docs_reference`.\n\n\
-These are the default bindings. The help overlay (`?` or `F1`) and the hint bar show the \
-bindings in force, including any you have overridden. Where a key does a different thing \
-depending on state, the row shows both, separated by `/`.\n\n",
+These are the bindings. Keys can't be rebound from the config file. The help overlay (`?` or \
+`F1`) and the hint bar show what the keys do in the context you are in. Where a key does a \
+different thing depending on state, the row shows both, separated by `/`.\n\n",
     );
 
     // Everywhere: the Normal-mode globals, from the browser and from a view

@@ -13,6 +13,22 @@ clear and the app still had seven of them. The original audit was written on 202
 severity-1 item since has been found by using the app or auditing it afresh, never by the
 checkboxes**. Treat this section's emptiness as a prompt to look again, not as a result.*
 
+- [ ] **`--db` with a URL target shows one database and connects to another — found 2026-10-09
+  while writing the docs, postponed by the user the same day.** With `--url`, `REDIS_URL` or a
+  Profile's `url`, `--db N` puts `/N` in the title bar, but the connection uses the URL's own
+  database, or 0 if it names none. `format_url` appends `/N` to the *displayed* target, while
+  `dial_from` dials the raw URL untouched, so the readout and the connection disagree. A URL that
+  already carries a database, such as `redis://host/2`, displays as `/2/3` under `--db 3`. The
+  README and the book (Databases) document this as a known bug in the meantime. The code is in
+  `crates/core/src/resolve.rs`.
+  - **Decision pending**, two candidates:
+    1. the flag overrides the URL's database (rewrite the dialled URL's path; on a Cluster only
+       database 0 exists, so any other value must be refused there), or
+    2. the combination is refused at startup with a message saying to put the database in the URL.
+  - Either way the title bar must show the database the connection actually uses, and
+    `--print-target` and `--probe` must agree with it. Needs a test in `resolve.rs` for the
+    displayed target and one for the dialled URL.
+
 - [x] **Opening a gone key could badge a healthy one as deleted — reported from use, fixed
   2026-09-05.** Arrow onto an already-deleted key while a different one is open, and the Viewer
   kept showing the *previous* key's value, badged `✕ deleted just now` — the badge was lying about

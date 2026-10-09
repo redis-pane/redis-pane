@@ -4,17 +4,17 @@
  ● user:8812:cart                  zset       412 B   12m │ string · 2 bytes · 2.1 KB
  ● user:8812:profile               json       880 B     ∞ │ ttl 9m                                                         ● live
  ● user:8812:session               hash      2.1 KB   42m ├
- ● use┌─ help · value pane · string ───────────────────────────────────────────────────────────────────────────────────────┐
- ● car│ e         edit                                                                                                     │
- ● fee│ c         copy                                                                                                     │
-      │ t         edit ttl                                                                                                 │
-      │ r         refetch                                                                                                  │
-      │ C         copy redis-cli command                                                                                   │
-      │                                                                                                                    │
-      │ Tab focus   ⌃R read-only   g s slowlog   g m monitor   g p pub/sub   g d dashboard   Esc back   q quit   ? F1 help │
-      │                                                                                                                    │
-      │ Tab keys · Esc close                                                                                               │
-      └────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+┌─ help · value pane · string ───────────────────────────────────────────────────────────────────────────────────────────────────┐
+│ e         edit                                                                                                                 │
+│ c         copy                                                                                                                 │
+│ t         edit ttl                                                                                                             │
+│ r         refetch                                                                                                              │
+│ C         copy redis-cli command                                                                                               │
+│                                                                                                                                │
+│ Tab focus   ⌃R read-only   g s slowlog   g m monitor   g p pub/sub   g d dashboard   Esc back   q ⌃C quit   ⌃← ⌃→ narrow / widen
+│                                                                                                                                │
+│ Tab keys · Esc close                                                                                                           │
+└────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
                                                           │
                                                           │
                                                           │
