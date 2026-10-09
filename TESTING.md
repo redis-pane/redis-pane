@@ -52,7 +52,10 @@ something as new.
 
 ## Reporting something
 
-Open an issue on this repository, or message me directly. Please include:
+Use the [bug report form](https://github.com/redis-pane/redis-pane/issues/new?template=bug.yml).
+It asks for the details below. For questions and ideas, use
+[Discussions](https://github.com/redis-pane/redis-pane/discussions). You can also message me
+directly. Please include:
 
 - what you were doing, what you expected, and what happened instead
 - the version (`redis-pane --version`)

@@ -1,0 +1,92 @@
+name: Bug report
+description: Something in redis-pane doesn't work as documented.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. Check the [limits page](https://redis-pane.github.io/redis-pane/limits.html) first, since known gaps are listed there. For questions, use [Discussions](https://github.com/redis-pane/redis-pane/discussions).
+  - type: input
+    id: version
+    attributes:
+      label: redis-pane version
+      description: The output of `redis-pane --version`.
+      placeholder: redis-pane 0.1.0-beta.4
+    validations:
+      required: true
+  - type: input
+    id: terminal
+    attributes:
+      label: OS and terminal
+      description: Include tmux or SSH if you were using either.
+      placeholder: macOS 15, iTerm2, over SSH inside tmux
+    validations:
+      required: true
+  - type: input
+    id: server
+    attributes:
+      label: Redis server
+      description: The server version, and where it runs (local, Docker, Upstash, Redis Cloud, ElastiCache...).
+      placeholder: Redis 7.2 on ElastiCache
+    validations:
+      required: true
+  - type: dropdown
+    id: topology
+    attributes:
+      label: Topology
+      options:
+        - Standalone
+        - Sentinel
+        - Cluster
+    validations:
+      required: true
+  - type: dropdown
+    id: environment
+    attributes:
+      label: Environment shown in the title bar
+      options:
+        - local
+        - staging
+        - prod
+        - unknown
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Connect to ...
+        2. Open the key ...
+        3. Press ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected-actual
+    attributes:
+      label: Expected and actual behavior
+      description: What you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: screenshot
+    attributes:
+      label: Screenshot
+      description: Optional. Paste or drag an image in.
+    validations:
+      required: false
+  - type: textarea
+    id: probe
+    attributes:
+      label: Output of `redis-pane --probe`
+      description: Optional. Remove passwords first.
+      render: text
+    validations:
+      required: false
+  - type: checkboxes
+    id: redacted
+    attributes:
+      label: Privacy
+      options:
+        - label: I removed passwords and hostnames I don't want public.
+          required: true

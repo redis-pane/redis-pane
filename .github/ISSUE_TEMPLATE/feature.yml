@@ -1,0 +1,29 @@
+name: Feature request
+description: Propose a change or an addition.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Check the [Limits and non-goals](https://redis-pane.github.io/redis-pane/limits.html) page first, so a known non-goal isn't requested again. For open-ended ideas, use [Discussions](https://github.com/redis-pane/redis-pane/discussions).
+  - type: textarea
+    id: problem
+    attributes:
+      label: What were you trying to do?
+      description: The problem, not the solution.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: What you would like redis-pane to do.
+    validations:
+      required: true
+  - type: textarea
+    id: on-call
+    attributes:
+      label: Would an on-call engineer use this?
+      description: This is the test for every feature. Say when, and what they would otherwise do.
+    validations:
+      required: true
