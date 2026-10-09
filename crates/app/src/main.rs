@@ -159,7 +159,7 @@ fn main() {
     // a fallback: before the target is printed or dialled (ADR-0001).
     let resolution = resolve(&flags, config.as_ref(), &env_vars()).unwrap_or_else(|err| {
         eprintln!("redis-pane: {err}");
-        std::process::exit(exit::CONNECTION);
+        std::process::exit(exit::CONFIG);
     });
     let connection = resolution.connection.clone();
     // The displayed target is redacted; connecting needs the original, so the

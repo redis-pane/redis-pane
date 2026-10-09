@@ -26,10 +26,10 @@ use redis_pane_core::clock::Clock;
 pub mod exit {
     /// Everything worked.
     pub const OK: i32 = 0;
-    /// The resolved target could not be reached, or refused us, or the Profile
-    /// named on the command line does not exist (so there is no target).
+    /// The resolved target could not be reached, or refused us.
     pub const CONNECTION: i32 = 2;
-    /// The config file is malformed, or refused for being too readable.
+    /// The config file is malformed, or refused for being too readable, or a
+    /// Profile named on the command line is not in it.
     pub const CONFIG: i32 = 3;
     /// The server is below the floor: RESP3 and Redis 6.0 (R1.13, ADR-0007).
     pub const UNSUPPORTED_SERVER: i32 = 4;

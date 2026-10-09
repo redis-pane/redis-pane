@@ -58,10 +58,10 @@ mod tempdir {
 const CONFIG: &str = r#"{"profiles":{"staging":{"host":"cache-01","env":"staging"},"prod":{"host":"redis.prod","env":"prod"}}}"#;
 
 #[test]
-fn a_misspelled_profile_flag_exits_2_naming_it_and_the_available_ones() {
+fn a_misspelled_profile_flag_exits_3_naming_it_and_the_available_ones() {
     let dir = config_dir(Some(CONFIG));
     let out = run(dir.path(), &["--profile", "stagin", "--print-target"]);
-    assert_eq!(out.status.code(), Some(2));
+    assert_eq!(out.status.code(), Some(3));
     assert!(out.stdout.is_empty(), "nothing is resolved");
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(err.contains("\"stagin\""), "{err}");
@@ -69,17 +69,17 @@ fn a_misspelled_profile_flag_exits_2_naming_it_and_the_available_ones() {
 }
 
 #[test]
-fn a_misspelled_positional_profile_exits_2_too() {
+fn a_misspelled_positional_profile_exits_3_too() {
     let dir = config_dir(Some(CONFIG));
     let out = run(dir.path(), &["stagin", "--print-target"]);
-    assert_eq!(out.status.code(), Some(2));
+    assert_eq!(out.status.code(), Some(3));
 }
 
 #[test]
 fn a_profile_with_no_config_file_says_there_is_none() {
     let dir = config_dir(None);
     let out = run(dir.path(), &["--profile", "prod", "--print-target"]);
-    assert_eq!(out.status.code(), Some(2));
+    assert_eq!(out.status.code(), Some(3));
     assert!(String::from_utf8_lossy(&out.stderr).contains("no config file"));
 }
 

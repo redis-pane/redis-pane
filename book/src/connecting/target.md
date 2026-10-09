@@ -29,7 +29,7 @@ for it. Read it before you press a key that writes.
 
 **A Profile you name has to exist.** If `--profile` (or a bare name) isn't defined in the config
 file, `redis-pane` stops with an error that names it and lists the Profiles it does have, and exits
-with code `2`. It does not fall through to the next rule, because a typo would then land you on a
+with code `3`. It does not fall through to the next rule, because a typo would then land you on a
 local Redis. If there is no config file at all, the error says so.
 
 ```text
@@ -87,6 +87,6 @@ and the reason. It does not open an empty error screen. The exit code tells scri
 | Code | Meaning |
 | --- | --- |
 | `0` | Success. |
-| `2` | The target couldn't be reached, or refused the credentials, or the Profile you named on the command line isn't defined. |
-| `3` | The [config file](profiles.md) was malformed or refused. |
+| `2` | The target couldn't be reached, or refused the credentials. |
+| `3` | The [config file](profiles.md) was malformed or refused, or the Profile you named on the command line isn't defined in it. |
 | `4` | The server is older than Redis 6.0, or doesn't speak RESP3. |
