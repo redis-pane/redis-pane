@@ -97,6 +97,6 @@ If a topology change interrupts a scan, the list says so. You keep the keys load
 
 ## Something else
 
-Open an issue on the [GitHub repository](https://github.com/vinodsantharam/redis-pane/issues).
+Open an issue on the [GitHub repository](https://github.com/redis-pane/redis-pane/issues).
 Say what you were doing, what you expected, what happened, and what you were connected to (Redis
 version, and local, Upstash, Redis Cloud or something else).

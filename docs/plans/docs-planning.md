@@ -45,7 +45,7 @@ or how it compares to the tools they already use. Other problems:
 README.md      ~150 lines: the front door
 TESTING.md     what to try in this beta, how to report it
 CHANGELOG.md   per release, newest first
-book/          mdBook source → https://vinodsantharam.github.io/redis-pane
+book/          mdBook source → https://redis-pane.github.io/redis-pane
 docs/          unchanged: PRD, PLAN, DESIGN, ADRs, plans
 ```
 

@@ -6,7 +6,7 @@
 //!
 //! The module layout mirrors `docs/PLAN.md` §2.
 //!
-//! [ADR-0011]: https://github.com/vinodsantharam/redis-pane/blob/main/docs/adr/0011-functional-core-golden-frames.md
+//! [ADR-0011]: https://github.com/redis-pane/redis-pane/blob/main/docs/adr/0011-functional-core-golden-frames.md
 
 pub mod clock;
 pub mod command;

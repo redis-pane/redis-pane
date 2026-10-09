@@ -3,7 +3,7 @@
 ## Release binaries
 
 Download the binary for your system from the
-[Releases page](https://github.com/vinodsantharam/redis-pane/releases). There are builds for macOS
+[Releases page](https://github.com/redis-pane/redis-pane/releases). There are builds for macOS
 (Intel and Apple Silicon), Linux (x86_64) and Windows.
 
 Or run the installer script. The beta releases are marked as GitHub prereleases, so the
@@ -13,13 +13,13 @@ one from the Releases page.
 On macOS and Linux:
 
 ```bash
-curl --proto '=https' --tlsv1.2 -LsSf https://github.com/vinodsantharam/redis-pane/releases/download/v0.1.0-beta.4/redis-pane-installer.sh | sh
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/redis-pane/redis-pane/releases/download/v0.1.0-beta.4/redis-pane-installer.sh | sh
 ```
 
 On Windows, from PowerShell:
 
 ```powershell
-irm https://github.com/vinodsantharam/redis-pane/releases/download/v0.1.0-beta.4/redis-pane-installer.ps1 | iex
+irm https://github.com/redis-pane/redis-pane/releases/download/v0.1.0-beta.4/redis-pane-installer.ps1 | iex
 ```
 
 ## The first run of an unsigned binary
@@ -36,7 +36,7 @@ The beta builds are not signed, so your system may refuse them the first time.
 You need [Rust](https://rustup.rs).
 
 ```bash
-git clone https://github.com/vinodsantharam/redis-pane.git
+git clone https://github.com/redis-pane/redis-pane.git
 cd redis-pane
 cargo build --release
 ```
