@@ -1,9 +1,8 @@
 name: Docs
 
 # Builds the user guide (book/) and checks its links. On main it also publishes
-# the site to GitHub Pages. Pages is a repository setting that is enabled by
-# hand; until then the `deploy` job is allowed to fail (continue-on-error) so
-# the run stays green. Remove that line once Pages is on.
+# the site to GitHub Pages (https://redis-pane.github.io/redis-pane, source:
+# GitHub Actions). A failed deploy fails the run.
 
 on:
   push:
@@ -52,7 +51,6 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     # A separate job, so the build and the link check never depend on Pages.
-    continue-on-error: true
     permissions:
       pages: write
       id-token: write
