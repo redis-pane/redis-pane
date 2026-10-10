@@ -121,7 +121,7 @@ arms.
 
 The demo recordings on the docs site and in the README are rendered from `tapes/` with VHS by
 `./tapes/render.sh [name...]` (own container `redis-pane-demo` on :6390, temp XDG dirs; see
-[tapes/README.md](tapes/README.md)) and committed to `site/public/demos/`. They are not rendered in CI.
+[tapes/README.md](tapes/README.md)) and committed to `site/public/demos/` (webm, mp4, poster) and `docs/demos/` (the README's GIFs, kept out of `site/` so the static export does not ship them). They are not rendered in CI.
 
 ### Driving the app by hand
 

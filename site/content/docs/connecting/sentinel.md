@@ -53,5 +53,5 @@ As a Profile:
 
 If the master moves, the connection drops and `redis-pane` reconnects through Sentinel. As with
 any reconnect, the open key is re-armed for live updates before the header says `● live` again.
-See [Live updates](../viewing/live-updates.md). This release has been checked against a Sentinel
+See [Live updates](../viewing/live-updates.mdx). This release has been checked against a Sentinel
 resolving to a master, but not against a failover in progress.

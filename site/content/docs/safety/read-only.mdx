@@ -16,6 +16,8 @@ The title bar shows when it is on, and always says **why**:
 `⌃R` toggles the first two. When the reason is `replica`, the title bar says `locked` and `⌃R`
 isn't offered, because the server will refuse writes whatever `redis-pane` believes.
 
+<Demo name="safety" alt="A prod Profile opens read-only; d shows the command, y is refused, help dims the refused keys, and Ctrl+R lifts it" />
+
 ## What it refuses
 
 Anything that writes: editing a value, adding or removing members, changing a TTL, renaming or

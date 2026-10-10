@@ -12,13 +12,15 @@ title: "Bulk delete"
 
 `Esc` clears the marks. A rescan clears them too, since the list renumbers.
 
+<Demo name="bulk-delete" alt="Marking forty keys with Space, previewing DEL, typing the count on prod, and the deleting progress line" />
+
 ## On `prod` and `unknown`: type the count
 
 On `local` and `staging`, one `y` confirms. On `prod` and `unknown`, `y` opens a second step: you
 type the exact number of keys and press `⏎`. A wrong number keeps the dialog open and says so.
 Every other key is ignored, and `Esc` dismisses at any point.
 
-If you're in [Read-only Mode](../safety/read-only.md), you're refused at the first `y`, before
+If you're in [Read-only Mode](../safety/read-only.mdx), you're refused at the first `y`, before
 you are asked to type a count for something that can't run.
 
 ## While it runs

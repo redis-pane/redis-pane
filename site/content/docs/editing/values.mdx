@@ -4,11 +4,13 @@ title: "Editing values"
 
 You edit a value where it is, inside the value pane. A value that reads as JSON stays visible
 while you type. Every edit follows the same three steps: edit, stage, then confirm. See
-[Previews and confirmation](../safety/previews.md). Read-only Mode refuses at the confirm step,
+[Previews and confirmation](../safety/previews.mdx). Read-only Mode refuses at the confirm step,
 so you can try an edit on `prod` and see the command without running it.
 
 Put the value pane in focus (`Tab`, or open a key with `→`). For a Hash, List, Set or Sorted set,
 press `Enter` to put the cursor on the row you mean.
+
+<Demo name="edit-value" alt="Editing a JSON String in place: the version number changes, Ctrl+S stages it, the preview shows the old and new text and the SET command, and y writes it" />
 
 ## String and JSON
 
@@ -28,6 +30,8 @@ still exists. If the key has gone by the time you confirm, nothing is written, t
 
 Values over 200 KB aren't edited inline. `e` says so. Opening a value in your own `$EDITOR` is
 not built yet.
+
+<Demo name="edit-members" alt="Adding a Hash field, removing a List element and changing a Sorted-set score, each through its own command preview" />
 
 ## Hash
 
@@ -80,9 +84,9 @@ These are read-only here. You can change their [TTL](./ttl.md) and delete the wh
 ## Delete a key
 
 `d` in the key list stages `DEL` for the Selected key. With keys marked, it deletes all of them.
-See [Bulk delete](./bulk-delete.md). `y` confirms.
+See [Bulk delete](./bulk-delete.mdx). `y` confirms.
 
 ## Changes that arrive while you're editing
 
 An open editor is never touched by a live update. The header says `✎ editing · changed · held`,
-and when you finish, you see the result. See [Live updates](../viewing/live-updates.md).
+and when you finish, you see the result. See [Live updates](../viewing/live-updates.mdx).

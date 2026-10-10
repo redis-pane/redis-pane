@@ -46,7 +46,7 @@ Every field is described in the [configuration reference](../reference/configura
 ## Always set `env`
 
 A Profile with no `env` gets the Environment `unknown`, never `local`. `unknown` is a real
-Environment, and it starts in [Read-only Mode](../safety/read-only.md). Set `env` to `local`,
+Environment, and it starts in [Read-only Mode](../safety/read-only.mdx). Set `env` to `local`,
 `staging` or `prod` so the title bar and the safety rules match what you are connecting to. See
 [Environments](../safety/environments.md).
 

@@ -2,7 +2,7 @@
 
 The recordings on the docs site and in the README are rendered from the `.tape` files here with
 [VHS](https://github.com/charmbracelet/vhs). They are rendered locally and committed; CI does not
-render them. The only copy of the output is `site/public/demos/`.
+render them. The only copy of the output is `site/public/demos/` (video and posters) and `docs/demos/` (the README's GIFs).
 
 ## Prerequisites
 
@@ -18,13 +18,13 @@ render them. The only copy of the output is `site/public/demos/`.
 ./tapes/render.sh hero       # one, or several: ./tapes/render.sh hero monitor
 ```
 
-For each tape `render.sh` writes, into `site/public/demos/`:
+For each tape `render.sh` writes:
 
 | File | Used for |
 |---|---|
-| `<name>.webm`, `<name>.mp4` | the looping video the site plays (`<Demo name="..." />`) |
-| `<name>.png` | the poster, a frame from the middle of the session |
-| `<name>.gif` | only tapes marked `# gif: yes`; the README embeds these |
+| `site/public/demos/<name>.webm`, `.mp4` | the looping video the site plays (`<Demo name="..." />`) |
+| `site/public/demos/<name>.png` | the poster, a frame from the middle of the session |
+| `docs/demos/<name>.gif` | only tapes marked `# gif: yes`; the README embeds these. It sits outside `site/` on purpose, so the static export never ships it |
 
 Budget: a `.webm` or `.mp4` is at most 1 MB and a `.gif` at most 1.5 MB. Aim for 8 to 20 seconds.
 
@@ -53,3 +53,9 @@ Budget: a `.webm` or `.mp4` is at most 1 MB and a `.gif` at most 1.5 MB. Aim for
   end of the tape under `Hide`.
 - Take keys from `site/content/docs/reference/keybindings.md`. If a step does not do what its
   comment says, the tape is wrong. Extract a few frames with `ffmpeg` and look at them.
+- Helpers a tape needs, such as `_publisher.sh` (the hidden publisher for `pubsub`), start with an
+  underscore, like `_settings.tape`, so `render.sh` does not treat them as scenarios. Hidden writers must
+  end by themselves (`--duration`, a bounded loop) or be killed under `Hide` at the end of the tape.
+- `bulk-delete` issues a hidden `CLIENT PAUSE ... WRITE` on the demo container so the `deleting X of N`
+  line stays up long enough to read; a local Redis deletes 40 keys in less than a frame.
+- `slowlog` lowers `slowlog-log-slower-than` on the demo container only (see `seed()` in `render.sh`).

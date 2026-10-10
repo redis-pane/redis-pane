@@ -1,6 +1,6 @@
 # Demos: tapes, one copy of each recording, Tier 1 scenarios
 
-Status: **planned** 2026-10-10. Two tasks. Each runs on one Sonnet subagent, and each PR merges
+Status: **task 1 and task 2 done** 2026-10-10. Two tasks. Each runs on one Sonnet subagent, and each PR merges
 once every check passes.
 
 ## Context
@@ -21,8 +21,8 @@ once every check passes.
   - **`site/public/demos/`** is the only copy of the rendered output. For each scenario:
     - `<name>.webm` and `<name>.mp4`, which the site plays as a looping video;
     - `<name>.png`, the poster image, taken from a frame mid-session;
-    - `<name>.gif`, only for scenarios the README embeds.
-  - The README links to `site/public/demos/<name>.gif` by relative path. The GIFs in the repo
+    - `docs/demos/<name>.gif`, only for scenarios the README embeds (outside `site/`).
+  - The README links to `docs/demos/<name>.gif` by relative path (moved there in task 2, so the static export ships no README-only GIFs). The GIFs in the repo
     root and in `site/public/images/` are deleted.
 - **Scope is Tier 1 only:** scenarios 1–13 below. Tier 2 waits.
 - **Recordings are rendered locally by `tapes/render.sh`, not in CI.** The rendered files are
