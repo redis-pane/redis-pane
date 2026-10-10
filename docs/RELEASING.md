@@ -10,6 +10,7 @@ The release steps. The tag push is the only irreversible one, and it waits for t
    - `README.md`
    - `TESTING.md`, including the version in its first paragraph
    - `site/content/docs/getting-started/installation.md`
+   - `site/lib/release.ts`, the landing page's version and installer URLs (one constant)
    - the version named in the README's Compatibility section
 4. **Update `CHANGELOG.md`.** Rename `Unreleased` to the new version and date, add a fresh empty
    `Unreleased` above it, and update the compare links at the bottom.
