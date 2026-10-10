@@ -5,7 +5,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        Check the [Limits and non-goals](https://redis-pane.github.io/redis-pane/limits.html) page first, so a known non-goal isn't requested again. For open-ended ideas, use [Discussions](https://github.com/redis-pane/redis-pane/discussions).
+        Check the [Limits and non-goals](https://redis-pane.github.io/redis-pane/docs/limits/) page first, so a known non-goal isn't requested again. For open-ended ideas, use [Discussions](https://github.com/redis-pane/redis-pane/discussions).
   - type: textarea
     id: problem
     attributes:

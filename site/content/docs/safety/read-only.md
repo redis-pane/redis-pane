@@ -1,0 +1,39 @@
+---
+title: "Read-only Mode"
+---
+
+In Read-only Mode, every change is refused. It is a property of the running `redis-pane`, not of
+your Redis user's permissions.
+
+The title bar shows when it is on, and always says **why**:
+
+| Title bar | Reason | Can you turn it off? |
+| --- | --- | --- |
+| `READ-ONLY environment` | The Environment is `prod` or `unknown`. | Yes, `⌃R`. |
+| `READ-ONLY user` | You turned it on with `⌃R`. | Yes, `⌃R`. |
+| `READ-ONLY replica` | The server you're connected to is a replica. | No. |
+
+`⌃R` toggles the first two. When the reason is `replica`, the title bar says `locked` and `⌃R`
+isn't offered, because the server will refuse writes whatever `redis-pane` believes.
+
+## What it refuses
+
+Anything that writes: editing a value, adding or removing members, changing a TTL, renaming or
+duplicating, deleting, and resetting the Slowlog. It doesn't refuse reading, copying, filtering,
+or opening the server views.
+
+## You see the command first
+
+Read-only Mode refuses at the confirmation, not at the keypress. Press `d` and you still see the
+exact command that would have run. Only when you press `y` is it refused, and the reason is
+given. You learn what you were about to do before you learn you can't.
+
+The one exception is a bulk delete on `prod` or `unknown`. There, Read-only Mode refuses at the
+first `y`, before it asks you to type a count for something that can't run.
+
+Help (`?`) shows which keys Read-only Mode would refuse, dimmed, with the reason.
+
+## Staging and local
+
+`local` and `staging` start with writes allowed. Press `⌃R` any time to make a session read-only
+by choice.

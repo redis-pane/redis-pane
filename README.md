@@ -49,13 +49,13 @@ binary that runs in the terminal you are already in, driven from the keyboard.
 - Type, memory and TTL fill in as you scroll. Every Redis type has its own view.
 - Your pane split, filter, sort and selected key come back when you relaunch.
 
-→ [docs](https://redis-pane.github.io/redis-pane/browsing/key-list.html)
+→ [docs](https://redis-pane.github.io/redis-pane/docs/browsing/key-list/)
 
 **See it live**
 - The open key updates the moment another client changes it, pushed by the server.
 - If live updates ever stop working, the header says so. It never goes quietly stale.
 
-→ [docs](https://redis-pane.github.io/redis-pane/viewing/live-updates.html)
+→ [docs](https://redis-pane.github.io/redis-pane/docs/viewing/live-updates/)
 
 **Edit safely**
 - Edit Strings, Hash fields, List elements, Set members and Sorted set scores in place.
@@ -64,13 +64,13 @@ binary that runs in the terminal you are already in, driven from the keyboard.
 - Each target has an Environment (`local`, `staging`, `prod`, `unknown`). `prod` and `unknown`
   start in Read-only Mode.
 
-→ [docs](https://redis-pane.github.io/redis-pane/editing/values.html)
+→ [docs](https://redis-pane.github.io/redis-pane/docs/editing/values/)
 
 **Watch the server**
 - A Dashboard of memory, hit ratio, ops/sec, clients and replication.
 - A live Monitor tail, Pub/Sub (sharded too) and the Slowlog, each a keystroke away.
 
-→ [docs](https://redis-pane.github.io/redis-pane/server/dashboard.html)
+→ [docs](https://redis-pane.github.io/redis-pane/docs/server/dashboard/)
 
 ![The Monitor view: a live tail of commands streaming in under a warning banner, paused while the skipped count climbs, then filtered down to HSET commands](monitor-demo.gif)
 
@@ -79,7 +79,7 @@ binary that runs in the terminal you are already in, driven from the keyboard.
   open key stays live on its owner through failovers.
 - A `redis-sentinel://` URL resolves to the current master.
 
-→ [docs](https://redis-pane.github.io/redis-pane/connecting/cluster.html)
+→ [docs](https://redis-pane.github.io/redis-pane/docs/connecting/cluster/)
 
 **Fits any terminal**
 - Dark, light and high-contrast themes, plus your own.
@@ -87,7 +87,7 @@ binary that runs in the terminal you are already in, driven from the keyboard.
 - The mouse works but is never required.
 - Copy goes to your local clipboard over SSH using OSC 52.
 
-→ [docs](https://redis-pane.github.io/redis-pane/appearance/terminal-sizes.html)
+→ [docs](https://redis-pane.github.io/redis-pane/docs/appearance/terminal-sizes/)
 
 ## What it doesn't do
 
@@ -101,7 +101,7 @@ binary that runs in the terminal you are already in, driven from the keyboard.
   URL instead. Known bug, tracked in [`docs/UI_TASKS.md`](docs/UI_TASKS.md).
 - Not a server manager, an alerting tool or a metrics store, and no multi-server workspace.
 
-The full list is [Limits and non-goals](https://redis-pane.github.io/redis-pane/limits.html).
+The full list is [Limits and non-goals](https://redis-pane.github.io/redis-pane/docs/limits/).
 
 ## Install
 
@@ -146,18 +146,18 @@ The keys that matter:
 - `g m`, `g p`, `g s` and `g d` open Monitor, Pub/Sub, Slowlog and Dashboard. `q` quits.
 
 `?` shows every key that works where you are. The full list is the
-[keybindings reference](https://redis-pane.github.io/redis-pane/reference/keybindings.html).
+[keybindings reference](https://redis-pane.github.io/redis-pane/docs/reference/keybindings/).
 
 ![Folding a tree group with Left/Right, filtering down to one key, and moving a real cursor through its value with Enter and the arrow keys](navigation-demo.gif)
 
 ## Documentation
 
-The user guide is at **<https://redis-pane.github.io/redis-pane>**. Start with
-[Connecting](https://redis-pane.github.io/redis-pane/connecting/target.html),
-[Environments and safety](https://redis-pane.github.io/redis-pane/safety/environments.html),
-[Editing](https://redis-pane.github.io/redis-pane/editing/values.html) and the
-[reference](https://redis-pane.github.io/redis-pane/reference/cli.html) pages.
-Its source is in [`book/src`](book/src/README.md).
+The user guide is at **<https://redis-pane.github.io/redis-pane/docs>**. Start with
+[Connecting](https://redis-pane.github.io/redis-pane/docs/connecting/target/),
+[Environments and safety](https://redis-pane.github.io/redis-pane/docs/safety/environments/),
+[Editing](https://redis-pane.github.io/redis-pane/docs/editing/values/) and the
+[reference](https://redis-pane.github.io/redis-pane/docs/reference/cli/) pages.
+Its source is in [`site/content/docs`](site/content/docs/index.md).
 
 ## Compatibility
 

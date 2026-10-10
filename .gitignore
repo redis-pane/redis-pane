@@ -17,5 +17,8 @@ __pycache__/
 # Personal Claude Code overrides
 /.claude/settings.local.json
 
-# mdBook output
-/book/book/
+# Docs site (Next.js / Fumadocs)
+/site/node_modules/
+/site/.next/
+/site/out/
+/site/.source/

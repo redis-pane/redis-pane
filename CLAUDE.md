@@ -19,7 +19,7 @@ product and design intent live in:
 
 Requirements are numbered so code and commits can cite them (e.g. "implements R2.1"). When a
 feature diverges from these docs, update the doc in the same change — the docs are the spec, not
-a historical artifact. That includes the user guide in [book/](book/src/README.md): a change to
+a historical artifact. That includes the user guide in [site/](site/content/docs/index.md): a change to
 what a user sees, types or configures updates its chapter in the same change.
 
 ## What this is
@@ -63,13 +63,21 @@ cargo test --workspace                  # all tests
 cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all                         # format
 cargo fmt --all -- --check              # verify formatting, as CI does
-mdbook serve book                       # preview the user guide (cargo install mdbook --locked)
-mdbook build book                       # build it; the `docs` CI job also link-checks the output
 ```
 
-Two pages of the guide are generated, never hand-edited: `book/src/reference/keybindings.md` (from
-the keymap) and `book/src/reference/cli.md` (from the `clap` definition). After changing a key or
-a flag, regenerate them; CI fails if they are stale. Every ```` ```json ```` block in `book/src`
+The user guide is a Fumadocs site on Next.js in `site/` (pages are plain `.md` in
+`site/content/docs`, ordered by each folder's `meta.json`). It needs Node (`site/.nvmrc`) and pnpm
+(the version in `site/package.json`):
+
+```bash
+pnpm --dir site install                 # once, and after a lockfile change
+pnpm --dir site dev                     # preview the user guide at http://localhost:3000/redis-pane
+pnpm --dir site build                   # static export to site/out; the `docs` CI job builds it and link-checks it
+```
+
+Two pages of the guide are generated, never hand-edited: `site/content/docs/reference/keybindings.md` (from
+the keymap) and `site/content/docs/reference/cli.md` (from the `clap` definition). After changing a key or
+a flag, regenerate them; CI fails if they are stale. Every ```` ```json ```` block in `site/content/docs`
 is parsed by the real config parser (`json,invalid` marks one that must be refused):
 
 ```bash

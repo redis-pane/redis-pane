@@ -1,5 +1,5 @@
-//! The generated keybindings reference (`book/src/reference/keybindings.md`)
-//! and the config-example check for `book/src/reference/configuration.md`.
+//! The generated keybindings reference (`site/content/docs/reference/keybindings.md`)
+//! and the config-example check for `site/content/docs/reference/configuration.md`.
 //!
 //! The keybindings page is built from the same model the help overlay and the
 //! hint bar read (`help::here`, `help::everywhere`, `Keymap::chords`), so it
@@ -22,14 +22,14 @@ use redis_pane_core::state::{
     View,
 };
 
-fn book_path(rel: &str) -> PathBuf {
+fn docs_path(rel: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../book/src/reference")
+        .join("../../site/content/docs/reference")
         .join(rel)
 }
 
 fn check_or_update(rel: &str, actual: &str) {
-    let path = book_path(rel);
+    let path = docs_path(rel);
     if std::env::var_os("UPDATE_DOCS").is_some() {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, actual).unwrap();
@@ -114,7 +114,7 @@ fn render_keybindings() -> String {
     let base = State::default();
     let mut out = String::new();
     out.push_str(
-        "# Keybindings\n\n\
+        "---\ntitle: Keybindings\n---\n\n\
 > Generated from the keymap; do not edit. Regenerate with `UPDATE_DOCS=1 cargo test -p redis-pane-core --test docs_reference`.\n\n\
 These are the bindings. Keys can't be rebound from the config file. The help overlay (`?` or \
 `F1`) and the hint bar show what the keys do in the context you are in. Where a key does a \
@@ -475,11 +475,11 @@ fn json_blocks(text: &str) -> Vec<(bool, usize, String)> {
     blocks
 }
 
-/// Every `.md` file under `book/src`, so a ```` ```json ```` block in any chapter
+/// Every `.md` file under `site/content/docs`, so a ```` ```json ```` block in any chapter
 /// is held to the real parser, not only the ones in the reference.
-fn book_pages() -> Vec<PathBuf> {
+fn docs_pages() -> Vec<PathBuf> {
     fn walk(dir: &std::path::Path, out: &mut Vec<PathBuf>) {
-        for entry in std::fs::read_dir(dir).expect("book/src must be readable") {
+        for entry in std::fs::read_dir(dir).expect("site/content/docs must be readable") {
             let path = entry.unwrap().path();
             if path.is_dir() {
                 walk(&path, out);
@@ -489,22 +489,22 @@ fn book_pages() -> Vec<PathBuf> {
         }
     }
     let mut out = Vec::new();
-    walk(&book_path("..").canonicalize().unwrap(), &mut out);
+    walk(&docs_path("..").canonicalize().unwrap(), &mut out);
     out.sort();
     out
 }
 
 #[test]
 fn config_examples_parse_with_the_real_parser() {
-    let reference = std::fs::read_to_string(book_path("configuration.md"))
-        .expect("book/src/reference/configuration.md must exist");
+    let reference = std::fs::read_to_string(docs_path("configuration.md"))
+        .expect("site/content/docs/reference/configuration.md must exist");
     assert!(
         json_blocks(&reference)
             .iter()
             .any(|(invalid, _, _)| !invalid),
         "configuration.md must contain at least one valid ```json example"
     );
-    for page in book_pages() {
+    for page in docs_pages() {
         let text = std::fs::read_to_string(&page).unwrap();
         for (invalid, line, body) in json_blocks(&text) {
             let result = config::parse(&body);

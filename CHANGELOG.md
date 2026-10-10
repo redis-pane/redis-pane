@@ -23,7 +23,7 @@ promise a stable interface.
 
 ### Added
 
-- A user guide as a website at <https://redis-pane.github.io/redis-pane>, built from `book/`.
+- A user guide as a website at <https://redis-pane.github.io/redis-pane>, built from `site/` (Fumadocs on Next.js).
 - Keybinding and command-line references generated from the code, so they cannot drift from the
   program.
 - A comparison table in the README, and this changelog.
