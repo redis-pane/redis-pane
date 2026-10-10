@@ -11,6 +11,8 @@ Every change goes through the same steps, whatever it changes:
 Only `y` confirms and only `Esc` dismisses. Any other key is ignored, so a stray keystroke can
 never confirm a change or discard one.
 
+<Demo name="safety" alt="A prod Profile opens read-only; d shows the DEL command, y is refused, help dims the refused keys, and Ctrl+R lifts it" />
+
 ## What the preview shows
 
 The real command, for example `DEL user:8812:session` or `HSET user:1 token`, plus a muted line
@@ -24,9 +26,9 @@ A change to a value shows `old → new`.
 ## Friction scales with the blast radius
 
 - Deleting one key on `local` or `staging` takes one `y`.
-- A [bulk delete](../editing/bulk-delete.md) on `prod` or `unknown` makes you type the number of
+- A [bulk delete](../editing/bulk-delete.mdx) on `prod` or `unknown` makes you type the number of
   keys first.
-- On `prod` and `unknown`, you're in [Read-only Mode](./read-only.md) to begin with.
+- On `prod` and `unknown`, you're in [Read-only Mode](./read-only.mdx) to begin with.
 
 ## Errors name the command
 

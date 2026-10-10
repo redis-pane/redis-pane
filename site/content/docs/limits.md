@@ -7,7 +7,7 @@ title: "Limits and non-goals"
 - **Moving a key to another database.** One Connection means one database. See
   [Databases](./connecting/databases.md).
 - **Opening a value in your own `$EDITOR`.** Values are edited inline, and values over 200 KB can't
-  be edited. See [Editing values](./editing/values.md).
+  be edited. See [Editing values](./editing/values.mdx).
 - **A Redis console.** There is no place to type a raw command. `redis-cli` is one keystroke away
   in the terminal you're already in. A command palette shipped briefly and was withdrawn, because
   every action it listed already had a key.
@@ -15,7 +15,7 @@ title: "Limits and non-goals"
 - **Rebinding keys.** The keys are fixed in this release.
 - **Marking a whole tree group, or everything a filter matches, for deletion.** You can mark
   only keys you've loaded, one at a time. A marked key that a filter hides is still deleted.
-  See [Bulk delete](./editing/bulk-delete.md).
+  See [Bulk delete](./editing/bulk-delete.mdx).
 
 ## Known rough edges
 

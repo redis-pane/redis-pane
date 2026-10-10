@@ -54,7 +54,7 @@ needs Redis 7. These are dimmed in help with the reason.
 The server refused to track the open key, or the tracking was lost. `r` re-reads by hand, and the
 header shows how old the value is. Run `redis-pane --probe` and look at the `liveness:` line. If
 it says `CLIENT TRACKING refused`, the server (often a managed service) doesn't allow the
-`CLIENT` command. See [Live updates](./viewing/live-updates.md).
+`CLIENT` command. See [Live updates](./viewing/live-updates.mdx).
 
 If a key never goes `● live` and `--probe` says tracking is accepted, report it.
 

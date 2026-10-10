@@ -9,8 +9,8 @@ Every target has an **Environment**: `local`, `staging`, `prod` or `unknown`. It
 | --- | --- | --- |
 | `local` | Neutral | Writes allowed |
 | `staging` | Amber | Writes allowed |
-| `prod` | Red | [Read-only Mode](./read-only.md) |
-| `unknown` | A distinct fourth colour | [Read-only Mode](./read-only.md) |
+| `prod` | Red | [Read-only Mode](./read-only.mdx) |
+| `unknown` | A distinct fourth colour | [Read-only Mode](./read-only.mdx) |
 
 Colour is never the only signal. The Environment's name is spelled out next to the target, and
 the confirmation dialogs carry it too. `unknown` is deliberately not a shade of the others,
@@ -38,5 +38,5 @@ and want it to be `staging`, make it a Profile.
 
 - The title bar, in the band colour and in words.
 - Confirmation dialogs.
-- The typed-count step of a [bulk delete](../editing/bulk-delete.md) on `prod` and `unknown`.
+- The typed-count step of a [bulk delete](../editing/bulk-delete.mdx) on `prod` and `unknown`.
 - The ask before opening [Monitor](../server/monitor.mdx) on `prod` and `unknown`.

@@ -13,6 +13,8 @@ exact time in UTC.
 An empty log can mean three different things, and the view says which: still fetching, the fetch
 failed, or nothing has crossed the threshold.
 
+<Demo name="slowlog" alt="The Slowlog: entries with durations, the detail strip, then sorted slowest first with the slow Lua loops on top" />
+
 ## Keys
 
 | Key | Does |
@@ -24,7 +26,7 @@ failed, or nothing has crossed the threshold.
 | `↑` `↓` `PgUp` `PgDn` `Home` `End` | Move. |
 
 `d` is a change like any other: you see the command, and `y` confirms. It's refused under every
-reason for [Read-only Mode](../safety/read-only.md), including `replica`. There is no exception for a
+reason for [Read-only Mode](../safety/read-only.mdx), including `replica`. There is no exception for a
 write that touches no key.
 
 On narrow terminals the client column goes first, then the age.

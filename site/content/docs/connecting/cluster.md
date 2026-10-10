@@ -29,9 +29,9 @@ The title bar adds the shape of the Cluster after the target, for example
 - **Bulk delete** sends one `DEL` per key, so keys in different slots delete without trouble.
 - **`C` copies a Cluster-aware command**, `redis-cli -c -h <host> -p <port> ...`. The `-c`
   makes `redis-cli` follow redirects.
-- **The server views read every node.** See [Dashboard](../server/dashboard.md#on-a-cluster),
-  [Monitor](../server/monitor.mdx#on-a-cluster), [Pub/Sub](../server/pubsub.md#on-a-cluster) and
-  [Slowlog](../server/slowlog.md#on-a-cluster).
+- **The server views read every node.** See [Dashboard](../server/dashboard.mdx#on-a-cluster),
+  [Monitor](../server/monitor.mdx#on-a-cluster), [Pub/Sub](../server/pubsub.mdx#on-a-cluster) and
+  [Slowlog](../server/slowlog.mdx#on-a-cluster).
 
 ## If a node goes away
 
