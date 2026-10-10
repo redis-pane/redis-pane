@@ -1,0 +1,76 @@
+---
+title: "Types"
+---
+
+The value pane has one view per Redis type. They all share the same frame, so what you learn in
+one carries to the others:
+
+- a **header** with the key, its type, size, TTL and live status
+- a **body** that is specific to the type
+- a **footer** with the keys that work here
+
+`Enter` puts a cursor on a row of the body. `↑` `↓`, `PgUp` `PgDn`, `Home` and `End` then move it, and
+`Esc` gives the movement keys back to the key list. Without the cursor, those keys move the key
+list.
+
+**Collections show a window.** For a Hash, List, Set, Sorted set or Stream, the first 500 items
+are read, and the header says so, for example `12,000 items · 500 shown`. The count is the
+server's; the 500 is what is on screen.
+
+Bytes that are not valid text are shown as `\xHH` escapes in every view, so a binary field can't
+break the display.
+
+## String
+
+The text, wrapped to the pane. If the String holds a JSON object or array, you get the JSON view
+instead. If it isn't valid UTF-8, you get the Binary view.
+
+## Hash
+
+A `FIELD` and `VALUE` table. Edit a field with `e`, add one with `a`, remove one with `d`, and
+rename one with `R`.
+
+## List
+
+Rows with their index. Edit, add (at the head or tail) and remove elements.
+
+## Set
+
+A table of members. Add, remove and rename members.
+
+## Sorted set
+
+Members with their scores, in score order. Edit a score with `e`, add and remove members, and
+rename a member with `R`.
+
+## Stream
+
+Entries with their ID, age and fields, newest first. The newest 500 are read. A Stream is
+read-only here: you can copy it and change its TTL, but not add or remove entries.
+
+## JSON
+
+A String that holds a JSON object or array is pretty-printed over several lines so you can read
+it. A value that looks like JSON but doesn't parse is shown as the plain text it is. You edit it
+as text, and if what you've typed no longer parses, the confirm step warns you without blocking.
+Redis itself doesn't care whether the bytes are JSON.
+
+Keys created by the RedisJSON module are listed with the type `json`, but this release hasn't
+been checked against them. Don't rely on how they read.
+
+## Binary
+
+A hex dump with an `OFFSET`, a `HEX` column and an `ASCII` column, sixteen bytes to a row. This
+is what you get for a String that isn't valid text, such as a serialised protobuf or an image. It
+is read-only.
+
+## Anything else
+
+A key of a type `redis-pane` doesn't model is shown as the bytes `GET` returns, rather than
+refusing to show it.
+
+## TTL on every type
+
+Every type shows the key's TTL in the header and counts down as time passes. The countdown is
+computed on your side from the last read, so it costs nothing, and the next read corrects it. Press
+`t` in the value pane to [change it](../editing/ttl.md).

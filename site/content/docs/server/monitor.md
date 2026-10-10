@@ -1,0 +1,46 @@
+---
+title: "Monitor"
+---
+
+`g m` opens Monitor: a live tail of **every command the server runs**, from all clients.
+
+![The Monitor view: a live tail of commands streaming in under a warning banner, paused while the skipped count climbs, then filtered down to HSET commands](/images/monitor-demo.gif)
+
+## It costs the server
+
+Redis pays for every command it streams to a Monitor. A banner at the top says so and stays up
+for as long as the view is open. It can't be dismissed, only left.
+
+On `prod` and `unknown`, `g m` asks first, with a dialog naming the Environment
+(`Open MONITOR on prod?`). `y` opens it and `Esc` cancels. Opening a view isn't a write, so
+[Read-only Mode](../safety/read-only.md) doesn't block it.
+
+Monitor runs on its own connection, so your reads and the live key stay unaffected. Leaving the
+view, by any route, closes it. Nothing keeps running out of sight.
+
+## Using it
+
+| Key | Does |
+| --- | --- |
+| `p` | Pause. The server is still read, but lines are counted (`paused · 340 skipped`) and dropped, not stored. Resuming doesn't fill the gap. |
+| `/` | Filter what's displayed. A filtered-out line still counts toward the buffer. |
+| `↑` `↓` `PgUp` `PgDn` | Move. Moving up stops following. |
+| `End` | Jump to the newest line and follow again. |
+| `c` | Copy the selected line's command. |
+| `r` | Reopen, after the feed has closed. |
+
+The columns are time (the server's, in UTC), database, client and command. The narrower columns
+drop first on a narrow terminal.
+
+The view keeps the latest 5,000 lines, and each is cut at 4 KiB. If the feed closes, the lines
+stay on screen with the reason, and `r` reopens it.
+
+## On a Cluster
+
+`MONITOR` is per node, so `redis-pane` opens one feed per **primary** and merges them, with a
+NODE column. Replicas only repeat what their primary did.
+
+- The banner counts them: `MONITOR on 3 primaries`. The `prod` and `unknown` ask names the count.
+- If one node's feed stops, the others carry on, and a line under the status names the node and
+  the reason. Only when every feed has ended does the view show `feed closed`.
+- `/` also matches the node, so `/7101` filters to one.

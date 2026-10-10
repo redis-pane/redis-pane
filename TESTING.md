@@ -3,12 +3,12 @@
 Thanks for trying `redis-pane`. This is `0.1.0-beta.4`. It's early, so expect rough edges, and
 please say so when you hit one.
 
-The full guide is the [user guide](https://redis-pane.github.io/redis-pane). Its source is in
-[`book/src`](book/src/README.md).
+The full guide is the [user guide](https://redis-pane.github.io/redis-pane/docs). Its source is in
+[`site/content/docs`](site/content/docs/index.md).
 
 ## Install
 
-Follow [Installation](book/src/getting-started/installation.md). The builds are unsigned, so
+Follow [Installation](site/content/docs/getting-started/installation.md). The builds are unsigned, so
 your OS may ask you to confirm the first run.
 
 ## Something to point it at
@@ -30,24 +30,24 @@ a million keys, and `python3 scripts/churn.py` keeps them changing.
 
 - **Live updates.** Open a key, then change it from another terminal with
   `redis-cli HSET the-key field value`. The screen should update with no keypress. If the
-  header never says `● live`, report it. [Live updates](book/src/viewing/live-updates.md)
+  header never says `● live`, report it. [Live updates](site/content/docs/viewing/live-updates.md)
 - **Editing.** Edit a value, change a TTL, rename and duplicate a key, and bulk-delete a few.
   Check that each preview shows the command you expected.
-  [Editing values](book/src/editing/values.md)
+  [Editing values](site/content/docs/editing/values.md)
 - **Safety.** Connect to something that isn't loopback. It should start in Read-only Mode and say
-  why. [Environments](book/src/safety/environments.md)
+  why. [Environments](site/content/docs/safety/environments.md)
 - **The server views.** `g d`, `g m`, `g p` and `g s`.
-  [Dashboard](book/src/server/dashboard.md)
+  [Dashboard](site/content/docs/server/dashboard.md)
 - **A very large keyspace.** Nothing should freeze while it scans, toggles the tree, changes the
   sort or filters. A visible stall is worth reporting.
-  [Large keyspaces](book/src/browsing/large-keyspaces.md)
+  [Large keyspaces](site/content/docs/browsing/large-keyspaces.md)
 - **A Cluster or Sentinel target.** Kill a node and watch what the title bar and the server views
-  say. [Cluster](book/src/connecting/cluster.md), [Sentinel](book/src/connecting/sentinel.md)
+  say. [Cluster](site/content/docs/connecting/cluster.md), [Sentinel](site/content/docs/connecting/sentinel.md)
 - **Looks.** Try `--theme light`, `--ascii`, and resize the terminal.
-  [Terminal sizes](book/src/appearance/terminal-sizes.md)
-- **Copying over SSH.** Press `c` and paste. [Copying](book/src/viewing/copying.md)
+  [Terminal sizes](site/content/docs/appearance/terminal-sizes.md)
+- **Copying over SSH.** Press `c` and paste. [Copying](site/content/docs/viewing/copying.md)
 
-What isn't built yet is on the [limits page](book/src/limits.md). Check it before reporting
+What isn't built yet is on the [limits page](site/content/docs/limits.md). Check it before reporting
 something as new.
 
 ## Reporting something

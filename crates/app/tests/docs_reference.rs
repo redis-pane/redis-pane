@@ -1,4 +1,4 @@
-//! The generated CLI reference (`book/src/reference/cli.md`) is checked here,
+//! The generated CLI reference (`site/content/docs/reference/cli.md`) is checked here,
 //! in the default Docker-free run, so it cannot drift from the clap
 //! definition. Regenerate with:
 //!
@@ -9,7 +9,7 @@
 use std::path::PathBuf;
 
 fn page_path() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../book/src/reference/cli.md")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../site/content/docs/reference/cli.md")
 }
 
 fn render() -> String {
@@ -18,7 +18,7 @@ fn render() -> String {
         .render_long_help()
         .to_string();
     format!(
-        "# Command-line options\n\
+        "---\ntitle: Command-line options\n---\n\
 \n\
 > Generated from the `clap` definition; do not edit. Regenerate with `UPDATE_DOCS=1 cargo test -p redis-pane --test docs_reference`.\n\
 \n\

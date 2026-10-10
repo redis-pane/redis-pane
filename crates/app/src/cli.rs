@@ -1,5 +1,5 @@
 //! The command line, defined once so the binary and the generated CLI
-//! reference (`book/src/reference/cli.md`) read the same clap definition.
+//! reference (`site/content/docs/reference/cli.md`) read the same clap definition.
 
 use clap::{CommandFactory, Parser};
 

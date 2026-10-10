@@ -4,5 +4,5 @@ contact_links:
     url: https://github.com/redis-pane/redis-pane/discussions
     about: Ask a question or float an idea in Discussions. Issues are for bugs and concrete feature requests.
   - name: Documentation
-    url: https://redis-pane.github.io/redis-pane/
+    url: https://redis-pane.github.io/redis-pane/docs/
     about: The user guide, including connecting, keybindings and troubleshooting.
