@@ -63,4 +63,4 @@ question is usually *what was in it?*, and that answer would otherwise be gone.
 
 The value pane keeps showing the Open key while you move the cursor elsewhere. It says so with
 `⊘ not the selected key`, or `⊘ not in the list` if a filter or a collapsed group hides it.
-The value is still live. See [The key list](../browsing/key-list.md).
+The value is still live. See [The key list](../browsing/key-list.mdx).

@@ -53,6 +53,9 @@ python3 scripts/churn.py --no-delete --no-create # mutations only
 
 Both tools take `--host/--port/--username/--password/--db`.
 
+The demo recordings are rendered from `tapes/` (see `tapes/README.md`); they use these two tools against their own
+container on port 6390, never the one above.
+
 ## A local Redis Cluster
 
 `fixtures.py` and `churn.py` speak to one node and do not follow `MOVED`, so they cannot fill a

@@ -6,7 +6,7 @@
 
 A terminal UI for Redis: see your keyspace, open a key, watch it change, edit it safely.
 
-![Browsing a keyspace in redis-pane: filtering to a key, then watching it update on screen the moment another client changes it, with no keypress or refresh](demo.gif)
+![Browsing a keyspace in redis-pane: filtering to a key, then watching it update on screen the moment another client changes it, with no keypress or refresh](site/public/demos/hero.gif)
 
 *Filter to a key, open it, and watch it update live the moment it changes on the server. There is
 no refresh button.*
@@ -72,7 +72,7 @@ binary that runs in the terminal you are already in, driven from the keyboard.
 
 → [docs](https://redis-pane.github.io/redis-pane/docs/server/dashboard/)
 
-![The Monitor view: a live tail of commands streaming in under a warning banner, paused while the skipped count climbs, then filtered down to HSET commands](monitor-demo.gif)
+![The Monitor view: a live tail of commands streaming in under a warning banner, paused while the skipped count climbs, then filtered down to HSET commands](site/public/demos/monitor.gif)
 
 **Cluster & Sentinel**
 - Point it at a `redis-cluster://` URL or any one node. The key list covers every primary and an
@@ -148,7 +148,7 @@ The keys that matter:
 `?` shows every key that works where you are. The full list is the
 [keybindings reference](https://redis-pane.github.io/redis-pane/docs/reference/keybindings/).
 
-![Folding a tree group with Left/Right, filtering down to one key, and moving a real cursor through its value with Enter and the arrow keys](navigation-demo.gif)
+![Folding a tree group with Left/Right, filtering down to one key, and moving a real cursor through its value with Enter and the arrow keys](site/public/demos/browse.gif)
 
 ## Documentation
 
@@ -157,7 +157,7 @@ The user guide is at **<https://redis-pane.github.io/redis-pane/docs>**. Start w
 [Environments and safety](https://redis-pane.github.io/redis-pane/docs/safety/environments/),
 [Editing](https://redis-pane.github.io/redis-pane/docs/editing/values/) and the
 [reference](https://redis-pane.github.io/redis-pane/docs/reference/cli/) pages.
-Its source is in [`site/content/docs`](site/content/docs/index.md).
+Its source is in [`site/content/docs`](site/content/docs/index.mdx).
 
 ## Compatibility
 

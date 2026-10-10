@@ -39,4 +39,4 @@ and want it to be `staging`, make it a Profile.
 - The title bar, in the band colour and in words.
 - Confirmation dialogs.
 - The typed-count step of a [bulk delete](../editing/bulk-delete.md) on `prod` and `unknown`.
-- The ask before opening [Monitor](../server/monitor.md) on `prod` and `unknown`.
+- The ask before opening [Monitor](../server/monitor.mdx) on `prod` and `unknown`.
