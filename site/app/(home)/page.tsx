@@ -8,9 +8,10 @@ import {
   PencilLine,
   Radio,
 } from 'lucide-react';
+import { DemoVideo } from '@/components/demo';
 import { InstallCommand } from '@/components/landing/install';
 import { links, releaseVersion } from '@/lib/release';
-import { basePath, siteDescription } from '@/lib/shared';
+import { siteDescription } from '@/lib/shared';
 
 const docs = (path: string) => `/docs/${path}`;
 
@@ -169,9 +170,8 @@ export default function HomePage() {
               <span className="size-3 rounded-full bg-fd-border" />
               <span className="ml-3 truncate font-mono text-xs text-fd-muted-foreground">redis-pane</span>
             </div>
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src={`${basePath}/images/demo.gif`}
+            <DemoVideo
+              name="hero"
               alt="Browsing a keyspace in redis-pane: filtering to a key, then watching it update on screen the moment another client changes it, with no keypress or refresh"
               className="block w-full"
             />

@@ -19,7 +19,7 @@ product and design intent live in:
 
 Requirements are numbered so code and commits can cite them (e.g. "implements R2.1"). When a
 feature diverges from these docs, update the doc in the same change — the docs are the spec, not
-a historical artifact. That includes the user guide in [site/](site/content/docs/index.md): a change to
+a historical artifact. That includes the user guide in [site/](site/content/docs/index.mdx): a change to
 what a user sees, types or configures updates its chapter in the same change.
 
 ## What this is
@@ -116,6 +116,12 @@ cargo test -p redis-pane -- --ignored --test-threads=1   # needs Docker
 Run it before trusting any change to the connection, the read path, or arming. The unit tests
 prove the core cannot *claim* liveness without an arming; only these prove the shell actually
 arms.
+
+### Recording demos
+
+The demo recordings on the docs site and in the README are rendered from `tapes/` with VHS by
+`./tapes/render.sh [name...]` (own container `redis-pane-demo` on :6390, temp XDG dirs; see
+[tapes/README.md](tapes/README.md)) and committed to `site/public/demos/`. They are not rendered in CI.
 
 ### Driving the app by hand
 

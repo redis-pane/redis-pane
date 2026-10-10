@@ -5,7 +5,8 @@ import { applyMdxPreset } from 'fumadocs-mdx/config';
 import { remarkJsonInvalid } from './remark-json-invalid';
 import { metaSchema, pageSchema } from 'fumadocs-core/source/schema';
 
-// Pages are plain .md (the generated reference pages must stay free of MDX escaping).
+// Pages are plain .md (the generated reference pages must stay free of MDX escaping). A page that
+// embeds a <Demo /> is .mdx.
 const docs = defineDocs({
   dir: 'content/docs',
   docs: {

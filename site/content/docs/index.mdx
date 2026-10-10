@@ -6,7 +6,7 @@ description: A terminal UI for browsing and editing Redis, with live updates.
 `redis-pane` is a terminal UI for browsing and editing Redis. It is one small binary that runs
 in the terminal you are already in, including an SSH session on a bastion host.
 
-![Browsing a keyspace in redis-pane: filtering to a key, then watching it update on screen the moment another client changes it, with no keypress or refresh](/images/demo.gif)
+<Demo name="hero" alt="Browsing a keyspace in redis-pane: filtering to a key, then watching it update on screen the moment another client changes it, with no keypress or refresh" />
 
 *Filter to a key, open it, and watch it update the moment another client changes it. There is
 no refresh button.*
@@ -20,7 +20,7 @@ where a desktop GUI is not an option.
 ## What it does
 
 - **Browses a keyspace of any size.** Keys stream in with `SCAN` (never `KEYS`) and the list
-  stays usable while they arrive. See [The key list](./browsing/key-list.md).
+  stays usable while they arrive. See [The key list](./browsing/key-list.mdx).
 - **Shows every type.** Strings, Hashes, Lists, Sets, Sorted sets, Streams, JSON and binary
   values each get a purpose-built view. See [Types](./viewing/types.md).
 - **Updates the open key live.** When another client changes it, the screen changes with no
@@ -69,7 +69,7 @@ both.
 ## Where to go next
 
 - New here? [Install it](./getting-started/installation.md), then take the
-  [quick start](./getting-started/quick-start.md).
+  [quick start](./getting-started/quick-start.mdx).
 - Connecting to something real? Start with
   [how the target is chosen](./connecting/target.md).
 - Looking for a key? The [keybindings](./reference/keybindings.md) page lists every one.

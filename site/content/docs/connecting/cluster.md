@@ -30,7 +30,7 @@ The title bar adds the shape of the Cluster after the target, for example
 - **`C` copies a Cluster-aware command**, `redis-cli -c -h <host> -p <port> ...`. The `-c`
   makes `redis-cli` follow redirects.
 - **The server views read every node.** See [Dashboard](../server/dashboard.md#on-a-cluster),
-  [Monitor](../server/monitor.md#on-a-cluster), [Pub/Sub](../server/pubsub.md#on-a-cluster) and
+  [Monitor](../server/monitor.mdx#on-a-cluster), [Pub/Sub](../server/pubsub.md#on-a-cluster) and
   [Slowlog](../server/slowlog.md#on-a-cluster).
 
 ## If a node goes away
