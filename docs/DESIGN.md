@@ -320,6 +320,30 @@ by nearest match. A user theme is not contrast-checked: the test covers the buil
 `ok` alone. Config files with `theme`/`themes` are refused by binaries that predate them
 (unknown fields are a parse error everywhere), so remove them before rolling back.
 
+### 5.1 Brand
+
+The brand is two marks, built from the three characters a user of the product already reads:
+`>` (the prompt, and the tree's collapsed-node glyph in ASCII), `:` (the namespace separator every
+Redis key is folded on) and `_` (the cursor).
+
+- **The icon** is `>:_` on a rounded tile: `>` and `:` in off-white, `_` in the brand accent, on
+  `#16181C`. Two cuts, one shape: the regular one for 48px and up, a heavier one for 32px and
+  under, which is the favicon. No Redis cube and no Redis red, so it cannot be read as an
+  official Redis Ltd mark.
+- **The wordmark** is `redis:pane`, set in JetBrains Mono Medium and outlined, so it renders the
+  same without the font. The colon is the accent and the letters take the text colour of whatever
+  they sit on. It is how the name is *set*, not the name: `redis-pane` stays the name in prose,
+  commands, crates and URLs, because none of those can carry a colon. A sub-brand takes a third
+  segment (`redis:pane:docs`), never a suffix like `:tui`.
+- **The accent** is `#1AA088` and appears on exactly two things: the wordmark's colon and the
+  icon's `_`. It is a brand colour, not a TUI colour token; inside the TUI green still belongs to
+  `ok` alone (§5).
+
+The files are in `site/public/brand/`: `icon.svg`, `icon-small.svg`, `wordmark-light.svg` and
+`wordmark-dark.svg` (for light and dark backgrounds), and `lockup-light.svg` / `lockup-dark.svg`
+(icon and wordmark together, for the README). The site draws the same outlines inline from
+`site/components/brand/`.
+
 ## 6. Key screens
 
 ### 6.1 Launch, and the first-run picker

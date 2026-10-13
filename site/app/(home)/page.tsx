@@ -8,6 +8,7 @@ import {
   PencilLine,
   Radio,
 } from 'lucide-react';
+import { BrandIcon, Wordmark } from '@/components/brand';
 import { DemoVideo } from '@/components/demo';
 import { InstallCommand } from '@/components/landing/install';
 import { links, releaseVersion } from '@/lib/release';
@@ -138,7 +139,11 @@ export default function HomePage() {
           <span className="rounded-full border bg-fd-card px-3 py-1 text-xs text-fd-muted-foreground">
             v{releaseVersion} · beta
           </span>
-          <h1 className="text-balance text-4xl font-semibold tracking-tight sm:text-6xl">redis-pane</h1>
+          <h1 className="flex items-center gap-4 sm:gap-5">
+            <BrandIcon className="size-14 sm:size-20" />
+            <Wordmark className="h-9 w-auto sm:h-13" />
+            <span className="sr-only">redis-pane</span>
+          </h1>
           <p className="max-w-xl text-balance text-lg text-fd-muted-foreground sm:text-xl">
             A terminal UI for Redis: see your keyspace, open a key, watch it change, edit it safely.
           </p>

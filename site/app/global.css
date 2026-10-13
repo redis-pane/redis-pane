@@ -2,6 +2,11 @@
 @import 'fumadocs-ui/css/neutral.css';
 @import 'fumadocs-ui/css/preset.css';
 
+/* The brand accent: the colon of redis:pane and the _ of the >:_ icon, nothing else. */
+@theme {
+  --color-brand: #1aa088;
+}
+
 html {
   scrollbar-gutter: stable;
 }
