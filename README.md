@@ -1,4 +1,9 @@
-# redis-pane
+<h1>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="site/public/brand/lockup-dark.svg">
+    <img alt="redis-pane" src="site/public/brand/lockup-light.svg" width="360">
+  </picture>
+</h1>
 
 [![CI](https://github.com/redis-pane/redis-pane/actions/workflows/ci.yml/badge.svg)](https://github.com/redis-pane/redis-pane/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/redis-pane/redis-pane?include_prereleases)](https://github.com/redis-pane/redis-pane/releases)
