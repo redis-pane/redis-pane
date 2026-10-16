@@ -341,7 +341,8 @@ Redis key is folded on) and `_` (the cursor).
 
 The files are in `site/public/brand/`: `icon.svg`, `icon-small.svg`, `wordmark-light.svg` and
 `wordmark-dark.svg` (for light and dark backgrounds), and `lockup-light.svg` / `lockup-dark.svg`
-(icon and wordmark together, for the README). The site draws the same outlines inline from
+(icon and wordmark together, for the README), and `avatar.svg` / `avatar.png` (the small cut,
+full-bleed, for the GitHub organization avatar, which rounds its own corners). The site draws the same outlines inline from
 `site/components/brand/`.
 
 ## 6. Key screens
