@@ -759,11 +759,32 @@ variants!(name_sort_alone:
 
 // ── (e) one ScanBatch page arriving into an already-1M-key set ──────────
 
+/// [`time_update_and_render`] for one `ScanBatch` page, with the page before it
+/// applied untimed. A derived `Clone` gives every column of the `LoadedSet`
+/// zero spare capacity, so a page into a fresh clone reallocates and copies
+/// ~100MB inside the timed section: 15-20x the page's own cost locally, and
+/// 11-19ms on CI, which flaked these 16ms budgets. The running app's columns
+/// have growth headroom and reallocate only when they double; that cost is
+/// measured by `whole_scan_fold_in_tree_mode_from_empty`'s worst page.
+fn time_scan_page(fx: Fixture, base: &State) -> Duration {
+    let warm = fx.page(N, 500);
+    let page = fx.page(N + 500, 500);
+    let mut samples = Vec::with_capacity(11);
+    for _ in 0..11 {
+        let (working, _cmds) = update(base.clone(), Msg::ScanBatch { keys: warm.clone() });
+        let m = Msg::ScanBatch { keys: page.clone() };
+        let started = Instant::now();
+        let (state, _cmds) = update(working, m);
+        render_once(&state);
+        samples.push(started.elapsed());
+    }
+    median(samples)
+}
+
 fn scan_batch_flat(fx: Fixture, ceil_ms: u64) {
     // Flat scan order: `KeyView::extend`'s `O(page)` path (M4 task 3).
     let base = big_state(fx);
-    let page = fx.page(N, 500);
-    let elapsed = time_update_and_render(&base, 11, || Msg::ScanBatch { keys: page.clone() });
+    let elapsed = time_scan_page(fx, &base);
     println!(
         "[{}] ScanBatch of 500 into 1M keys: {elapsed:?}",
         fx.label()
@@ -782,8 +803,7 @@ fn scan_batch_tree(fx: Fixture, ceil_ms: u64) {
     // this is the "most pages are free" case. The worst page is measured by
     // `whole_scan_fold_in_tree_mode_from_empty`.
     let base = make_state(fx, true, SortBy::Scan);
-    let page = fx.page(N, 500);
-    let elapsed = time_update_and_render(&base, 11, || Msg::ScanBatch { keys: page.clone() });
+    let elapsed = time_scan_page(fx, &base);
     println!(
         "[{}] ScanBatch of 500 into 1M keys, tree mode: {elapsed:?}",
         fx.label()
@@ -799,8 +819,7 @@ fn scan_batch_flat_name_sorted(fx: Fixture, ceil_ms: u64) {
     // Flat, but sorted by Name: a page that does not land on a scheduled
     // rebuild is a cheap append; one that does pays a full re-sort.
     let base = make_state(fx, false, SortBy::Name);
-    let page = fx.page(N, 500);
-    let elapsed = time_update_and_render(&base, 11, || Msg::ScanBatch { keys: page.clone() });
+    let elapsed = time_scan_page(fx, &base);
     println!(
         "[{}] ScanBatch of 500 into 1M keys, flat sorted by name: {elapsed:?}",
         fx.label()
