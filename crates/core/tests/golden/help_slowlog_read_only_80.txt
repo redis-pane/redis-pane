@@ -1,4 +1,4 @@
-─ redis-pane ─ ● staging · from profile staging ─── READ-ONLY environment ⌃R   ─
+─ redis-pane ─ ● staging · from profile staging ───── READ-ONLY environment ⌃R ─
 
  SLOWLOG · 3 entries · sort: recent
  AGE       DURATION COMMAND                              CLIENT

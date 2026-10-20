@@ -1,4 +1,4 @@
-─ redis-pane ─ ● staging · from profile staging ─── READ-ONLY environment ⌃R   ─
+─ redis-pane ─ ● staging · from profile staging ───── READ-ONLY environment ⌃R ─
 
  KEY                      TYPE      TTL │ user:8812:session
 ┌─ help · value pane · hash ───────────────────────────────────────────────────┐

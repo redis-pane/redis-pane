@@ -55,7 +55,17 @@ now belong to the keyspace.
 The title bar still carries all four things it must always carry: Environment dot, target,
 database, and **Source** (`from profile` / `from --url` / `from REDIS_URL` / `default`). Per
 [ADR-0001](adr/0001-connection-resolution-order.md) the app resolves silently, and this readout
-is the entire mitigation for doing so — it is not optional chrome.
+is the entire mitigation for doing so — it is not optional chrome. The database shown is the one
+the connection uses: `--db` replaces a URL's own database, and a Cluster accepts only 0.
+
+**What yields when the bar is too narrow**, in order: the Cluster segment, then the ordinary
+liveness readout (`live`, `manual · never read`, …, trimmed from its end), then the target
+(truncated from the left), then the head: the server condition, READ-ONLY, and `disconnected`, kept
+in that order and trimmed from the end. The Environment and the Source never yield. Ordinary
+liveness goes before the target because the Viewer header carries it too (§6.4). The head outlasts
+the target because it is safety state that appears nowhere else: READ-ONLY, and a dropped link,
+which must never be silent. The whole target therefore stays on screen for as long as dropping
+ordinary liveness can save it.
 
 **On a Cluster** (M5, [ADR-0022](adr/0022-cluster-supported-in-stages.md)) the database is not
 shown, because a Cluster has only db 0, and a segment `cluster · 3 primaries · 6 nodes` follows the
@@ -73,7 +83,7 @@ report an offset.
 |---|---|
 | ≥ 120 cols | Two columns as above; the value pane takes the larger share |
 | 90–119 | Two columns; the keys pane sheds `SIZE`, keeping `TYPE` and `TTL` |
-| 70–89 | Two columns, tight; the title bar truncates the target from the left, never the Environment or Source |
+| 70–89 | Two columns, tight; the title bar drops liveness, then truncates the target from the left, never the Environment or Source |
 | < 70 | Single pane, stack-navigated; breadcrumb replaces columns |
 | Height < 24 | Hint bar collapses into the status bar |
 

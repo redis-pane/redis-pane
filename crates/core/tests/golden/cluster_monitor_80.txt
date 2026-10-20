@@ -1,4 +1,4 @@
-─ redis-pane ─ ● staging · …ter://cache-01:7000 · from profile staging  ● live ─
+─ redis-pane ─ ● staging · …s-cluster://cache-01:7000 · from profile staging ───
 
  ⚠ MONITOR on 3 primaries — costs each of them while open
  ● live                                                                 3 lines

@@ -105,8 +105,8 @@ const DEFAULT_PORT: u16 = 6379;
 
 /// Why resolution refused to pick a target.
 ///
-/// There is one case: a Profile named on the command line that the config does
-/// not define. Falling through to the next rule would connect somewhere the
+/// A Profile named on the command line that the config does not define, or a
+/// Cluster URL asked for a database other than 0. Falling through to the next rule would connect somewhere the
 /// user did not ask for, and a typo on the command line deserves the same
 /// refusal as a typo in the hand-authored config (ADR-0001, ADR-0002).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -119,11 +119,19 @@ pub enum ResolveError {
         /// Whether a config file was loaded at all.
         has_config: bool,
     },
+    /// A Cluster URL whose effective database is not 0. A Cluster has one
+    /// logical database, so the request cannot be honoured; refusing is the only
+    /// way the title bar's `/db` stays true (ADR-0022).
+    ClusterDatabase { target: String, db: u8 },
 }
 
 impl std::fmt::Display for ResolveError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            ResolveError::ClusterDatabase { target, db } => write!(
+                f,
+                "{target} is a Redis Cluster, which has only database 0; database {db} was requested"
+            ),
             ResolveError::UnknownProfile {
                 name,
                 available,
@@ -176,7 +184,7 @@ pub fn resolve(
             has_config: config.is_some(),
         });
     }
-    let mut resolution = resolve_target(flags, config, env);
+    let mut resolution = resolve_target(flags, config, env)?;
     // `--user`/`--password`/`--tls` always win, on top of whatever the target
     // resolution above produced — a Profile's stored password included. This
     // is the same "explicit flags beat everything" precedence ADR-0001 already
@@ -193,7 +201,11 @@ pub fn resolve(
     Ok(resolution)
 }
 
-fn resolve_target(flags: &Flags, config: Option<&Config>, env: &EnvVars) -> Resolution {
+fn resolve_target(
+    flags: &Flags,
+    config: Option<&Config>,
+    env: &EnvVars,
+) -> Result<Resolution, ResolveError> {
     // 1. An explicit --profile names a Profile, and outranks everything but a
     //    target given directly on the command line.
     if let Some(name) = &flags.profile
@@ -204,18 +216,20 @@ fn resolve_target(flags: &Flags, config: Option<&Config>, env: &EnvVars) -> Reso
 
     // 2. A target given directly on the command line.
     if flags.names_a_target() {
-        let raw = flags.url.clone();
-        let target = match &flags.url {
-            Some(url) => format_url(url, flags.db),
-            None => format_target(
-                flags.host.as_deref().unwrap_or(DEFAULT_HOST),
-                flags.port.unwrap_or(DEFAULT_PORT),
-                flags.db.unwrap_or(0),
-            ),
+        let (target, dial_url) = match &flags.url {
+            Some(url) => url_target(url, flags.db)?,
+            None => {
+                let target = format_target(
+                    flags.host.as_deref().unwrap_or(DEFAULT_HOST),
+                    flags.port.unwrap_or(DEFAULT_PORT),
+                    flags.db.unwrap_or(0),
+                );
+                let dial_url = dial_from(None, &target);
+                (target, dial_url)
+            }
         };
         let environment = infer_environment(&target);
-        let dial_url = dial_from(raw.as_deref(), &target);
-        return Resolution {
+        return Ok(Resolution {
             connection: Connection {
                 target,
                 environment,
@@ -224,7 +238,7 @@ fn resolve_target(flags: &Flags, config: Option<&Config>, env: &EnvVars) -> Reso
             },
             credentials: env_credentials(env),
             dial_url,
-        };
+        });
     }
 
     // 3. The config file's default Profile.
@@ -237,21 +251,23 @@ fn resolve_target(flags: &Flags, config: Option<&Config>, env: &EnvVars) -> Reso
 
     // 4. The environment. REDIS_URL wholesale, or the discrete set — never both.
     if env.names_a_target() {
-        let raw = env.redis_url.clone();
-        let target = match &env.redis_url {
-            Some(url) => format_url(url, flags.db),
-            None => format_target(
-                env.redis_host.as_deref().unwrap_or(DEFAULT_HOST),
-                env.redis_port
-                    .as_deref()
-                    .and_then(|p| p.parse().ok())
-                    .unwrap_or(DEFAULT_PORT),
-                flags.db.unwrap_or(0),
-            ),
+        let (target, dial_url) = match &env.redis_url {
+            Some(url) => url_target(url, flags.db)?,
+            None => {
+                let target = format_target(
+                    env.redis_host.as_deref().unwrap_or(DEFAULT_HOST),
+                    env.redis_port
+                        .as_deref()
+                        .and_then(|p| p.parse().ok())
+                        .unwrap_or(DEFAULT_PORT),
+                    flags.db.unwrap_or(0),
+                );
+                let dial_url = dial_from(None, &target);
+                (target, dial_url)
+            }
         };
         let environment = infer_environment(&target);
-        let dial_url = dial_from(raw.as_deref(), &target);
-        return Resolution {
+        return Ok(Resolution {
             connection: Connection {
                 target,
                 environment,
@@ -260,13 +276,13 @@ fn resolve_target(flags: &Flags, config: Option<&Config>, env: &EnvVars) -> Reso
             },
             credentials: env_credentials(env),
             dial_url,
-        };
+        });
     }
 
     // 5. Nothing was configured.
     let target = format_target(DEFAULT_HOST, DEFAULT_PORT, flags.db.unwrap_or(0));
     let dial_url = dial_from(None, &target);
-    Resolution {
+    Ok(Resolution {
         connection: Connection {
             target,
             environment: Environment::Local,
@@ -275,16 +291,82 @@ fn resolve_target(flags: &Flags, config: Option<&Config>, env: &EnvVars) -> Reso
         },
         credentials: env_credentials(env),
         dial_url,
-    }
+    })
 }
 
-/// The URL to dial: the original when one was given, otherwise assembled from
-/// the target. The displayed target is redacted, so it cannot be reused here.
+/// The URL to dial, assembled from a host target. The displayed target is
+/// redacted, so for a URL target [`url_target`] builds the dial URL instead.
 fn dial_from(raw: Option<&str>, target: &str) -> String {
     match raw {
         Some(url) => url.to_string(),
         None if target.contains("://") => target.to_string(),
         None => format!("redis://{target}"),
+    }
+}
+
+/// The displayed target and the dial URL for a URL target.
+///
+/// One effective database governs both: `chosen` (`--db`, or a Profile's `db`)
+/// if given, else the URL's own, else 0. The displayed target is the redacted
+/// URL carrying exactly that `/db`, so the title bar says the database the
+/// connection uses (#106). The dial URL is the original, rewritten only when
+/// the effective database differs from what the URL already says, so a URL
+/// nobody overrode is dialled byte for byte as written.
+///
+/// A Cluster has only database 0, so a `redis-cluster://` or
+/// `rediss-cluster://` URL whose effective database is not 0 is refused.
+fn url_target(url: &str, chosen: Option<u8>) -> Result<(String, String), ResolveError> {
+    let own = url_database(url);
+    let db = chosen.or(own).unwrap_or(0);
+    if db != 0 && is_cluster_url(url) {
+        return Err(ResolveError::ClusterDatabase {
+            target: redact(url),
+            db,
+        });
+    }
+    let dial = if own.unwrap_or(0) == db {
+        url.to_string()
+    } else {
+        with_database(url, db)
+    };
+    Ok((redact(&with_database(url, db)), dial))
+}
+
+fn is_cluster_url(url: &str) -> bool {
+    url.starts_with("redis-cluster://") || url.starts_with("rediss-cluster://")
+}
+
+/// Where the path of a `scheme://authority/path?query#fragment` URL sits, as a
+/// range into `url`; `None` for a string without `://` and for a unix-socket
+/// URL, whose path is the socket and not a database.
+fn path_span(url: &str) -> Option<std::ops::Range<usize>> {
+    let (scheme, rest) = url.split_once("://")?;
+    if scheme.contains("unix") {
+        return None;
+    }
+    let rest_start = scheme.len() + 3;
+    // The authority (userinfo, host list) ends at the first `/`, `?` or `#`;
+    // a password holding one of them must be percent-encoded, as in any URL.
+    let delim = |s: &str| s.find(['/', '?', '#']);
+    let start = rest_start + delim(rest).unwrap_or(rest.len());
+    let tail = &url[start..];
+    let end = start + tail.find(['?', '#']).unwrap_or(tail.len());
+    Some(start..end)
+}
+
+/// The database a URL names in its path (`/2`), if it names one.
+fn url_database(url: &str) -> Option<u8> {
+    let span = path_span(url)?;
+    url[span].trim_start_matches('/').parse().ok()
+}
+
+/// `url` with its path replaced by `/<db>`, keeping the scheme, userinfo, host
+/// list, query and fragment exactly as written. A URL with no path-database
+/// notion (unix socket, no scheme) is returned as it came.
+fn with_database(url: &str, db: u8) -> String {
+    match path_span(url) {
+        Some(span) => format!("{}/{db}{}", &url[..span.start], &url[span.end..]),
+        None => url.to_string(),
     }
 }
 
@@ -302,16 +384,24 @@ fn env_credentials(env: &EnvVars) -> Credentials {
     }
 }
 
-fn from_profile(name: &str, profile: &Profile, db_override: Option<u8>) -> Resolution {
-    let db = db_override.or(profile.db).unwrap_or(0);
-    let raw = profile.url.clone();
-    let target = match &profile.url {
-        Some(url) => format_url(url, Some(db)),
-        None => format_target(
-            profile.host.as_deref().unwrap_or(DEFAULT_HOST),
-            profile.port.unwrap_or(DEFAULT_PORT),
-            db,
-        ),
+fn from_profile(
+    name: &str,
+    profile: &Profile,
+    db_override: Option<u8>,
+) -> Result<Resolution, ResolveError> {
+    // `--db`, then the Profile's `db`, then (for a URL) the URL's own, then 0.
+    let chosen = db_override.or(profile.db);
+    let (target, dial_url) = match &profile.url {
+        Some(url) => url_target(url, chosen)?,
+        None => {
+            let target = format_target(
+                profile.host.as_deref().unwrap_or(DEFAULT_HOST),
+                profile.port.unwrap_or(DEFAULT_PORT),
+                chosen.unwrap_or(0),
+            );
+            let dial_url = dial_from(None, &target);
+            (target, dial_url)
+        }
     };
     // Reference forms are checked before the literal, so a Profile carrying
     // both does not silently use the one ADR-0002 discourages.
@@ -325,8 +415,7 @@ fn from_profile(name: &str, profile: &Profile, db_override: Option<u8>) -> Resol
         PasswordSource::None
     };
 
-    let dial_url = dial_from(raw.as_deref(), &target);
-    Resolution {
+    Ok(Resolution {
         connection: Connection {
             target,
             environment: profile.environment(),
@@ -339,19 +428,11 @@ fn from_profile(name: &str, profile: &Profile, db_override: Option<u8>) -> Resol
             tls: profile.tls.unwrap_or(false),
         },
         dial_url,
-    }
+    })
 }
 
 fn format_target(host: &str, port: u16, db: u8) -> String {
     format!("{host}:{port}/{db}")
-}
-
-fn format_url(url: &str, db: Option<u8>) -> String {
-    let url = redact(url);
-    match db {
-        Some(db) => format!("{}/{db}", url.trim_end_matches('/')),
-        None => url,
-    }
 }
 
 /// Remove any password embedded in a URL.
@@ -480,7 +561,7 @@ mod tests {
                 flags: Flags::default(),
                 config: None,
                 env: env.clone(),
-                target: "redis://from-env:6379",
+                target: "redis://from-env:6379/0",
                 source: Source::Environment,
             },
             Case {
@@ -521,7 +602,7 @@ mod tests {
             ..EnvVars::default()
         };
         let got = resolved(&Flags::default(), None, &env).connection;
-        assert_eq!(got.target, "redis://real-target:6379");
+        assert_eq!(got.target, "redis://real-target:6379/0");
         assert!(!got.target.contains("stale-leftover"));
         assert!(!got.target.contains("9999"));
     }
@@ -666,6 +747,224 @@ mod tests {
                 .environment,
             Environment::Staging
         );
+    }
+
+    // ── #106: one effective database, shown and dialled ────────────────────
+
+    fn url_flags(url: &str, db: Option<u8>) -> Flags {
+        Flags {
+            url: Some(url.into()),
+            db,
+            ..Flags::default()
+        }
+    }
+
+    /// (display target, dial URL) for a `--url` target.
+    fn shown_and_dialled(url: &str, db: Option<u8>) -> (String, String) {
+        let r = resolved(&url_flags(url, db), None, &EnvVars::default());
+        (r.connection.target, r.dial_url)
+    }
+
+    #[test]
+    fn a_urls_database_is_replaced_not_appended_and_shown_as_dialled() {
+        // (url, --db, displayed, dialled)
+        let cases: &[(&str, Option<u8>, &str, &str)] = &[
+            // no database in the URL
+            ("redis://h:6379", None, "redis://h:6379/0", "redis://h:6379"),
+            (
+                "redis://h:6379/",
+                None,
+                "redis://h:6379/0",
+                "redis://h:6379/",
+            ),
+            (
+                "redis://h:6379",
+                Some(3),
+                "redis://h:6379/3",
+                "redis://h:6379/3",
+            ),
+            (
+                "redis://h:6379/",
+                Some(3),
+                "redis://h:6379/3",
+                "redis://h:6379/3",
+            ),
+            (
+                "redis://h:6379",
+                Some(0),
+                "redis://h:6379/0",
+                "redis://h:6379",
+            ),
+            // a database in the URL
+            (
+                "redis://h:6379/2",
+                None,
+                "redis://h:6379/2",
+                "redis://h:6379/2",
+            ),
+            (
+                "redis://h:6379/2",
+                Some(3),
+                "redis://h:6379/3",
+                "redis://h:6379/3",
+            ),
+            (
+                "redis://h:6379/2",
+                Some(2),
+                "redis://h:6379/2",
+                "redis://h:6379/2",
+            ),
+            (
+                "redis://h:6379/2",
+                Some(0),
+                "redis://h:6379/0",
+                "redis://h:6379/0",
+            ),
+            // a query string and a sentinel host list survive
+            (
+                "redis-sentinel://h1:26379,h2:26379/0?sentinelServiceName=x",
+                Some(4),
+                "redis-sentinel://h1:26379,h2:26379/4?sentinelServiceName=x",
+                "redis-sentinel://h1:26379,h2:26379/4?sentinelServiceName=x",
+            ),
+            (
+                "redis-sentinel://h1:26379?sentinelServiceName=x",
+                Some(4),
+                "redis-sentinel://h1:26379/4?sentinelServiceName=x",
+                "redis-sentinel://h1:26379/4?sentinelServiceName=x",
+            ),
+            (
+                "redis-sentinel://h1:26379?sentinelServiceName=x",
+                None,
+                "redis-sentinel://h1:26379/0?sentinelServiceName=x",
+                "redis-sentinel://h1:26379?sentinelServiceName=x",
+            ),
+            (
+                "rediss://h:6380/5?x=1#frag",
+                Some(6),
+                "rediss://h:6380/6?x=1#frag",
+                "rediss://h:6380/6?x=1#frag",
+            ),
+        ];
+        for (url, db, shown, dialled) in cases {
+            let (got_shown, got_dial) = shown_and_dialled(url, *db);
+            assert_eq!(&got_shown, shown, "display of {url} with --db {db:?}");
+            assert_eq!(&got_dial, dialled, "dial of {url} with --db {db:?}");
+        }
+    }
+
+    #[test]
+    fn userinfo_is_redacted_for_display_and_kept_for_dialling() {
+        let (shown, dial) = shown_and_dialled("rediss://alice:s3cret@h:6380/2", Some(7));
+        assert_eq!(shown, "rediss://alice:•••@h:6380/7");
+        assert_eq!(dial, "rediss://alice:s3cret@h:6380/7");
+        let (shown, dial) = shown_and_dialled("redis://:s3cret@h:6379", None);
+        assert_eq!(shown, "redis://•••@h:6379/0");
+        assert_eq!(dial, "redis://:s3cret@h:6379");
+        assert!(!shown.contains("s3cret"));
+    }
+
+    #[test]
+    fn redis_url_in_the_environment_takes_db_too() {
+        let flags = Flags {
+            db: Some(3),
+            ..Flags::default()
+        };
+        let r = resolved(&flags, None, &env_url("redis://h:6379/2"));
+        assert_eq!(r.connection.target, "redis://h:6379/3");
+        assert_eq!(r.dial_url, "redis://h:6379/3");
+        assert_eq!(r.connection.source, Source::Environment);
+        let r = resolved(&Flags::default(), None, &env_url("redis://h:6379/2"));
+        assert_eq!(r.connection.target, "redis://h:6379/2");
+        assert_eq!(r.dial_url, "redis://h:6379/2");
+    }
+
+    #[test]
+    fn a_profile_url_shows_what_it_dials_and_db_follows_the_precedence() {
+        let cfg = crate::config::parse(
+            r#"{"profiles": {
+                 "bare":  {"url":"redis://h:6379"},
+                 "named": {"url":"redis://h:6379/2"},
+                 "both":  {"url":"redis://h:6379/2","db":5}
+               }}"#,
+        )
+        .unwrap();
+        let by = |name: &str, db: Option<u8>| {
+            let flags = Flags {
+                profile: Some(name.into()),
+                db,
+                ..Flags::default()
+            };
+            let r = resolved(&flags, Some(&cfg), &EnvVars::default());
+            (r.connection.target, r.dial_url)
+        };
+        let s = |a: &str, b: &str| (a.to_string(), b.to_string());
+        // No --db: nothing about what is dialled changes.
+        assert_eq!(by("bare", None), s("redis://h:6379/0", "redis://h:6379"));
+        assert_eq!(by("named", None), s("redis://h:6379/2", "redis://h:6379/2"));
+        // The Profile's `db` outranks its URL's database; `--db` outranks both.
+        assert_eq!(by("both", None), s("redis://h:6379/5", "redis://h:6379/5"));
+        assert_eq!(
+            by("both", Some(1)),
+            s("redis://h:6379/1", "redis://h:6379/1")
+        );
+        assert_eq!(
+            by("bare", Some(1)),
+            s("redis://h:6379/1", "redis://h:6379/1")
+        );
+    }
+
+    #[test]
+    fn a_cluster_url_accepts_database_0_only() {
+        for url in [
+            "redis-cluster://127.0.0.1:30001",
+            "rediss-cluster://c:30001/0",
+        ] {
+            for db in [None, Some(0)] {
+                resolve(&url_flags(url, db), None, &EnvVars::default())
+                    .unwrap_or_else(|e| panic!("{url} --db {db:?} is refused: {e}"));
+            }
+            let err = resolve(&url_flags(url, Some(3)), None, &EnvVars::default())
+                .expect_err("a Cluster has no database 3");
+            assert!(matches!(err, ResolveError::ClusterDatabase { db: 3, .. }));
+            assert!(err.to_string().contains("only database 0"), "{err}");
+        }
+        // The URL's own database counts, and a password never reaches the message.
+        let err = resolve(
+            &url_flags("redis-cluster://u:s3cret@c:30001/2", None),
+            None,
+            &EnvVars::default(),
+        )
+        .expect_err("the URL names database 2");
+        assert!(!err.to_string().contains("s3cret"), "{err}");
+        // From the environment and from a Profile as well.
+        let flags = Flags {
+            db: Some(3),
+            ..Flags::default()
+        };
+        assert!(resolve(&flags, None, &env_url("redis-cluster://c:30001")).is_err());
+        let cfg = crate::config::parse(
+            r#"{"profiles":{"c":{"url":"redis-cluster://c:30001","env":"prod"}}}"#,
+        )
+        .unwrap();
+        let flags = Flags {
+            profile: Some("c".into()),
+            db: Some(3),
+            ..Flags::default()
+        };
+        assert!(resolve(&flags, Some(&cfg), &EnvVars::default()).is_err());
+    }
+
+    #[test]
+    fn with_database_leaves_urls_without_a_path_database_alone() {
+        assert_eq!(
+            with_database("redis+unix:///tmp/r.sock?x=1", 3),
+            "redis+unix:///tmp/r.sock?x=1"
+        );
+        assert_eq!(with_database("no-scheme", 3), "no-scheme");
+        assert_eq!(url_database("redis://h:1/12"), Some(12));
+        assert_eq!(url_database("redis://h:1/"), None);
+        assert_eq!(url_database("redis://h:1?a=/9"), None);
     }
 
     fn unknown(flags: &Flags, config: Option<&Config>) -> ResolveError {

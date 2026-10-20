@@ -2070,17 +2070,50 @@ fn title_bar(state: &State, theme: &Theme, clock: &dyn Clock, area: Rect, buf: &
     let required =
         prefix.chars().count() + 2 + env.label().chars().count() + 3 + source.chars().count() + 1;
 
-    // Trim the readout from the end until it fits. Liveness goes before the
-    // safety badge, because the Viewer header carries liveness too (§6.4) while
-    // READ-ONLY appears nowhere else.
-    let mut readout = status_readout(state, clock);
-    for (text, _) in &mut readout {
+    // What yields, in order (DESIGN §2): the Cluster segment, then the ordinary
+    // liveness readout (`live`, `manual`), then the target (truncated from the
+    // left), then the head (condition, READ-ONLY, disconnected). Liveness goes before the target because the Viewer header carries
+    // liveness too (§6.4), and the target before READ-ONLY because that badge
+    // appears nowhere else. So the liveness readout is trimmed from the end
+    // until the *whole* target fits, and only when it has nothing left to give
+    // does the target truncate.
+    let (mut head, mut live) = status_readout_parts(state, clock);
+    for (text, _) in head.iter_mut().chain(live.iter_mut()) {
         *text = g.text(text).into_owned();
     }
     let readout_width =
         |r: &[(String, Token)]| -> usize { r.iter().map(|(t, _)| t.chars().count()).sum() };
-    while !readout.is_empty() && required + readout_width(&readout) + 3 > w {
-        readout.pop();
+    let shown_target = match state.connection.topology {
+        Some(_) => strip_db(&state.connection.target),
+        None => &state.connection.target,
+    };
+    let target_len = shown_target.chars().count();
+    // The readout as drawn: the head, then as much liveness as is kept. The
+    // spacer the head leaves before liveness is dropped with it.
+    let drawn = |head: &[(String, Token)], live: &[(String, Token)]| {
+        let mut out: Vec<(String, Token)> = head.iter().chain(live).cloned().collect();
+        if live.is_empty() {
+            while out.last().is_some_and(|(t, _)| t.trim().is_empty()) {
+                out.pop();
+            }
+        }
+        out
+    };
+    let mut readout = drawn(&head, &live);
+    while !live.is_empty()
+        && w.saturating_sub(readout_width(&readout) + 3)
+            .saturating_sub(required + 3)
+            < target_len
+    {
+        live.pop();
+        readout = drawn(&head, &live);
+    }
+    // Out of liveness and the target still does not fit: it will be truncated,
+    // but never at the cost of the Environment and the Source, so the badge
+    // yields last of all.
+    while !head.is_empty() && required + readout_width(&readout) + 3 > w {
+        head.pop();
+        readout = drawn(&head, &live);
     }
     let readout_w = readout_width(&readout);
     let left_budget = w.saturating_sub(readout_w + 3);
@@ -2101,14 +2134,10 @@ fn title_bar(state: &State, theme: &Theme, clock: &dyn Clock, area: Rect, buf: &
     let target_budget = left_budget.saturating_sub(required + 3);
     // A Cluster has one logical database, so the `/db` the target carries is
     // not shown for it (M5 task 2). Anything else is left exactly as resolved.
-    let shown_target = match state.connection.topology {
-        Some(_) => strip_db(&state.connection.target),
-        None => &state.connection.target,
-    };
-    let mut target_len = 0;
+    let mut drawn_len = 0;
     if target_budget >= 4 {
         let target = truncate_left(shown_target, target_budget, g.get(Glyph::Ellipsis));
-        target_len = target.chars().count();
+        drawn_len = target.chars().count();
         x = put(buf, x, 0, &g.text(" · "), theme.style(Token::Muted));
         x = put(buf, x, 0, &target, theme.style(Token::Text));
     }
@@ -2120,9 +2149,7 @@ fn title_bar(state: &State, theme: &Theme, clock: &dyn Clock, area: Rect, buf: &
         let segment = g.text(&cluster_segment(topology)).into_owned();
         let sep = g.text(" · ");
         let sep_w = sep.chars().count();
-        if target_len == shown_target.chars().count()
-            && target_len + sep_w + segment.chars().count() <= target_budget
-        {
+        if drawn_len == target_len && drawn_len + sep_w + segment.chars().count() <= target_budget {
             x = put(buf, x, 0, &sep, theme.style(Token::Muted));
             x = put(buf, x, 0, &segment, theme.style(Token::Muted));
         }
@@ -2188,6 +2215,20 @@ fn truncate_left(s: &str, width: usize, ellipsis: &str) -> String {
 /// more surprising fact and the one that explains a failure the user is about
 /// to hit.
 pub fn status_readout(state: &State, clock: &dyn Clock) -> Vec<(String, Token)> {
+    let (mut out, live) = status_readout_parts(state, clock);
+    out.extend(live);
+    out
+}
+
+type Readout = Vec<(String, Token)>;
+
+/// [`status_readout`] in two parts: the head, and the ordinary liveness readout
+/// (`live`, `manual`). The head is the condition, the READ-ONLY badge, and a
+/// dropped link (`disconnected`), in that order; the last is in the head because
+/// it is a safety condition that must stay visible. The title bar drops the
+/// ordinary liveness before it shortens the target and the head after it
+/// (DESIGN §2).
+fn status_readout_parts(state: &State, clock: &dyn Clock) -> (Readout, Readout) {
     let mut out: Vec<(String, Token)> = Vec::new();
 
     if let Some(condition) = state.condition {
@@ -2210,6 +2251,7 @@ pub fn status_readout(state: &State, clock: &dyn Clock) -> Vec<(String, Token)> 
         out.push(("  ".into(), Token::Muted));
     }
 
+    let mut head = std::mem::take(&mut out);
     let liveness = state.liveness();
     out.push((
         liveness.readout().to_string(),
@@ -2250,7 +2292,15 @@ pub fn status_readout(state: &State, clock: &dyn Clock) -> Vec<(String, Token)> 
     {
         out.push((format!("  {hint}"), Token::Muted));
     }
-    out
+    // A dropped link is a safety condition, not ordinary liveness: the Viewer
+    // header shows it only while a key is open, and CLAUDE.md requires that
+    // degradation is never silent. So it joins the head and outranks the target.
+    // Only `live` and `manual` are the ordinary readout that yields first.
+    if liveness == Liveness::Disconnected {
+        head.extend(out);
+        return (head, Vec::new());
+    }
+    (head, out)
 }
 
 /// The separator between hint bar entries. Three spaces, not `" · "` — the

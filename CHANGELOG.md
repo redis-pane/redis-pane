@@ -6,6 +6,18 @@ promise a stable interface.
 
 ## [Unreleased]
 
+### Fixed
+
+- `--db` now applies when the target is a URL (`--url`, `REDIS_URL` or a Profile's `url`). It
+  replaces the URL's own database in what is dialled, and the title bar, `--print-target` and
+  `--probe` show that database. Before, the connection used the URL's database while the title bar
+  showed `--db`, and a URL that named one displayed as `/2/3`. The order is `--db`, then the
+  Profile's `db`, then the URL's, then 0. A Cluster accepts only database 0, and a
+  `redis-cluster://` URL with any other is refused at startup with exit code `3` (#106).
+- With Read-only Mode on, the title bar no longer cuts the target to `…90/0` at about 100 columns.
+  When the bar is too narrow it now drops the liveness readout before it shortens the target, and
+  keeps the READ-ONLY badge longest (#107).
+
 ## [0.1.0-beta.5] - 2026-10-20
 
 ### Changed

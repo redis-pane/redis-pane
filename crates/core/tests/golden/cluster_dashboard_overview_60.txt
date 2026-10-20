@@ -1,4 +1,4 @@
-─ redis-pane ─ ● staging · from profile staging ─── ● live ─
+─ redis-pane ─ ● staging · …:7100 · from profile staging ───
 
  DASHBOARD · updated 8s ago
  cluster_state ok · 16384/16384 slots · 0 failing

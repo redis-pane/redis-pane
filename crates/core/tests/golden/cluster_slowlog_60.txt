@@ -1,4 +1,4 @@
-─ redis-pane ─ ● staging · from profile staging ─── ● live ─
+─ redis-pane ─ ● staging · …:7000 · from profile staging ───
 
  SLOWLOG · 4 entries · 6 nodes · sort: recent
  DURATION NODE            COMMAND
