@@ -98,7 +98,7 @@ nothing (ADR-0011):
 cargo tree -p redis-pane-core -e normal | grep -iE 'crossterm|tokio|fred'
 ```
 
-Two suites are planned (ADR-0011) and the distinction matters: the default `cargo test` run is
+Two suites exist (ADR-0011) and the distinction matters: the default `cargo test` run is
 the functional core plus golden-frame snapshots and needs no Docker; the integration suite uses
 `testcontainers` against real Redis and covers `SCAN` streaming, tracking invalidation across a
 reconnect, capability probing where `CLIENT TRACKING` is refused, and error mapping for
