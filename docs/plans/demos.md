@@ -1,6 +1,6 @@
 # Demos: tapes, one copy of each recording, Tier 1 scenarios
 
-Status: **task 1 and task 2 done** 2026-10-10. Two tasks. Each runs on one Sonnet subagent, and each PR merges
+Status: **done**: task 1 in #104, task 2 in #105 (2026-10-10). Two tasks. Each runs on one Sonnet subagent, and each PR merges
 once every check passes.
 
 ## Context

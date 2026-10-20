@@ -321,10 +321,11 @@ config file; a **Connection** is a live session, which may be **ad-hoc** (no Pro
 
 ## 10. Open questions
 
-- **Packaging, scheduled for a decision at the end of alpha (not M4):** all four items are
-  wanted — Homebrew (plus release notes), musl and arm64 Linux builds, macOS code signing and
-  notarization, and Windows code signing. None is built in M4; raw GitHub Release archives
-  (`cargo-dist`, unsigned) remain the only distribution until this is decided.
+- **Packaging, still open and not scheduled** (it was to be decided at the end of alpha, which has
+  ended): all four items are wanted — Homebrew (plus release notes), musl and arm64 Linux builds,
+  macOS code signing and notarization, and Windows code signing. None is built; the betas ship the
+  same raw GitHub Release archives (`cargo-dist`, unsigned), the only distribution until this is
+  decided.
 - Should Profiles be shareable across a team (checked-in config)? ADR-0002's reference-only
   credential path makes this plausible — is it worth designing for in v1?
 - With one Connection per process, is there any in-app Profile surface left to build, or do

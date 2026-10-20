@@ -1,6 +1,6 @@
 # Docs site: mdBook → Fumadocs (Next.js), static on GitHub Pages
 
-Status: **planned** 2026-10-10. Two tasks. Each runs on one Sonnet subagent, and each PR merges
+Status: **done** 2026-10-10, in #102 and #103 (planned 2026-10-10). Two tasks. Each runs on one Sonnet subagent, and each PR merges
 once every check passes.
 
 ## Context

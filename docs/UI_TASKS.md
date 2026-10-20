@@ -19,7 +19,7 @@ checkboxes**. Treat this section's emptiness as a prompt to look again, not as a
   database, or 0 if it names none. `format_url` appends `/N` to the *displayed* target, while
   `dial_from` dials the raw URL untouched, so the readout and the connection disagree. A URL that
   already carries a database, such as `redis://host/2`, displays as `/2/3` under `--db 3`. The
-  README and the book (Databases) document this as a known bug in the meantime. The code is in
+  README and the user guide (Databases) document this as a known bug in the meantime. The code is in
   `crates/core/src/resolve.rs`.
   - **Decision pending**, two candidates:
     1. the flag overrides the URL's database (rewrite the dialled URL's path; on a Cluster only
