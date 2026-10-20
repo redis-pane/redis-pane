@@ -19,14 +19,14 @@ promise a stable interface.
 - `redis-pane --help` describes `--host` and `--port`, explains how the target is chosen, and no
   longer cites an internal document under `--db`.
 - The keybindings reference no longer says you can override bindings. Keys can't be rebound.
-
 - Bulk delete on an `unknown` Environment now asks you to type the count of keys, as it already
   did on `prod`.
 
 ### Added
 
 - A user guide as a website at <https://redis-pane.github.io/redis-pane>, built from `site/`
-  (Fumadocs on Next.js), with a landing page and recorded demos of browsing, the editor and Monitor.
+  (Fumadocs on Next.js), with a landing page and thirteen recorded demos, from browsing and live updates to
+  editing, safety and the server views.
 - The project now lives at `redis-pane/redis-pane`. The installer URLs, the release downloads and
   the docs links point there; the old `vinodsantharam/redis-pane` URLs redirect.
 - The `>:_` icon and the `redis:pane` wordmark.
