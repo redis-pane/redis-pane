@@ -1,4 +1,4 @@
-─ redis-pane ─ ● staging · from profile staging  ✕ disconnected · read 14s ago ─
+─ redis-pane ─ ● staging · cache-01:6379/0 · from profile staging ──────────────
 ┌─ help · keys pane ───────────────────────────────────────────────────────────┐
 │ →         open / expand                                                      │
 │ /         filter                                                             │

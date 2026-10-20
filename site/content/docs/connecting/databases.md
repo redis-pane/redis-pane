@@ -11,21 +11,25 @@ whole session.
 
 ## Choosing a database
 
-Which way depends on how you name the target:
+One database applies, whichever way you name the target. The first of these that is set wins:
 
-| You use | Choose the database with |
-| --- | --- |
-| `--host` and `--port`, or a Profile with `host` and `port` | `--db N`, or `"db": N` in the Profile |
-| `--url`, `REDIS_URL`, or a Profile with `url` | The URL path: `redis://host:6379/3` |
+1. `--db N`
+2. The Profile's `"db": N`
+3. The database in the URL's path: `redis://host:6379/3`
+4. `0`
 
 ```bash
 redis-pane --host localhost --db 3
 redis-pane --url redis://localhost:6379/3
+redis-pane --url redis://localhost:6379/2 --db 3   # database 3
 ```
 
-> **`--db` doesn't change a URL.** With `--url`, a Profile's `url`, or `REDIS_URL`, `--db` and a
-> Profile's `db` are not applied to the connection, even though the title bar then shows the
-> number. Put the database in the URL itself. This is a known bug, recorded in
-> [`docs/UI_TASKS.md`](https://github.com/redis-pane/redis-pane/blob/main/docs/UI_TASKS.md).
+`--db` replaces a URL's database, the way `--user` and `--password` replace the ones a URL
+carries. The scheme, the credentials, the hosts and the query string of the URL are kept. The title
+bar, `--print-target` and `--probe` all show the database the connection uses, so
+`redis://localhost:6379/3` is what you read for the last line above.
 
-On a [Cluster](./cluster.md) there is only database 0.
+On a [Cluster](./cluster.md) there is only database 0. `--db 0` is accepted. Any other database,
+whether from `--db`, a Profile's `db` or the URL, is refused, with exit code `3` for a
+`redis-cluster://` URL. A plain `redis://` URL that turns out to name a Cluster node is refused when
+it connects, with the server's own `SELECT is not allowed in cluster mode`.

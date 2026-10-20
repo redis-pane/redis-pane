@@ -23,7 +23,7 @@ The title bar adds the shape of the Cluster after the target, for example
 - **The open key is live** on whichever node owns its slot, through failovers and slot moves.
 - **Edits go to the owner of the key.**
 - **There is only database 0.** The title bar doesn't show a database, and
-  `--db` has no use here.
+  `--db` has no use here: `--db 0` is accepted and any other database is refused.
 - **Rename and duplicate** have a cross-slot rule. See
   [Rename and duplicate](../editing/rename-duplicate.md#on-a-cluster).
 - **Bulk delete** sends one `DEL` per key, so keys in different slots delete without trouble.

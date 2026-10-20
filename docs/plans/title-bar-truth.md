@@ -1,6 +1,6 @@
 # The title bar tells the truth: `--db` over a URL (#106), target truncation (#107)
 
-Status: **planned** 2026-10-20. One task, one Sonnet subagent, one PR. It merges once every
+Status: **done** 2026-10-20. One task, one Sonnet subagent, one PR. It merges once every
 check has finished and passed.
 
 ## Context

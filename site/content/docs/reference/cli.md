@@ -40,7 +40,7 @@ Options:
           Connect to this port. Combine with --host; the host defaults to 127.0.0.1
 
       --db <N>
-          Database index. The database is fixed at launch; there is no way to change it from inside the app
+          Database index. Replaces the database in a URL. The database is fixed at launch; there is no way to change it from inside the app. A Cluster has only database 0
 
       --user <NAME>
           ACL username. Always wins over a Profile's or the environment's

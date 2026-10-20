@@ -37,8 +37,8 @@ pub struct Cli {
     /// Connect to this port. Combine with --host; the host defaults to 127.0.0.1.
     #[arg(long, value_name = "PORT")]
     pub port: Option<u16>,
-    /// Database index. The database is fixed at launch; there is no way to change it
-    /// from inside the app.
+    /// Database index. Replaces the database in a URL. The database is fixed at launch;
+    /// there is no way to change it from inside the app. A Cluster has only database 0.
     #[arg(long, value_name = "N")]
     pub db: Option<u8>,
     /// ACL username. Always wins over a Profile's or the environment's.

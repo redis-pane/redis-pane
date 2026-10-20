@@ -1,4 +1,4 @@
-─ redis-pane ─ ● staging · …01:6379/0 · from profile staging  ● live ─
+─ redis-pane ─ ● staging · cache-01:6379/0 · from profile staging ────
 
  KEY                 TYPE      TTL │ → to open
  ● user:8812:session hash      42m │

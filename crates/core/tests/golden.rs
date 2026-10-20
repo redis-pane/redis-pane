@@ -5940,3 +5940,71 @@ fn golden_bulk_status_while_deleting() {
     state.bulk.as_mut().unwrap().done = 3;
     assert_golden("bulk_deleting", &draw(&state, 130, 26));
 }
+
+// ── #107 — the title bar yields liveness before the target ──────────────────
+
+fn read_only_prod(target: &str, link: Link) -> State {
+    State {
+        cols: 120,
+        rows: 3,
+        connection: Connection {
+            target: target.into(),
+            environment: Environment::Prod,
+            source: Source::Flag,
+            topology: None,
+        },
+        read_only: Some(ReadOnlyReason::Environment),
+        link,
+        ..State::default()
+    }
+}
+
+#[test]
+fn golden_title_bar_target_outranks_liveness() {
+    let mut rendered = Vec::new();
+    let degraded = read_only_prod("127.0.0.1:6390/0", up(Tk::Unsupported));
+    for w in [120u16, 100, 90, 80] {
+        rendered.push(format!(
+            "{w:>3} | {}",
+            title_at(&degraded, w, GlyphSet::Unicode)
+        ));
+    }
+    let live = read_only_prod("127.0.0.1:6390/0", up(Tk::Armed));
+    for w in [120u16, 100, 80] {
+        rendered.push(format!(
+            "{w:>3} | {}",
+            title_at(&live, w, GlyphSet::Unicode)
+        ));
+    }
+    let long = read_only_prod(
+        "redis://cache-01.eu-west-1.example.com:6379/0",
+        up(Tk::Unsupported),
+    );
+    for w in [120u16, 80] {
+        rendered.push(format!(
+            "{w:>3} | {}",
+            title_at(&long, w, GlyphSet::Unicode)
+        ));
+    }
+    assert_golden("title_bar_target_outranks_liveness", &rendered.join("\n"));
+}
+
+#[test]
+fn the_whole_target_survives_whenever_dropping_liveness_would_save_it() {
+    let state = read_only_prod("127.0.0.1:6390/0", up(Tk::Unsupported));
+    for w in 70..=140u16 {
+        let title = title_at(&state, w, GlyphSet::Unicode);
+        assert!(title.contains("prod"), "Environment lost at {w}: {title}");
+        assert!(title.contains("flag"), "Source lost at {w}: {title}");
+        if w >= 90 {
+            assert!(
+                title.contains("127.0.0.1:6390/0"),
+                "target truncated at {w}: {title}"
+            );
+        }
+        // The badge outlasts liveness, so liveness is never kept without it.
+        if title.contains("manual") {
+            assert!(title.contains("READ-ONLY"), "badge lost first at {w}");
+        }
+    }
+}

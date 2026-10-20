@@ -1,4 +1,4 @@
-─ redis-pane ─ ● staging · from profile staging ─── ● live ─
+─ redis-pane ─ ● staging · …379/0 · from profile staging ───
 
  Esc back  ·  bighash
  ✕ gone

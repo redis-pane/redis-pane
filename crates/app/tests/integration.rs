@@ -4901,6 +4901,39 @@ mod cluster_harness {
         }
     }
 
+    /// #106: a Cluster discovered at connect time. A plain URL (or a discrete
+    /// `--host`/`--port`/`--db`, which `resolve` assembles into the same
+    /// `redis://host:port/db`) naming a node of a Cluster with a database other
+    /// than 0 is refused by the server's own `SELECT` error, loudly, before any
+    /// session starts. It never connects and shows `/3` while using 0. Database
+    /// 0 connects as a Cluster.
+    #[tokio::test]
+    #[ignore = "needs docker"]
+    async fn a_plain_url_to_a_cluster_node_with_a_database_other_than_0_is_refused() {
+        let cluster = start_cluster().await;
+        warm(&cluster).await;
+        let port = cluster.ports[0];
+        let (client, est) = redis_pane::redis::connect_with(
+            &format!("redis://127.0.0.1:{port}/0"),
+            &Credentials::default(),
+        )
+        .await
+        .expect("database 0 connects");
+        assert!(client.is_clustered() && est.topology.is_some());
+        let _ = client.quit().await;
+
+        let err = redis_pane::redis::connect_with(
+            &format!("redis://127.0.0.1:{port}/3"),
+            &Credentials::default(),
+        )
+        .await
+        .expect_err("a Cluster has no database 3");
+        assert!(
+            err.to_string().to_ascii_lowercase().contains("cluster"),
+            "{err}"
+        );
+    }
+
     /// What `fred` does on a failover, which `terminal.rs`'s listener relies
     /// on: `cluster_change_rx` fires, and the routing table afterwards still
     /// reads 3 primaries and 6 nodes.
@@ -9612,5 +9645,53 @@ mod bulk_delete {
         }
         let _ = client.quit().await;
         let _ = writer.quit().await;
+    }
+}
+
+// ── #106 — `--db` over a URL, end to end ────────────────────────────────────
+
+/// A key that exists in database 3 only is visible through a URL target
+/// resolved with `--db 3`, even when the URL itself names database 2 — the
+/// dial URL `resolve` produced is what `connect_with` dials, as `main` does.
+#[tokio::test]
+#[ignore = "needs docker"]
+async fn db_flag_over_a_url_connects_to_that_database() {
+    use redis_pane_core::resolve::{EnvVars, Flags, resolve};
+    let (_c, url) = start("redis", "7-alpine").await;
+
+    let seed = Builder::from_config(Config::from_url(&format!("{url}/3")).unwrap())
+        .build()
+        .unwrap();
+    seed.init().await.unwrap();
+    let _: () = seed.set("only-in-3", "v", None, None, false).await.unwrap();
+    let _ = seed.quit().await;
+
+    for (target, db, expect) in [
+        (format!("{url}/2"), Some(3), Some("v")),
+        (url.clone(), Some(3), Some("v")),
+        (format!("{url}/3"), None, Some("v")),
+        (format!("{url}/2"), None, None),
+        (url.clone(), None, None),
+    ] {
+        let flags = Flags {
+            url: Some(target.clone()),
+            db,
+            ..Flags::default()
+        };
+        let resolution = resolve(&flags, None, &EnvVars::default()).unwrap();
+        let (client, _) = redis_pane::redis::connect_with(
+            resolution.dial_url(),
+            &redis_pane_core::resolve::Credentials::default(),
+        )
+        .await
+        .unwrap();
+        let got: Option<String> = client.get("only-in-3").await.unwrap();
+        assert_eq!(
+            got.as_deref(),
+            expect,
+            "{target} --db {db:?} (shown as {})",
+            resolution.connection.target
+        );
+        let _ = client.quit().await;
     }
 }
