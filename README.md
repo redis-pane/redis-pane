@@ -113,13 +113,13 @@ The full list is [Limits and non-goals](https://redis-pane.github.io/redis-pane/
 Download the binary for your OS from the [Releases page](https://github.com/redis-pane/redis-pane/releases) — macOS, Linux, and Windows are all covered. Or run the install script:
 
 ```bash
-curl --proto '=https' --tlsv1.2 -LsSf https://github.com/redis-pane/redis-pane/releases/download/v0.1.0-beta.4/redis-pane-installer.sh | sh
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/redis-pane/redis-pane/releases/download/v0.1.0-beta.5/redis-pane-installer.sh | sh
 ```
 
 On Windows, from PowerShell:
 
 ```powershell
-irm https://github.com/redis-pane/redis-pane/releases/download/v0.1.0-beta.4/redis-pane-installer.ps1 | iex
+irm https://github.com/redis-pane/redis-pane/releases/download/v0.1.0-beta.5/redis-pane-installer.ps1 | iex
 ```
 
 These beta builds are unsigned, so your OS may flag them on first run — on macOS, right-click the
@@ -166,7 +166,7 @@ Its source is in [`site/content/docs`](site/content/docs/index.mdx).
 
 ## Compatibility
 
-- A beta: `0.1.0-beta.4`. Expect rough edges.
+- A beta: `0.1.0-beta.5`. Expect rough edges.
 - Redis 6.0 or newer, and Valkey. RESP3 only.
 - Standalone, Sentinel and Cluster, with TLS.
 - Prebuilt for macOS (arm64 and x86_64), Linux x86_64 and Windows. Build from source for anything else.

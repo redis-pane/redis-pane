@@ -419,7 +419,7 @@ fix-ups in #100.
 | Demo recordings: `tapes/`, render pipeline, Tier 1 scenarios | #104, #105 | [`demos.md`](plans/demos.md) |
 | Brand: the `>:_` icon, the wordmark, the organization avatar | #113, #114 | none |
 
-Unreleased until `0.1.0-beta.5`.
+Released as `0.1.0-beta.5`.
 
 ## 8. Explicitly not in M0–M3
 

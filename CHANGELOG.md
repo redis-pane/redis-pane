@@ -6,6 +6,8 @@ promise a stable interface.
 
 ## [Unreleased]
 
+## [0.1.0-beta.5] - 2026-10-20
+
 ### Changed
 
 - A Profile named on the command line that the config file doesn't define, by `--profile` or as a
@@ -23,7 +25,12 @@ promise a stable interface.
 
 ### Added
 
-- A user guide as a website at <https://redis-pane.github.io/redis-pane>, built from `site/` (Fumadocs on Next.js).
+- A user guide as a website at <https://redis-pane.github.io/redis-pane>, built from `site/`
+  (Fumadocs on Next.js), with a landing page and recorded demos of browsing, the editor and Monitor.
+- The project now lives at `redis-pane/redis-pane`. The installer URLs, the release downloads and
+  the docs links point there; the old `vinodsantharam/redis-pane` URLs redirect.
+- The `>:_` icon and the `redis:pane` wordmark.
+- Issue forms and community files for the repository.
 - Keybinding and command-line references generated from the code, so they cannot drift from the
   program.
 - A comparison table in the README, and this changelog.
@@ -88,7 +95,8 @@ Eighteen alpha releases (`0.1.0-alpha.1` to `0.1.0-alpha.18`) built the first us
 - Monitor, Pub/Sub, Slowlog and Dashboard views.
 - Clipboard copy, including OSC 52 over SSH, and prebuilt binaries for macOS, Linux and Windows.
 
-[Unreleased]: https://github.com/redis-pane/redis-pane/compare/v0.1.0-beta.4...HEAD
+[Unreleased]: https://github.com/redis-pane/redis-pane/compare/v0.1.0-beta.5...HEAD
+[0.1.0-beta.5]: https://github.com/redis-pane/redis-pane/compare/v0.1.0-beta.4...v0.1.0-beta.5
 [0.1.0-beta.4]: https://github.com/redis-pane/redis-pane/compare/v0.1.0-beta.3...v0.1.0-beta.4
 [0.1.0-beta.3]: https://github.com/redis-pane/redis-pane/compare/v0.1.0-beta.2...v0.1.0-beta.3
 [0.1.0-beta.2]: https://github.com/redis-pane/redis-pane/compare/v0.1.0-beta.1...v0.1.0-beta.2
