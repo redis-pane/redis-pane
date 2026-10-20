@@ -16,14 +16,18 @@ Working on the code? These are where to start, all in the
   churn script that keeps the data moving, so you can watch live updates and `SCAN` instead of
   reasoning about them.
 
-## Working on this book
+## Working on this guide
 
-The source is in `book/src`. To preview it:
+Pages are plain `.md` files in `site/content/docs`, ordered by each folder's `meta.json`. To
+preview the guide:
 
 ```bash
-cargo install mdbook --locked
-mdbook serve book
+pnpm --dir site install
+pnpm --dir site dev
 ```
+
+Then open http://localhost:3000/redis-pane. Node is pinned in `site/.nvmrc`, and pnpm by
+`site/package.json`.
 
 Two pages are generated from the code: the [keybindings](./reference/keybindings.md) and the
 [command-line options](./reference/cli.md). Don't edit them by hand. After changing a key or a
@@ -34,6 +38,6 @@ UPDATE_DOCS=1 cargo test -p redis-pane-core --test docs_reference
 UPDATE_DOCS=1 cargo test -p redis-pane --test docs_reference
 ```
 
-CI fails if either is out of date. The JSON examples in
-[Configuration](./reference/configuration.md) are parsed by the real config parser, so an example
+CI fails if either is out of date. Every `json` code block in the guide, such as the examples in
+[Configuration](./reference/configuration.md), is parsed by the real config parser, so an example
 that wouldn't work can't be published.

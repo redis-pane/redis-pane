@@ -1,6 +1,9 @@
 # After the move to the `redis-pane` org: settings, fix-ups, community
 
-Status: **planned** 2026-10-09. **Settings (S) done** the same day. The repo moved to `redis-pane/redis-pane`, and the docs are live at
+Status: **done**: settings (S) 2026-10-09; tasks 1 and 2 in #100 and #101. Note 2026-10-20: the
+`mdbook build · link check` job mentioned below is now `site build · link check` (#102), and it
+still isn't required.
+Originally: **planned** 2026-10-09. The repo moved to `redis-pane/redis-pane`, and the docs are live at
 https://redis-pane.github.io/redis-pane/ (#97, #98). This is the follow-up work.
 
 ## Decisions (user, 2026-10-09)

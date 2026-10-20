@@ -1,11 +1,12 @@
-# redis-pane — Implementation plan, M0 and M1
+# redis-pane — Implementation plan
 
-**Status:** Draft v0.1 · **Companion to:** [PRD.md](PRD.md), [DESIGN.md](DESIGN.md) ·
-**Last updated:** 2026-08-26
+**Status:** M0–M6 done · **Companion to:** [PRD.md](PRD.md), [DESIGN.md](DESIGN.md) ·
+**Last updated:** 2026-10-20
 
-This plan covers the two milestones that produce a usable product. M0 is an internal checkpoint —
-it connects and browses nothing, so it has a test suite rather than users. M1 is the milestone
-that already beats `redis-cli` for daily work.
+This plan covers milestones M0–M6 and the work after them. It began with the two milestones that
+produce a usable product: M0 is an internal checkpoint — it connects and browses nothing, so it
+has a test suite rather than users — and M1 is the milestone that already beats `redis-cli` for
+daily work. Each later milestone has its own section and progress line.
 
 Every task names what it *proves*. A task without a proof is a task that will be re-done.
 
@@ -134,7 +135,7 @@ Proves: a mutation can be trusted — the reader always sees the real command an
 before it runs, Read-only Mode is enforced at exactly one point, and nothing here reopens the
 RedisInsight-shaped bugs M0/M1 were built to make structurally impossible.
 
-**Progress: done, apart from what is parked.** Tasks 11–14 (rename, duplicate, field/member
+**Progress: done, apart from what is parked.** Released as `0.1.0-beta.4`. Tasks 11–14 (rename, duplicate, field/member
 rename, multi-select and bulk delete) shipped on 2026-10-08, one PR each (#86–#89), from
 [`m2-remaining-planning.md`](plans/m2-remaining-planning.md). Still parked by decision: task 5
 (the `$EDITOR` escape hatch) and move-across-db.
@@ -404,6 +405,21 @@ At 1M keys, deep names, random order (local / CI), before → after:
 Known gaps, recorded rather than fixed: restoring a saved tree-mode session rebuilds once
 synchronously at startup; `Esc` does not cancel a running job; wildcard and fuzzy filters stay on
 the per-key matcher.
+
+### 7.4 After M6: docs, site, org
+
+Work since `0.1.0-beta.4`, #93–#114. Nothing here changes the app's behaviour apart from the
+fix-ups in #100.
+
+| Work | PRs | Plan |
+|---|---|---|
+| Documentation rework: generated references, the user guide, README and CHANGELOG | #93–#96 | [`docs-planning.md`](plans/docs-planning.md), [`docs-task1-generated-references.md`](plans/docs-task1-generated-references.md), [`docs-task2-book.md`](plans/docs-task2-book.md), [`docs-task3-readme.md`](plans/docs-task3-readme.md) |
+| Move to the `redis-pane` org; fix-ups; community files | #97–#101 | [`org-followups-planning.md`](plans/org-followups-planning.md), [`org-task1-fixups.md`](plans/org-task1-fixups.md), [`org-task2-community.md`](plans/org-task2-community.md) |
+| User guide on Fumadocs, then the landing page | #102, #103 | [`site-fumadocs.md`](plans/site-fumadocs.md) |
+| Demo recordings: `tapes/`, render pipeline, Tier 1 scenarios | #104, #105 | [`demos.md`](plans/demos.md) |
+| Brand: the `>:_` icon, the wordmark, the organization avatar | #113, #114 | none |
+
+Unreleased until `0.1.0-beta.5`.
 
 ## 8. Explicitly not in M0–M3
 

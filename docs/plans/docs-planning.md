@@ -1,6 +1,7 @@
 # Documentation: reorganise around what a user can do
 
-Status: **planned** 2026-10-08, after `0.1.0-beta.4`. Three tasks. Each task gets its own plan
+Status: **done** 2026-10-08, in #94–#96 (planned after `0.1.0-beta.4`). The mdBook site it built was
+superseded by Fumadocs in #102 ([`site-fumadocs.md`](site-fumadocs.md)). Three tasks. Each task gets its own plan
 doc and its own Sonnet subagent run, and is merged before the next starts. This is the same
 process as M4–M6.
 

@@ -4,12 +4,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project state
 
-**Scaffolded (M0.1 complete).** The workspace builds and CI is green; there is no UI yet. The
-product and design intent live in:
+**M0–M6 are done and released through `0.1.0-beta.4`** (the M2 tail shipped in it); the docs
+site, landing page, demos and brand since then are unreleased. [docs/PLAN.md](docs/PLAN.md) holds
+the per-milestone progress. The product and
+design intent live in:
 
 - [README.md](README.md) — what this is, and the five decisions that shape it
-- [docs/PRD.md](docs/PRD.md) — problem, users, requirements (R1.x–R7.x), milestones M0–M4
-- [docs/PLAN.md](docs/PLAN.md) — the M0/M1 task breakdown, workspace layout, and risk order
+- [docs/PRD.md](docs/PRD.md) — problem, users, requirements (R1.x–R7.x), milestones M0–M6
+- [docs/PLAN.md](docs/PLAN.md) — the task breakdown per milestone, workspace layout, and risk order
 - [docs/DESIGN.md](docs/DESIGN.md) — layout, navigation model, keymap, visual language, screens
 - [docs/RELEASING.md](docs/RELEASING.md) — the release checklist (version bump, installer URLs, CHANGELOG, tag)
 - [CONTEXT.md](CONTEXT.md) — the glossary. Read it before naming anything; several of these terms
@@ -47,8 +49,6 @@ target, and a million JS objects of key metadata will not fit in 250MB RSS. Thos
 are the reason the project exists — they are exactly where RedisInsight fails. Everything else
 favoured TypeScript, and ratatui's immediate-mode model is a real ergonomic cost to pay for
 them: there are no components and no hooks, so widget state is hand-managed. Budget for that.
-
-Once `Cargo.toml` exists, fill in the commands below.
 
 ## Commands
 
@@ -98,13 +98,13 @@ nothing (ADR-0011):
 cargo tree -p redis-pane-core -e normal | grep -iE 'crossterm|tokio|fred'
 ```
 
-Two suites are planned (ADR-0011) and the distinction matters: the default `cargo test` run is
+Two suites exist (ADR-0011) and the distinction matters: the default `cargo test` run is
 the functional core plus golden-frame snapshots and needs no Docker; the integration suite uses
 `testcontainers` against real Redis and covers `SCAN` streaming, tracking invalidation across a
 reconnect, capability probing where `CLIENT TRACKING` is refused, and error mapping for
 `-LOADING`, `-OOM`, `-MISCONF` and `-READONLY`.
 
-The integration suite **exists** — 109 tests in `crates/app/tests/integration.rs`, every one
+The integration suite **exists** in `crates/app/tests/integration.rs`, every test
 `#[ignore]`d so the default run stays Docker-free. The default `cargo test --workspace` skips
 all of them; a separate `integration` CI job runs them on every push, every pull request, and
 nightly:
@@ -196,7 +196,7 @@ they are expensive to retrofit:
   where indices are renumbered (`scan_started`), rides on `Command::FetchMetadata`, is echoed in
   `Msg::MetadataBatch`, and `metadata_batch` drops any other — staleness is the core's call at
   dequeue, never a shell-side timing argument. The shell's `MetadataLedger`
-  (`crates/app/src/metadata.rs`) only dedups in-flight fetches only (a gone row is re-asked on re-entry, so the list never shows a stale gone), and resets on a new epoch
+  (`crates/app/src/metadata.rs`) only dedups in-flight fetches (a gone row is re-asked on re-entry, so the list never shows a stale gone), and resets on a new epoch
   and on reconnect.
 - **The Viewer never caches a value.** Reads always hit the server; liveness is push-driven via
   `CLIENT TRACKING ON OPTIN` armed for the open key alone. **Tracking is consumed by its own
