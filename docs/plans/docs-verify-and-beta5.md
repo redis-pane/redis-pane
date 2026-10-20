@@ -1,6 +1,6 @@
 # Docs verification, then `0.1.0-beta.5`
 
-Status: **planned** 2026-10-20. Two tasks. Each runs on one Sonnet subagent, and each PR merges
+Status: **done** 2026-10-20 (task 1 in #115, task 2 in the release PR; the tag waits for the user). Two tasks. Each runs on one Sonnet subagent, and each PR merges
 once every check has finished and passed. Task 2 starts after task 1 is merged.
 
 ## Context

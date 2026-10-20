@@ -4,8 +4,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project state
 
-**M0–M6 are done and released through `0.1.0-beta.4`** (the M2 tail shipped in it); the docs
-site, landing page, demos and brand since then are unreleased. [docs/PLAN.md](docs/PLAN.md) holds
+**M0–M6 are done and released through `0.1.0-beta.5`** (the M2 tail shipped in `beta.4`; `beta.5` carries the docs
+site, landing page, demos, org move and brand). [docs/PLAN.md](docs/PLAN.md) holds
 the per-milestone progress. The product and
 design intent live in:
 
