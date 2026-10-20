@@ -5986,6 +5986,28 @@ fn golden_title_bar_target_outranks_liveness() {
             title_at(&long, w, GlyphSet::Unicode)
         ));
     }
+    // A dropped link is safety state: it outranks the target.
+    let down = Link::Reconnecting {
+        attempt: 2,
+        retry_in_ms: None,
+    };
+    let dropped = read_only_prod("127.0.0.1:6390/0", down.clone());
+    let dropped_long = read_only_prod(
+        "redis://cache-01.eu-west-1.example.com:6379/0",
+        down.clone(),
+    );
+    for w in [120u16, 100, 80] {
+        rendered.push(format!(
+            "{w:>3} | {}",
+            title_at(&dropped, w, GlyphSet::Unicode)
+        ));
+    }
+    for w in [120u16, 80] {
+        rendered.push(format!(
+            "{w:>3} | {}",
+            title_at(&dropped_long, w, GlyphSet::Unicode)
+        ));
+    }
     assert_golden("title_bar_target_outranks_liveness", &rendered.join("\n"));
 }
 
@@ -6006,5 +6028,25 @@ fn the_whole_target_survives_whenever_dropping_liveness_would_save_it() {
         if title.contains("manual") {
             assert!(title.contains("READ-ONLY"), "badge lost first at {w}");
         }
+    }
+}
+
+#[test]
+fn a_dropped_link_stays_in_the_title_bar_while_the_target_yields() {
+    let down = Link::Reconnecting {
+        attempt: 2,
+        retry_in_ms: None,
+    };
+    let state = read_only_prod("redis://cache-01.eu-west-1.example.com:6379/0", down);
+    for w in 80..=140u16 {
+        let title = title_at(&state, w, GlyphSet::Unicode);
+        assert!(
+            title.contains("disconnected"),
+            "link state lost at {w}: {title}"
+        );
+        assert!(
+            title.contains("prod") && title.contains("flag"),
+            "{w}: {title}"
+        );
     }
 }

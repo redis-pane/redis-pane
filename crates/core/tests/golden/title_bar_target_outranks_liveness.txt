@@ -7,3 +7,8 @@
  80 | ─ redis-pane ─ ● prod · 127.0.0.1:6390/0 · from flag  READ-ONLY environment ⌃R ─
 120 | ─ redis-pane ─ ● prod · redis://cache-01.eu-west-1.example.com:6379/0 · from flag ─ READ-ONLY environment ⌃R  ○ manual ─
  80 | ─ redis-pane ─ ● prod · …mple.com:6379/0 · from flag  READ-ONLY environment ⌃R ─
+120 | ─ redis-pane ─ ● prod · 127.0.0.1:6390/0 · from flag ──────── READ-ONLY environment ⌃R  ✕ disconnected · never read  r ─
+100 | ─ redis-pane ─ ● prod · …0/0 · from flag  READ-ONLY environment ⌃R  ✕ disconnected · never read  r ─
+ 80 | ─ redis-pane ─ ● prod · from flag ─── READ-ONLY environment ⌃R  ✕ disconnected ─
+120 | ─ redis-pane ─ ● prod · …st-1.example.com:6379/0 · from flag  READ-ONLY environment ⌃R  ✕ disconnected · never read  r ─
+ 80 | ─ redis-pane ─ ● prod · from flag ─── READ-ONLY environment ⌃R  ✕ disconnected ─

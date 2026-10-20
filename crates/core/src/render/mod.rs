@@ -2070,9 +2070,9 @@ fn title_bar(state: &State, theme: &Theme, clock: &dyn Clock, area: Rect, buf: &
     let required =
         prefix.chars().count() + 2 + env.label().chars().count() + 3 + source.chars().count() + 1;
 
-    // What yields, in order (DESIGN §2): the Cluster segment, then the liveness
-    // readout, then the target (truncated from the left), then the READ-ONLY
-    // badge. Liveness goes before the target because the Viewer header carries
+    // What yields, in order (DESIGN §2): the Cluster segment, then the ordinary
+    // liveness readout (`live`, `manual`), then the target (truncated from the
+    // left), then the head (condition, READ-ONLY, disconnected). Liveness goes before the target because the Viewer header carries
     // liveness too (§6.4), and the target before READ-ONLY because that badge
     // appears nowhere else. So the liveness readout is trimmed from the end
     // until the *whole* target fits, and only when it has nothing left to give
@@ -2222,9 +2222,12 @@ pub fn status_readout(state: &State, clock: &dyn Clock) -> Vec<(String, Token)> 
 
 type Readout = Vec<(String, Token)>;
 
-/// [`status_readout`] in two parts: the condition and the READ-ONLY badge, and
-/// the liveness readout. The title bar drops the second before it shortens the
-/// target and the first after it (DESIGN §2).
+/// [`status_readout`] in two parts: the head, and the ordinary liveness readout
+/// (`live`, `manual`). The head is the condition, the READ-ONLY badge, and a
+/// dropped link (`disconnected`), in that order; the last is in the head because
+/// it is a safety condition that must stay visible. The title bar drops the
+/// ordinary liveness before it shortens the target and the head after it
+/// (DESIGN §2).
 fn status_readout_parts(state: &State, clock: &dyn Clock) -> (Readout, Readout) {
     let mut out: Vec<(String, Token)> = Vec::new();
 
@@ -2248,7 +2251,7 @@ fn status_readout_parts(state: &State, clock: &dyn Clock) -> (Readout, Readout) 
         out.push(("  ".into(), Token::Muted));
     }
 
-    let head = std::mem::take(&mut out);
+    let mut head = std::mem::take(&mut out);
     let liveness = state.liveness();
     out.push((
         liveness.readout().to_string(),
@@ -2288,6 +2291,14 @@ fn status_readout_parts(state: &State, clock: &dyn Clock) -> (Readout, Readout) 
         && let Some(hint) = state.keymap.hint(Action::Refetch)
     {
         out.push((format!("  {hint}"), Token::Muted));
+    }
+    // A dropped link is a safety condition, not ordinary liveness: the Viewer
+    // header shows it only while a key is open, and CLAUDE.md requires that
+    // degradation is never silent. So it joins the head and outranks the target.
+    // Only `live` and `manual` are the ordinary readout that yields first.
+    if liveness == Liveness::Disconnected {
+        head.extend(out);
+        return (head, Vec::new());
     }
     (head, out)
 }

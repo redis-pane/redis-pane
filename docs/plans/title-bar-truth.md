@@ -135,3 +135,10 @@ Environment dot, target, database, and Source"). Two open issues break that prom
 - `pnpm --dir site build`
 - The integration suite, because this touches the connection path: `cargo test -p redis-pane --
   --ignored --test-threads=1` (Docker)
+
+## Refinement, 2026-10-20
+
+The yield order above was too blunt for a dropped link. Only the ordinary liveness readout (`live`,
+`manual` and its variants) yields before the target. `disconnected` is a safety condition: it joins
+the head after the condition and READ-ONLY, and outranks the target, which truncates from the left as
+before. Environment and Source still never yield. DESIGN §2 and the golden frames follow this.
