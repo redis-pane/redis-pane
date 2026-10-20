@@ -133,6 +133,11 @@ collapse 290 -> 55, tree toggle 575 -> 292 ms (the goal is 250; CI's slowest run
 total gates 6 s -> 2 s (random_deep) and 10 s -> 2 s (sorted). Per-step gates stay 16 ms (AT TARGET).
 The CI runs varied up to 1.3x between attempts of the same code (fold 36.6, 45.3, 45.0).
 
+**2026-10-20: fold-alone ceilings re-set by the same rule.** Ten CI runs of unchanged code
+(Oct 17-20) spread about 2x with runner hardware: sorted 14.8-38.4, random_flat 40.0-71.0,
+random_deep 42.0-71.0 ms. 1.5x the slowest gives 58, 107 and 107 ms (were 40, 73, 68). The
+random_deep ceiling had failed a docs-only PR (#115) at 70.9 ms.
+
 **Persistent name order: still no-go.** Stage totals for a tree toggle from scan order, local: sort
 87 ms (refine 68), fold 31 ms, filter and inverse 2 ms, of ~120: the sort is now ~72% of the toggle,
 not 30% as in task 4. Removing it would take a toggle to ~35 ms local, but the goal (250 ms) is met

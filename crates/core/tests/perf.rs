@@ -723,13 +723,15 @@ fn fold_alone(fx: Fixture, ceil_ms: u64) {
         fx.label()
     );
     // M6 task 5 target: <= 60ms local (met: 27-33ms; CI 37-48ms). CEILING: 1.5x the
-    // slowest of three CI runs (sorted 26ms, random_flat 48ms, random_deep 45ms).
+    // slowest CI run. Re-set 2026-10-20 from ten CI runs of unchanged code, which
+    // spread ~2x with runner hardware (sorted 14.8-38.4ms, random_flat 40.0-71.0ms,
+    // random_deep 42.0-71.0ms); M6's three runs had seen 26, 48 and 45ms.
     assert_budget("fold alone", elapsed, ceil_ms);
 }
 variants!(fold_alone:
-    fold_alone_at_1m_keys => (Fixture::Sorted, 40),
-    fold_alone_at_1m_keys_random_flat => (Fixture::RandomFlat, 73),
-    fold_alone_at_1m_keys_random_deep => (Fixture::RandomDeep, 68));
+    fold_alone_at_1m_keys => (Fixture::Sorted, 58),
+    fold_alone_at_1m_keys_random_flat => (Fixture::RandomFlat, 107),
+    fold_alone_at_1m_keys_random_deep => (Fixture::RandomDeep, 107));
 
 fn name_sort_alone(fx: Fixture, ceil_ms: u64) {
     // `KeyView::rebuild` with SortBy::Name and no filter, nothing else.
