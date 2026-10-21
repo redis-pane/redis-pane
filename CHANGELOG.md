@@ -6,6 +6,8 @@ promise a stable interface.
 
 ## [Unreleased]
 
+## [0.1.0-beta.6] - 2026-10-21
+
 ### Fixed
 
 - `--db` now applies when the target is a URL (`--url`, `REDIS_URL` or a Profile's `url`). It
@@ -16,7 +18,7 @@ promise a stable interface.
   `redis-cluster://` URL with any other is refused at startup with exit code `3` (#106).
 - With Read-only Mode on, the title bar no longer cuts the target to `…90/0` at about 100 columns.
   When the bar is too narrow it now drops the liveness readout before it shortens the target, and
-  keeps the READ-ONLY badge longest (#107).
+  keeps the READ-ONLY badge and a dropped-link warning (`✕ disconnected`) longest (#107).
 - In tree view, `s` now says why it does nothing. Pressing it shows
   `tree view is sorted by name · t for flat view`, the hint bar no longer offers `s`, and `?`
   shows it dimmed as `sorted by name in tree view`. Before, the key was advertised and silently did
@@ -113,7 +115,8 @@ Eighteen alpha releases (`0.1.0-alpha.1` to `0.1.0-alpha.18`) built the first us
 - Monitor, Pub/Sub, Slowlog and Dashboard views.
 - Clipboard copy, including OSC 52 over SSH, and prebuilt binaries for macOS, Linux and Windows.
 
-[Unreleased]: https://github.com/redis-pane/redis-pane/compare/v0.1.0-beta.5...HEAD
+[Unreleased]: https://github.com/redis-pane/redis-pane/compare/v0.1.0-beta.6...HEAD
+[0.1.0-beta.6]: https://github.com/redis-pane/redis-pane/compare/v0.1.0-beta.5...v0.1.0-beta.6
 [0.1.0-beta.5]: https://github.com/redis-pane/redis-pane/compare/v0.1.0-beta.4...v0.1.0-beta.5
 [0.1.0-beta.4]: https://github.com/redis-pane/redis-pane/compare/v0.1.0-beta.3...v0.1.0-beta.4
 [0.1.0-beta.3]: https://github.com/redis-pane/redis-pane/compare/v0.1.0-beta.2...v0.1.0-beta.3
