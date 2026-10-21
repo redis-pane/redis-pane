@@ -1,6 +1,6 @@
 # Packaging, and the road to 1.0
 
-Status: **planned** 2026-10-21. Four tasks, in order. Tasks 1, 3 and 4 run on one Sonnet
+Status: **planned** 2026-10-21; task 1 **done** (PR #129, awaiting merge). Four tasks, in order. Tasks 1, 3 and 4 run on one Sonnet
 subagent each, and each PR merges once every check has finished and passed. Task 2 has steps
 only the user can do. Tags are pushed only after the user says so.
 
@@ -101,6 +101,85 @@ Found while planning:
   - the CHANGELOG.
 - **Then release `0.1.0-beta.7`** through RELEASING. The main session tags it after the user's
   go, and verifies the musl assets with the installer on `amazonlinux:2`.
+
+#### Task 1 results (2026-10-21)
+
+**dist configuration.** `targets` gains both musl triples; the gnu x86_64 target stays. dist 0.32
+picks a native `ubuntu-22.04-arm` runner for aarch64 by itself and installs `musl-tools` for both
+musl builds, so `release.yml` needed no hand edit and `ring` builds without a cross toolchain. The
+only other change is `[dist.min-glibc-version] x86_64-unknown-linux-gnu = "2.34"` (below).
+
+**How the shell installer chooses (read from the generated installer).** `get_architecture` reports
+`gnu` unless `ldd --version` mentions musl (`musl-dynamic`). For x86_64 gnu it runs
+`check_glibc <major> <series>` and uses the gnu archive only if the host's glibc is at least that,
+else falls back to the x86_64 musl archive. A musl host gets musl. Every aarch64 Linux, gnu or
+musl, gets the aarch64 musl archive, since no gnu arm64 build exists. **dist's default floor is
+2.31, but the build links glibc 2.34 symbols** (built on ubuntu-22.04): Debian 11 and Ubuntu 20.04
+(glibc 2.31) would have been sent the gnu build, which fails there with `GLIBC_2.32/33/34 not
+found`. Fixed with the `min-glibc-version` entry above; the regenerated installer calls
+`check_glibc "2" "34"`, and run on `debian:11` it falls back to musl, on `ubuntu:22.04` it keeps gnu.
+
+**Perf, musl vs gnu.** Native `linux/arm64` containers on one host, back to back: gnu in
+`rust:1-bookworm`, musl in `rust:1-alpine`, same command
+(`cargo test -p redis-pane-core --release --test perf -- --ignored --nocapture --test-threads=1`),
+median of 3 runs (mimalloc: 2 runs). Times in ms; the ratio is to gnu. This is aarch64 only:
+x86_64 under emulation was not used.
+
+| Figure @ 1M keys | gnu | musl | musl / gnu | musl + mimalloc | / gnu |
+|---|---|---|---|---|---|
+| Space toggle (update) | 0.011 | 0.025 | 2.27 | 0.009 | 0.79 |
+| scroll keystroke | 0.087 | 0.140 | 1.61 | 0.076 | 0.87 |
+| ScanBatch of 500 | 0.104 | 0.164 | 1.57 | 0.086 | 0.82 |
+| ScanBatch of 500, tree mode | 0.099 | 0.131 | 1.33 | 0.081 | 0.82 |
+| filter keystroke | 0.322 | 0.359 | 1.12 | 0.320 | 0.99 |
+| filter first character | 4.06 | 4.01 | 0.99 | 4.19 | 1.03 |
+| name sort alone (sorted) | 26.6 | 23.8 | 0.90 | 24.1 | 0.90 |
+| name sort alone (random deep) | 98.6 | 83.8 | 0.85 | 78.6 | 0.80 |
+| fold alone | 23.5 | 18.4 | 0.78 | 18.3 | 0.78 |
+| sort change to new list (random deep) | 118.0 | 105.1 | 0.89 | 109.2 | 0.93 |
+| tree toggle to new list (random deep) | 157.1 | 137.4 | 0.87 | 137.9 | 0.88 |
+| whole-scan fold, tree mode | 72.7 | 64.1 | 0.88 | 61.6 | 0.85 |
+
+- **Verdict: the rule fired.** Three figures were over 1.5x gnu (Space, scroll, `ScanBatch`; plain
+  musl is slower on the many-small-allocations paths and faster or equal on the big-sort ones). All
+  are tens to hundreds of microseconds against a 16ms frame, but the rule is the rule, so the app
+  crate now uses `mimalloc` as the global allocator on `target_env = "musl"` only
+  (`crates/app/src/main.rs`; the core never names an allocator). Re-measured, every figure is at
+  or below gnu except noise on `render_alone`, which is 0.04ms either way.
+- **The perf suite does not link the app's allocator,** so the re-measure put the same
+  `#[global_allocator]` in `perf.rs` temporarily (reverted, not committed). Remeasure with the same
+  trick if the allocator ever changes.
+- **`name_sort_alone_at_1m_keys` fails its 21ms ceiling in this Docker VM on gnu and musl alike**
+  (26.6 and 23.8ms; it passes on CI hardware). It is not a musl signal, and every other budget
+  passes.
+
+**Binary size** (dist profile, from the CI artifacts, stripped): x86_64 musl 12.1MB (3.2MB
+archive), aarch64 musl 10.8MB (2.8MB archive), x86_64 gnu 11.8MB. All under the 20MB budget.
+
+**Old distros** (musl binaries downloaded from the PR's Release run, `--version` and `--probe`
+against `redis:8.4-alpine` on a shared network; every cell passed, `--probe` printing
+`redis 8.4.6` and `liveness: CLIENT TRACKING accepted`):
+
+| Image | x86_64 (emulated) | arm64 (native) |
+|---|---|---|
+| `amazonlinux:2` (glibc 2.26) | pass | pass |
+| `rockylinux:8` (glibc 2.28) | pass | pass |
+| `debian:11` (glibc 2.31) | pass | pass |
+| `alpine:3` (musl) | pass | pass |
+
+The gnu x86_64 build fails on `amazonlinux:2` (needs GLIBC_2.29 to 2.34), on `rockylinux:8`
+(2.29 to 2.34) and on `debian:11` (2.32 to 2.34), as the plan predicted.
+
+**TLS.** A TLS-enabled `redis:8.4-alpine` with a private CA. Without the CA in the system bundle,
+`--probe` ends with `InvalidCertificate(UnknownIssuer)`; after appending the CA to the distro's own
+bundle (`/etc/pki/tls/certs/ca-bundle.crt` or `/etc/ssl/certs/ca-certificates.crt`) it connects.
+Passed on `amazonlinux:2` x86_64, `rockylinux:8` arm64, `debian:11` x86_64 and `alpine:3` arm64,
+so the static build does find the system CA bundle. A minimal `debian:11` has no bundle at all
+until `ca-certificates` is installed; the installation page says so.
+
+**Not done here.** The shell installer was not run end to end in the containers: it downloads from
+a release URL, and none exists until the tag. The main session checks it on `amazonlinux:2` after
+tagging (RELEASING step 8).
 
 ### Task 2: Homebrew tap
 

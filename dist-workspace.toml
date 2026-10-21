@@ -17,4 +17,8 @@ install-path = "CARGO_HOME"
 hosting = "github"
 # Whether to install an updater program
 install-updater = false
-pr-run-mode = "upload"
+
+# The gnu build links glibc 2.34 symbols (built on ubuntu-22.04); the installer falls back to
+# the static musl build on anything older. dist's default floor is 2.31, which is too low.
+[dist.min-glibc-version]
+x86_64-unknown-linux-gnu = "2.34"

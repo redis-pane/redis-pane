@@ -6,7 +6,24 @@ title: "Installation"
 
 Download the binary for your system from the
 [Releases page](https://github.com/redis-pane/redis-pane/releases). There are builds for macOS
-(Intel and Apple Silicon), Linux (x86_64) and Windows.
+(Intel and Apple Silicon), Linux (x86_64 and arm64) and Windows.
+
+Linux has three builds:
+
+| Archive | Runs on |
+|---|---|
+| `redis-pane-x86_64-unknown-linux-musl` | any x86_64 Linux, including old ones. It is a static binary with no dependency on the system's C library. |
+| `redis-pane-aarch64-unknown-linux-musl` | any arm64 Linux, the same way. |
+| `redis-pane-x86_64-unknown-linux-gnu` | x86_64 Linux with glibc 2.34 or newer (Ubuntu 22.04, Debian 12, RHEL 9 and later). |
+
+The static builds run on the hosts that are common for bastions and old servers: Amazon Linux 2,
+RHEL and Rocky 8, Debian 11 and Alpine. The gnu build does not run there, and fails with
+`GLIBC_2.34 not found`. If you download by hand and are unsure, take the musl one.
+The installer script chooses for you: it uses the gnu build only where glibc is new enough, and
+the musl build everywhere else, including every arm64 Linux.
+
+A static build reads the system's CA bundle for `rediss://` connections, as the gnu one does. On a
+minimal image, install your distro's `ca-certificates` package first.
 
 Or run the installer script. The beta releases are marked as GitHub prereleases, so the
 `/latest/` URL doesn't resolve to them. Use the tagged URL and change the tag to the current
