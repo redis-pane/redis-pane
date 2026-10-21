@@ -1,0 +1,24 @@
+─ redis-pane ─ ● staging · cache-01:6379/0 · from profile staging ───── ● live ─
+
+ KEY                      TYPE      TTL │ a group is selected
+ ▾ cart:                              1 │
+   ● 91af3c9d2e           zset      12m │
+ ▾ feed:                              1 │
+   ▾ global:                          1 │
+     ● hot                list        ∞ │
+ ▾ user:                              4 │
+   ▾ 8812:                            3 │
+     ● cart               zset      12m │
+     ● profile            json        ∞ │
+     ● session            hash      42m │
+   ▾ 8813:                            1 │
+     ● session            hash      56m │
+                                        │
+                                        │
+                                        │
+                                        │
+                                        │
+                                        │
+                                        │
+    sorted by name
+ → open / expand   / filter   t flat view   d delete   c copy   ? F1 help

@@ -287,10 +287,17 @@ pub(super) fn open_selected(mut state: State) -> (State, Vec<Command>) {
 /// comment); cycling to another sort while folded fragments every group into
 /// repeated headers with undercounted descendants. `rebuild_list` would snap
 /// the sort back to Name immediately anyway, so this is a no-op either way —
-/// guarding here just avoids advertising a key that visibly does nothing.
+/// the sort is left alone, and a notice says why (an action never vanishes
+/// silently), spelling `t` as the keymap does.
 pub(super) fn cycle_sort(mut state: State) -> (State, Vec<Command>) {
     if state.target_tree_mode() {
-        return (state, Vec::new());
+        let flat = state.keymap.hint(Action::ToggleTree).unwrap_or_default();
+        return (
+            state,
+            vec![Command::Notify {
+                text: format!("tree view is sorted by name · {flat} for flat view"),
+            }],
+        );
     }
     state.list.sort = state.list.sort.next();
     state.rebuild_list_async();

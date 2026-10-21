@@ -6050,3 +6050,143 @@ fn a_dropped_link_stays_in_the_title_bar_while_the_target_yields() {
         );
     }
 }
+
+// ── `s` in tree view says why (#108) ────────────────────────────────────────
+
+fn tree_state() -> State {
+    let mut state = many_keys();
+    state.tree_mode = true;
+    state.rebuild_list();
+    state
+}
+
+#[test]
+fn s_in_tree_view_leaves_the_sort_alone_and_says_why() {
+    let state = tree_state();
+    assert!(state.target_tree_mode());
+    let before = state.list.sort;
+    let (state, cmds) = press(state, 's');
+    assert_eq!(state.list.sort, before, "the sort must not change");
+    let Some(Command::Notify { text }) = cmds.first().cloned() else {
+        panic!("expected a notice, got {cmds:?}");
+    };
+    assert_eq!(text, "tree view is sorted by name · t for flat view");
+}
+
+#[test]
+fn s_in_flat_view_still_cycles_the_sort() {
+    let mut state = many_keys();
+    state.set_tree_mode_async(false);
+    state.rebuild_list();
+    assert!(!state.target_tree_mode());
+    let before = state.list.sort;
+    let (state, cmds) = press(state, 's');
+    assert_ne!(state.list.sort, before);
+    assert!(!cmds.iter().any(|c| matches!(c, Command::Notify { .. })));
+}
+
+#[test]
+fn golden_tree_view_hint_bar_does_not_offer_sort() {
+    let frame = draw(&tree_state(), 80, 24);
+    let bar = frame.lines().last().unwrap();
+    assert!(!bar.contains("s sort"), "{bar}");
+    assert!(bar.contains("t flat view"), "{bar}");
+    assert_golden("tree_hint_bar_no_sort_80", &frame);
+}
+
+#[test]
+fn golden_help_in_tree_view_dims_sort_with_its_reason() {
+    let frame = help_frame(tree_state(), 80);
+    assert!(
+        frame.contains("s         sort  sorted by name in tree view"),
+        "{frame}"
+    );
+    assert_golden("help_keys_tree_sort_dimmed_80", &frame);
+}
+
+#[test]
+fn golden_s_in_tree_view_notice() {
+    let (state, cmds) = press(tree_state(), 's');
+    let Some(Command::Notify { text }) = cmds.first().cloned() else {
+        panic!("expected a notice");
+    };
+    let (state, _) = update(
+        state,
+        Msg::Noticed {
+            text,
+            at_ms: 73_000,
+        },
+    );
+    assert_golden("tree_sort_notice", &draw(&state, 130, 22));
+}
+
+// ── the global line wraps at 80 columns (#111) ──────────────────────────────
+
+/// Every entry of `help::everywhere` appears whole in the overlay at 80×24,
+/// for each state a context can be drawn over.
+#[test]
+fn every_global_key_is_visible_in_the_help_overlay_at_80x24() {
+    let mut states: Vec<(&str, State)> = vec![
+        ("keys flat", many_keys()),
+        ("keys tree", tree_state()),
+        ("value", {
+            let mut s = opened("user:8812:session", hash_value(), 2_537);
+            s.focus = Pane::Value;
+            s
+        }),
+        ("read-only", {
+            let mut s = many_keys();
+            s.read_only = Some(redis_pane_core::state::ReadOnlyReason::Environment);
+            s
+        }),
+        ("slowlog", {
+            let mut s = many_keys();
+            s.screen = redis_pane_core::state::View::Slowlog;
+            s
+        }),
+        ("dashboard", {
+            let mut s = many_keys();
+            s.screen = redis_pane_core::state::View::Dashboard;
+            s
+        }),
+        ("monitor", {
+            let mut s = many_keys();
+            s.screen = redis_pane_core::state::View::Monitor;
+            s
+        }),
+    ];
+    let mut chord = many_keys();
+    chord.pending_chord = Some(KeyPress::plain(KC::Char('g')));
+    states.push(("chord", chord));
+    for (name, state) in states {
+        let frame = help_frame(state.clone(), 80);
+        let flat = frame
+            .lines()
+            .map(|l| l.trim_matches(|c: char| c == '│' || c == ' '))
+            .collect::<Vec<_>>();
+        for row in help::everywhere(&state) {
+            let entry = format!("{} {}", row.keys, row.label);
+            assert!(
+                flat.iter().any(|l| l.contains(&entry)),
+                "{name}: {entry:?} is missing from the overlay:\n{frame}"
+            );
+        }
+        assert_eq!(frame.lines().count(), 24, "{name}: fits 80x24");
+    }
+}
+
+/// The tallest context (17 HERE rows once a key is marked) still shows the
+/// whole global line at 80x24, with no margin left: the overlay is exactly 24
+/// rows. Were it ever short of room, `wrap_everywhere` drops the lowest-value
+/// entries, never `read-only`, `quit` or `help`.
+#[test]
+fn the_keys_pane_with_marks_keeps_read_only_quit_and_help_at_80x24() {
+    let mut state = many_keys();
+    state.marks.toggle(0);
+    let frame = help_frame(state, 80);
+    assert_eq!(frame.lines().count(), 24);
+    for needed in ["read-only", "q ⌃C quit", "? F1 help", "Esc close"] {
+        assert!(frame.contains(needed), "{needed:?} missing:\n{frame}");
+    }
+    assert_golden("help_keys_marked_80", &frame);
+}

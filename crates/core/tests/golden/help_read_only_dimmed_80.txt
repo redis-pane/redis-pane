@@ -14,11 +14,11 @@
 │ PgUp/PgDn page                                                               │
 │ Home/End  top/bottom                                                         │
 │                                                                              │
-│ Tab focus   ⌃R read-only   g s slowlog   g m monitor   g p pub/sub   g d dashb
+│ Tab focus   ⌃R read-only   g s slowlog   g m monitor   g p pub/sub           │
+│ g d dashboard   Esc back   q ⌃C quit   ⌃← ⌃→ narrow / widen keys   ? F1 help │
 │                                                                              │
 │ Tab keys · Esc close                                                         │
 └──────────────────────────────────────────────────────────────────────────────┘
-                                        │
                                         │
 
  e edit field   a add field   d delete field   c copy   t edit ttl   ? F1 help

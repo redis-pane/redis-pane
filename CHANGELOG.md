@@ -17,6 +17,12 @@ promise a stable interface.
 - With Read-only Mode on, the title bar no longer cuts the target to `…90/0` at about 100 columns.
   When the bar is too narrow it now drops the liveness readout before it shortens the target, and
   keeps the READ-ONLY badge longest (#107).
+- In tree view, `s` now says why it does nothing. Pressing it shows
+  `tree view is sorted by name · t for flat view`, the hint bar no longer offers `s`, and `?`
+  shows it dimmed as `sorted by name in tree view`. Before, the key was advertised and silently did
+  nothing (#108).
+- At 80 columns, the `?` help overlay's line of global keys no longer cuts off `quit` and `help`.
+  It wraps onto a second line instead (#111).
 
 ## [0.1.0-beta.5] - 2026-10-20
 

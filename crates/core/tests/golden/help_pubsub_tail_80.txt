@@ -2,21 +2,21 @@
 
  ⟡ [orders] [user:* ⁎]                                                    a add
  ● live                                                              3 messages
- TIME         CHANNEL               PAYLOAD
-┌─ help · pub/sub · tail ──────────────────────────────────────────────────────┐
-│ Tab       focus strip/tail                                                   │
-│ a         add                                                                │
-│ p         pause                                                              │
-│ /         filter                                                             │
-│ c         copy payload                                                       │
-│ ↑↓ jk     move                                                               │
-│ PgUp/PgDn page                                                               │
-│ Home/End  top/bottom (End resumes follow)                                    │
-│                                                                              │
-│ ⌃R read-only   g s slowlog   g m monitor   g p pub/sub   g d dashboard   g k k
-│                                                                              │
-│ Esc close                                                                    │
-└──────────────────────────────────────────────────────────────────────────────┘
+ TI┌─ help · pub/sub · tail ────────────────────────────────────────────────┐
+ 16│ Tab       focus strip/tail                                             │
+ 16│ a         add                                                          │
+ 16│ p         pause                                                        │
+   │ /         filter                                                       │
+   │ c         copy payload                                                 │
+   │ ↑↓ jk     move                                                         │
+   │ PgUp/PgDn page                                                         │
+   │ Home/End  top/bottom (End resumes follow)                              │
+   │                                                                        │
+───│ ⌃R read-only   g s slowlog   g m monitor   g p pub/sub   g d dashboard │───
+ ch│ g k keys   Esc back   q ⌃C quit   ? F1 help                            │
+ { │                                                                        │
+   │ Esc close                                                              │
+ } └────────────────────────────────────────────────────────────────────────┘
 
 
 
