@@ -37,7 +37,10 @@ On a very large keyspace the list can take a moment to catch up. See
 4. size
 5. type
 
-In tree view the keys are in name order and `s` does nothing. Press `t` for the flat list first.
+In tree view the keys are always in name order, because folding needs it. The hint bar doesn't
+offer `s` there, `?` shows it dimmed as `sorted by name in tree view`, and pressing it says
+`tree view is sorted by name · t for flat view` and leaves the order as it is. To sort, press `t`
+for the flat list first.
 
 Sorting by TTL, size or type depends on the row details that load as rows scroll into view. Until
 they have, the status bar says so, for example `sorted by size · 1,204 of 41,203 known`.

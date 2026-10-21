@@ -1,6 +1,6 @@
 # `s` in tree view (#108), the help overlay's global line at 80 columns (#111)
 
-Status: **planned** 2026-10-21. One task, one Sonnet subagent, one PR. It merges once every
+Status: **done** 2026-10-21 (planned the same day). One task, one Sonnet subagent, one PR. It merges once every
 check has finished and passed.
 
 ## Context

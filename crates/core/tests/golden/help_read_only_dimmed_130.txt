@@ -1,24 +1,24 @@
 ─ redis-pane ─ ● staging · cache-01:6379/0 · from profile staging ───────────────────────────── READ-ONLY environment ⌃R  ● live ─
 
  KEY                               TYPE        SIZE   TTL │ user:8812:session
-┌─ help · value pane · hash ─────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│ e         edit field  read-only (environment) · preview only                                                                   │
-│ a         add field  read-only (environment) · preview only                                                                    │
-│ d         delete field  read-only (environment) · preview only                                                                 │
-│ c         copy                                                                                                                 │
-│ t         edit ttl  read-only (environment) · preview only                                                                     │
-│ r         refetch                                                                                                              │
-│ C         copy redis-cli command                                                                                               │
-│ R         rename field  read-only (environment) · preview only                                                                 │
-│ ↑↓ jk     move                                                                                                                 │
-│ PgUp/PgDn page                                                                                                                 │
-│ Home/End  top/bottom                                                                                                           │
-│                                                                                                                                │
-│ Tab focus   ⌃R read-only   g s slowlog   g m monitor   g p pub/sub   g d dashboard   Esc back   q ⌃C quit   ⌃← ⌃→ narrow / widen
-│                                                                                                                                │
-│ Tab keys · Esc close                                                                                                           │
-└────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
-                                                          │
+ ● user:88┌─ help · value pane · hash ────────────────────────────────────────────────────────────────────────────────┐
+ ● user:88│ e         edit field  read-only (environment) · preview only                                              │    ● live
+ ● user:88│ a         add field  read-only (environment) · preview only                                               │
+ ● user:88│ d         delete field  read-only (environment) · preview only                                            │
+ ● cart:91│ c         copy                                                                                            │
+ ● feed:gl│ t         edit ttl  read-only (environment) · preview only                                                │
+          │ r         refetch                                                                                         │
+          │ C         copy redis-cli command                                                                          │
+          │ R         rename field  read-only (environment) · preview only                                            │
+          │ ↑↓ jk     move                                                                                            │
+          │ PgUp/PgDn page                                                                                            │
+          │ Home/End  top/bottom                                                                                      │
+          │                                                                                                           │
+          │ Tab focus   ⌃R read-only   g s slowlog   g m monitor   g p pub/sub   g d dashboard   Esc back   q ⌃C quit │
+          │ ⌃← ⌃→ narrow / widen keys   ? F1 help                                                                     │
+          │                                                                                                           │
+          │ Tab keys · Esc close                                                                                      │
+          └───────────────────────────────────────────────────────────────────────────────────────────────────────────┘
                                                           │
 
  e edit field   a add field   d delete field   c copy   t edit ttl   r refetch   C copy redis-cli command   ? F1 help

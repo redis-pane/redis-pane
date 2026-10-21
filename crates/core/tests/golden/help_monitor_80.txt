@@ -3,19 +3,19 @@
  ⚠ MONITOR is running — the server pays for every command it streams here
  ● live                                                                 3 lines
  TIME         DB  COMMAND
- 16:21:23.107 0   "GET" "user:8812:session"
-┌─ help · monitor ─────────────────────────────────────────────────────────────┐
-│ p         pause                                                              │
-│ /         filter                                                             │
-│ c         copy command                                                       │
-│ ↑↓ jk     move                                                               │
-│ PgUp/PgDn page                                                               │
-│ Home/End  top/bottom (End resumes follow)                                    │
-│                                                                              │
-│ ⌃R read-only   g s slowlog   g m monitor   g p pub/sub   g d dashboard   g k k
-│                                                                              │
-│ Esc close                                                                    │
-└──────────────────────────────────────────────────────────────────────────────┘
+ 16┌─ help · monitor ───────────────────────────────────────────────────────┐
+ 16│ p         pause                                                        │
+ 16│ /         filter                                                       │
+   │ c         copy command                                                 │
+   │ ↑↓ jk     move                                                         │
+   │ PgUp/PgDn page                                                         │
+   │ Home/End  top/bottom (End resumes follow)                              │
+   │                                                                        │
+   │ ⌃R read-only   g s slowlog   g m monitor   g p pub/sub   g d dashboard │
+   │ g k keys   Esc back   q ⌃C quit   ? F1 help                            │
+   │                                                                        │
+   │ Esc close                                                              │
+   └────────────────────────────────────────────────────────────────────────┘
 
 
 

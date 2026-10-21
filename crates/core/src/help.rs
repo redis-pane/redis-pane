@@ -255,6 +255,11 @@ pub struct Refusal {
     /// does nothing. `false` for the confirm dialog's `y` row, which really
     /// does refuse outright — there is nothing left to preview by then.
     pub preview_only: bool,
+    /// `Some` when the key does nothing in this view whatever the Mode or the
+    /// server (`s` in tree view: folding needs name order). The text is the
+    /// reason, shown as-is, and the hint bar leaves the row out (the key is
+    /// not on offer) while `?` keeps it dimmed (PLAN's decision 3).
+    pub inapplicable: Option<&'static str>,
 }
 
 impl Refusal {
@@ -263,6 +268,7 @@ impl Refusal {
             reason: Some(reason),
             needs: None,
             preview_only,
+            inapplicable: None,
         })
     }
 
@@ -272,11 +278,25 @@ impl Refusal {
             reason: None,
             needs: Some(what),
             preview_only: false,
+            inapplicable: None,
+        }
+    }
+
+    /// A row whose key does nothing in the view on screen.
+    fn inapplicable(why: &'static str) -> Refusal {
+        Refusal {
+            reason: None,
+            needs: None,
+            preview_only: false,
+            inapplicable: Some(why),
         }
     }
 
     /// The reason text shown dimmed next to a refused row.
     pub fn text(&self) -> String {
+        if let Some(why) = self.inapplicable {
+            return why.to_string();
+        }
         if let Some(needs) = self.needs {
             return needs.to_string();
         }
@@ -688,13 +708,21 @@ fn dashboard_overlay_rows(state: &State) -> Vec<HelpRow> {
 }
 
 fn keys_rows(state: &State, tree: bool, filtered: bool) -> Vec<HelpRow> {
+    // Folding needs name order, so `s` does nothing in tree view (or while the
+    // list is heading there): dimmed with the reason, never hidden.
+    let sort_row = HelpRow::new(keys_for(state, Action::Sort), "sort");
+    let sort_row = if state.target_tree_mode() {
+        sort_row.refused(Refusal::inapplicable("sorted by name in tree view"))
+    } else {
+        sort_row
+    };
     let mut rows = vec![
         HelpRow::new(keys_for(state, Action::Open), "open / expand"),
         HelpRow::new(
             keys_for(state, Action::Filter),
             if filtered { "change filter" } else { "filter" },
         ),
-        HelpRow::new(keys_for(state, Action::Sort), "sort"),
+        sort_row,
         HelpRow::new(
             keys_for(state, Action::ToggleTree),
             if tree { "flat view" } else { "tree view" },
@@ -1601,10 +1629,19 @@ mod tests {
     //
     // 24 rows total; chrome takes 5 (border top, title, a blank, the
     // headings line, border bottom) plus a 1-row footer pointer line, and
-    // the EVERYWHERE block packs onto a single row of its own (PLAN:
-    // "may pack several short rows per line to save height") — 24 - 5 - 1
-    // (footer) - 1 (everywhere, packed) = 17 rows left for HERE.
-    const HERE_ROW_BUDGET: usize = 17;
+    // the EVERYWHERE block packs onto as many lines as 80 columns need
+    // (`render::wrap_everywhere`, so none of it is clipped — #111) — 24 - 5 - 1
+    // (footer) - N (everywhere lines) rows are left for HERE.
+    const ROWS: usize = 24;
+    const OVERLAY_INNER_WIDTH_80: usize = 80 - 4;
+
+    /// How many HERE rows fit at 80×24 over `s` with every global key shown.
+    fn here_row_budget(s: &State) -> usize {
+        let lines =
+            crate::render::wrap_everywhere(&everywhere(s), OVERLAY_INNER_WIDTH_80, usize::MAX)
+                .len();
+        ROWS - 5 - 1 - lines
+    }
 
     /// Every [`HelpContext`] variant, not a sample of states that happen to
     /// produce one — `here` only ever reads `state.read_only`/`keymap`/
@@ -1700,12 +1737,25 @@ mod tests {
             read_only: Some(ReadOnlyReason::Environment),
             ..State::default()
         };
+        // The keys pane with rows marked adds an `unmark all` row.
+        // The one context that misses the margin-keeping budget with the
+        // whole global line (17 HERE rows + 2 lines). The overlay itself
+        // still fits it at 24 rows exactly (no margin); only if it ever did
+        // not, `wrap_everywhere` drops the lowest-value global entries. So it
+        // is held to the one-line budget here.
+        let mut marked = State::default();
+        marked.marks.toggle(0);
         for ctx in every_context() {
-            for s in [&plain, &read_only] {
+            for s in [&plain, &read_only, &marked] {
                 let rows = here(s, ctx);
+                let budget = if s.marks.is_empty() {
+                    here_row_budget(s)
+                } else {
+                    ROWS - 5 - 1 - 1
+                };
                 assert!(
-                    rows.len() <= HERE_ROW_BUDGET,
-                    "{ctx:?} (read_only={:?}) produced {} HERE rows",
+                    rows.len() <= budget,
+                    "{ctx:?} (read_only={:?}) produced {} HERE rows, budget {budget}",
                     s.read_only,
                     rows.len()
                 );

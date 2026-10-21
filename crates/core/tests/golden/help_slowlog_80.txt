@@ -3,20 +3,20 @@
  SLOWLOG · 3 entries · sort: recent
  AGE       DURATION COMMAND                              CLIENT
  12s ago   185.0ms  HGETALL user:8812:session            worker-3 (10.0.0.4:5…
-┌─ help · slowlog ─────────────────────────────────────────────────────────────┐
-│ s         sort                                                               │
-│ r         refetch                                                            │
-│ c         copy command                                                       │
-│ d         reset slowlog                                                      │
-│ ↑↓ jk     move                                                               │
-│ PgUp/PgDn page                                                               │
-│ Home/End  top/bottom                                                         │
-│                                                                              │
-│ ⌃R read-only   g s slowlog   g m monitor   g p pub/sub   g d dashboard   g k k
-│                                                                              │
-│ Esc close                                                                    │
-└──────────────────────────────────────────────────────────────────────────────┘
-
+ 3h┌─ help · slowlog ───────────────────────────────────────────────────────┐
+ 2d│ s         sort                                                         │…
+   │ r         refetch                                                      │
+   │ c         copy command                                                 │
+   │ d         reset slowlog                                                │
+   │ ↑↓ jk     move                                                         │
+   │ PgUp/PgDn page                                                         │
+   │ Home/End  top/bottom                                                   │
+   │                                                                        │
+   │ ⌃R read-only   g s slowlog   g m monitor   g p pub/sub   g d dashboard │
+   │ g k keys   Esc back   q ⌃C quit   ? F1 help                            │
+   │                                                                        │
+   │ Esc close                                                              │
+   └────────────────────────────────────────────────────────────────────────┘
 ────────────────────────────────────────────────────────────────────────────────
  cmd    HGETALL user:8812:session
  at 2023-11-14 22:14:22 UTC  ·  client worker-3 (10.0.0.4:51820)

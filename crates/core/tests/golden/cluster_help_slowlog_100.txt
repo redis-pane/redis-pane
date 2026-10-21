@@ -3,20 +3,20 @@
  SLOWLOG · 0 entries · 6 nodes · sort: recent
  no slow commands — nothing has crossed the server's threshold since the last reset
 
-┌─ help · slowlog ─────────────────────────────────────────────────────────────────────────────────┐
-│ s         sort                                                                                   │
-│ r         refetch                                                                                │
-│ c         copy command                                                                           │
-│ d         reset slowlog (every node)                                                             │
-│ ↑↓ jk     move                                                                                   │
-│ PgUp/PgDn page                                                                                   │
-│ Home/End  top/bottom                                                                             │
-│                                                                                                  │
-│ ⌃R read-only   g s slowlog   g m monitor   g p pub/sub   g d dashboard   g k keys   Esc back   q ⌃
-│                                                                                                  │
-│ Esc close                                                                                        │
-└──────────────────────────────────────────────────────────────────────────────────────────────────┘
-
+  ┌─ help · slowlog ─────────────────────────────────────────────────────────────────────────────┐
+  │ s         sort                                                                               │
+  │ r         refetch                                                                            │
+  │ c         copy command                                                                       │
+  │ d         reset slowlog (every node)                                                         │
+  │ ↑↓ jk     move                                                                               │
+  │ PgUp/PgDn page                                                                               │
+  │ Home/End  top/bottom                                                                         │
+  │                                                                                              │
+  │ ⌃R read-only   g s slowlog   g m monitor   g p pub/sub   g d dashboard   g k keys   Esc back │
+  │ q ⌃C quit   ? F1 help                                                                        │
+  │                                                                                              │
+  │ Esc close                                                                                    │
+  └──────────────────────────────────────────────────────────────────────────────────────────────┘
 
 
 

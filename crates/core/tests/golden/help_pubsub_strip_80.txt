@@ -4,17 +4,17 @@
  ● live                                                              3 messages
  TIME         CHANNEL               PAYLOAD
  16:21:23.500 orders                {"id":8812,"total":41.5}
- 16:21:23.501 user:42               login
-┌─ help · pub/sub · strip ─────────────────────────────────────────────────────┐
-│ Tab       focus strip/tail                                                   │
-│ a         add                                                                │
-│ d         unsubscribe                                                        │
-│ ←→        select chip                                                        │
-│                                                                              │
-│ ⌃R read-only   g s slowlog   g m monitor   g p pub/sub   g d dashboard   g k k
-│                                                                              │
-│ Esc close                                                                    │
-└──────────────────────────────────────────────────────────────────────────────┘
+ 16┌─ help · pub/sub · strip ───────────────────────────────────────────────┐
+ 16│ Tab       focus strip/tail                                             │
+   │ a         add                                                          │
+   │ d         unsubscribe                                                  │
+   │ ←→        select chip                                                  │
+   │                                                                        │
+   │ ⌃R read-only   g s slowlog   g m monitor   g p pub/sub   g d dashboard │
+   │ g k keys   Esc back   q ⌃C quit   ? F1 help                            │
+───│                                                                        │───
+ ch│ Esc close                                                              │
+ { └────────────────────────────────────────────────────────────────────────┘
    "id": 8813
  }
 

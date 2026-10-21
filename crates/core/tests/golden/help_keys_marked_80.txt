@@ -1,0 +1,24 @@
+─ r┌─ help · keys pane ─────────────────────────────────────────────────────┐e ─
+   │ →         open / expand                                                │
+ KE│ /         filter                                                       │
+◆● │ s         sort                                                         │
+ ● │ t         tree view                                                    │
+ ● │ d         delete 1 marked                                              │
+ ● │ Esc       unmark all                                                   │
+ ● │ c         copy                                                         │
+ ● │ r         rescan                                                       │
+   │ C         copy redis-cli command                                       │
+   │ R         rename                                                       │
+   │ D         duplicate key (COPY)                                         │
+   │ Space     mark                                                         │
+   │ ↑↓ jk     move                                                         │
+   │ PgUp/PgDn page                                                         │
+   │ Home/End  top/bottom                                                   │
+   │ ⏎         open & move in                                               │
+   │ ← h       collapse / parent                                            │
+   │                                                                        │
+   │ ⌃R read-only   g s slowlog   g m monitor   g p pub/sub   g d dashboard │
+   │ Esc back   q ⌃C quit   ⌃← ⌃→ narrow / widen keys   ? F1 help           │
+   │                                                                        │
+ 1 │ Tab value keys · Esc close                                             │
+ → └────────────────────────────────────────────────────────────────────────┘

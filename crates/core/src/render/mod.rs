@@ -1196,7 +1196,6 @@ fn help_overlay(state: &State, _view: HelpView, theme: &Theme, area: Rect, buf: 
     let here_rows = help::here(state, ctx);
     let everywhere_rows = help::everywhere(state);
     let status = help::status(state).map(|s| theme.glyphs.text(&s).into_owned());
-    let everywhere_line = join_rows(&everywhere_rows);
     let footer = match other_pane_pointer(ctx) {
         Some(phrase) => format!("Tab {phrase} · Esc close"),
         None => "Esc close".to_string(),
@@ -1204,7 +1203,18 @@ fn help_overlay(state: &State, _view: HelpView, theme: &Theme, area: Rect, buf: 
     let title = format!(" help · {} ", context_title(ctx));
     let g = theme.glyphs;
     let (footer, title) = (g.text(&footer).into_owned(), g.text(&title).into_owned());
-    let everywhere_line = g.text(&everywhere_line).into_owned();
+    // The global keys wrap onto as many rows as the overlay's own widest
+    // possible width needs, so none is clipped (a fit-or-wrap, never a cut).
+    let max_everywhere_lines = (area.height as usize)
+        .saturating_sub(2 + usize::from(status.is_some()) + here_rows.len() + 3);
+    let everywhere_lines: Vec<String> = wrap_everywhere(
+        &everywhere_rows,
+        (area.width as usize).saturating_sub(4),
+        max_everywhere_lines,
+    )
+    .iter()
+    .map(|l| g.text(l).into_owned())
+    .collect();
 
     // Sizing: top border + status line(s) + one row per HERE row + a blank +
     // the EVERYWHERE line + a blank + the footer + bottom border. Every
@@ -1222,7 +1232,9 @@ fn help_overlay(state: &State, _view: HelpView, theme: &Theme, area: Rect, buf: 
     for line in &here_text {
         plain_lines.push(line);
     }
-    plain_lines.push(&everywhere_line);
+    for line in &everywhere_lines {
+        plain_lines.push(line);
+    }
     plain_lines.push(&footer);
 
     let inner_w = plain_lines
@@ -1232,8 +1244,8 @@ fn help_overlay(state: &State, _view: HelpView, theme: &Theme, area: Rect, buf: 
         .unwrap_or(10)
         .max(title.chars().count());
     let w = (inner_w + 4).min(area.width as usize).max(4);
-    // + 4: two blanks, the EVERYWHERE line, the footer line.
-    let content_rows = usize::from(status.is_some()) + here_rows.len() + 4;
+    // + 3: two blanks and the footer line, plus the EVERYWHERE lines.
+    let content_rows = usize::from(status.is_some()) + here_rows.len() + 3 + everywhere_lines.len();
     let h = (content_rows + 2).min(area.height as usize).max(4); // + top/bottom border
     let x0 = (area.width as usize - w) / 2;
     let y0 = (area.height as usize - h) / 2;
@@ -1290,9 +1302,11 @@ fn help_overlay(state: &State, _view: HelpView, theme: &Theme, area: Rect, buf: 
         y += 1;
     }
     y += 1; // blank
-    if (y as usize) < inner_bottom {
-        put(buf, inner_x, y, &everywhere_line, theme.style(Token::Muted));
-        y += 1;
+    for line in &everywhere_lines {
+        if (y as usize) < inner_bottom {
+            put(buf, inner_x, y, line, theme.style(Token::Muted));
+            y += 1;
+        }
     }
     y += 1; // blank
     if (y as usize) < inner_bottom {
@@ -2316,6 +2330,48 @@ fn join_rows(rows: &[help::HelpRow]) -> String {
         .join(HINT_BAR_SEP)
 }
 
+/// The global rows packed greedily onto lines no wider than `width`, joined
+/// by [`HINT_BAR_SEP`]; an entry never splits across lines, and a width wide
+/// enough for all of them gives exactly one line (the pre-wrapping shape).
+///
+/// When that needs more than `max_lines` lines (a tall HERE list on a short
+/// terminal), the lowest-value entries are dropped until it fits: from the
+/// end of the rank order backwards, never `read-only`, `quit` or `help` --
+/// the three the user cannot do without. Dropping is the fallback, never the
+/// first resort: at 80x24 every context keeps all of them
+/// (`every_global_key_is_visible_in_the_help_overlay_at_80x24`).
+pub fn wrap_everywhere(rows: &[help::HelpRow], width: usize, max_lines: usize) -> Vec<String> {
+    const KEEP: [&str; 3] = ["read-only", "quit", "help"];
+    let mut rows: Vec<&help::HelpRow> = rows.iter().collect();
+    loop {
+        let mut lines: Vec<String> = Vec::new();
+        for row in &rows {
+            let entry = format!("{} {}", row.keys, row.label);
+            match lines.last_mut() {
+                Some(line)
+                    if line.chars().count()
+                        + HINT_BAR_SEP.chars().count()
+                        + entry.chars().count()
+                        <= width =>
+                {
+                    line.push_str(HINT_BAR_SEP);
+                    line.push_str(&entry);
+                }
+                _ => lines.push(entry),
+            }
+        }
+        if lines.len() <= max_lines.max(1) {
+            return lines;
+        }
+        match rows.iter().rposition(|r| !KEEP.contains(&&*r.label)) {
+            Some(i) => {
+                rows.remove(i);
+            }
+            None => return lines,
+        }
+    }
+}
+
 /// The hint bar: `help::status`'s prefix if there is one, then `help::here`'s
 /// rows, then `help::everywhere`'s, fitted to `width` with the `help`
 /// binding pinned last so it never scrolls out of reach (PLAN's decision 4)
@@ -2341,6 +2397,9 @@ pub fn hint_bar(state: &State, width: u16) -> String {
     let (help_row, everywhere): (Vec<_>, Vec<_>) =
         everywhere.into_iter().partition(|r| r.label == "help");
     let mut rows = help::here(state, ctx);
+    // A key that does nothing in this view is not on offer in the bar; `?`
+    // keeps it dimmed with the reason.
+    rows.retain(|r| r.refused.is_none_or(|f| f.inapplicable.is_none()));
     rows.extend(everywhere);
 
     let help_suffix = if help_row.is_empty() {
@@ -2774,6 +2833,20 @@ mod hint_bar_tests {
                 "hint bar entry {i} ({entry:?}) is not where help's own rows put it: {full_entries:?}"
             );
         }
+    }
+
+    #[test]
+    fn a_short_overlay_drops_the_lowest_value_globals_but_keeps_read_only_quit_and_help() {
+        let s = crate::state::State::default();
+        let rows = help::everywhere(&s);
+        let full = wrap_everywhere(&rows, 76, usize::MAX);
+        assert!(full.len() >= 2, "{full:?}");
+        let one = wrap_everywhere(&rows, 76, 1);
+        assert_eq!(one.len(), 1, "{one:?}");
+        for kept in ["read-only", "quit", "help"] {
+            assert!(one[0].contains(kept), "{kept} dropped: {one:?}");
+        }
+        assert!(!one[0].contains("narrow / widen"), "{one:?}");
     }
 
     #[test]
