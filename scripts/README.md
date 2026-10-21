@@ -94,9 +94,13 @@ ssh in and run redis-pane there, the way it runs on a real bastion host.
 
 What to check over SSH:
 
-- **Copying.** `c` uses OSC 52, because sshd sets `SSH_TTY` (ADR-0013). Paste on your own
-  machine. Run `tmux` in `shell` to try the common bastion case, where it most often goes missing
-  (the box's tmux has `set-clipboard on`).
+- **Copying.** `c` uses OSC 52, because sshd sets `SSH_TTY` (ADR-0013). It reaches your own
+  clipboard only if every hop passes it on. Your terminal has to support OSC 52 and allow it:
+  macOS Terminal.app doesn't support it at all, and iTerm2 needs "Applications in terminal may
+  access clipboard" turned on. If you run tmux locally, it needs `set -g set-clipboard on`, because
+  its default (`external`) drops the sequence. The "copied" notice only means the sequence was
+  sent. Run `tmux` in `shell` to try a tmux on the remote side as well (the box's tmux has
+  `set-clipboard on`).
 - **The locale fallback.** sshd accepts `LANG` and `LC_*`, as Debian and Ubuntu do, so your
   locale is forwarded. `env -u LANG -u LC_ALL -u LC_CTYPE ./scripts/ssh-box.sh ssh` forwards none,
   and the frame should draw in ASCII.
