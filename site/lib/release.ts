@@ -2,7 +2,7 @@
 // Re-pin this on every release (docs/RELEASING.md).
 import { gitConfig } from './shared';
 
-export const releaseVersion = '0.1.0-beta.5';
+export const releaseVersion = '0.1.0-beta.6';
 export const releaseTag = `v${releaseVersion}`;
 
 const repoUrl = `https://github.com/${gitConfig.user}/${gitConfig.repo}`;

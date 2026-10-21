@@ -1,6 +1,6 @@
 # Testing the beta
 
-Thanks for trying `redis-pane`. This is `0.1.0-beta.5`. It's early, so expect rough edges, and
+Thanks for trying `redis-pane`. This is `0.1.0-beta.6`. It's early, so expect rough edges, and
 please say so when you hit one.
 
 The full guide is the [user guide](https://redis-pane.github.io/redis-pane/docs). Its source is in
