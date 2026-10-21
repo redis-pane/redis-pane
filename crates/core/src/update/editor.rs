@@ -3765,6 +3765,19 @@ mod zset_score_staging_tests {
         state
     }
 
+    /// `←` while typing is a text-cursor move, not `CollapseGroup`'s leave-
+    /// the-Viewer: `Mode::Editing` captures keys before the keymap.
+    #[test]
+    fn left_while_editing_moves_the_text_cursor_and_stays_in_the_viewer() {
+        let state = editing_score(b"m", 1.0, "12");
+        let before = state.open.as_ref().unwrap().typing().unwrap().cursor();
+        let (state, _) = update(state, Msg::Key(KeyPress::plain(KeyCode::Left)));
+        assert_eq!(state.focus, Pane::Value);
+        let open = state.open.as_ref().unwrap();
+        assert!(open.is_editing());
+        assert!(open.typing().unwrap().cursor().1 < before.1);
+    }
+
     /// Typing garbage into the score must leave nothing staged.
     ///
     /// D4's `⌃S` guard (phase 3) is the real gate, so this path should be

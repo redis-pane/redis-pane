@@ -813,6 +813,7 @@ fn dispatch_action(mut state: State, action: Action) -> (State, Vec<Command>) {
             after_move(state)
         }
         Action::Open => open_selected(state),
+        Action::GoToOpenKey => go_to_open_key(state),
         Action::EnterValueCursor => enter_value_cursor(state),
         Action::Copy => {
             // Which pane the reader is looking at decides what `y` copies —
@@ -863,6 +864,17 @@ fn toggle_read_only(mut state: State) -> (State, Vec<Command>) {
 /// `Esc`: back out of the nearest thing first — an overlay, then an error,
 /// then value-cursor mode, then an in-flight scan. One keypress, one
 /// meaning.
+/// Leave the Viewer for the key list: focus goes to the keys pane and the
+/// value cursor turns off. The value stays open and unchanged; only where
+/// plain movement is aimed changes. The one implementation behind both `Esc`
+/// (`cancel`) and `←`/`h` (`collapse_group`, in the Viewer).
+pub(super) fn focus_keys_pane(state: &mut State) {
+    state.focus = Pane::Keys;
+    if let Some(open) = &mut state.open {
+        open.cursor_active = false;
+    }
+}
+
 fn cancel(mut state: State) -> (State, Vec<Command>) {
     // Help no longer has a branch here: `Mode::Help` outranks `Mode::Normal`
     // (`mode`'s precedence), so `Esc` while help is open never reaches
@@ -935,10 +947,7 @@ fn cancel(mut state: State) -> (State, Vec<Command>) {
     // open and unchanged either way; only where plain movement is
     // aimed changes.
     if state.focus == Pane::Value {
-        state.focus = Pane::Keys;
-        if let Some(open) = &mut state.open {
-            open.cursor_active = false;
-        }
+        focus_keys_pane(&mut state);
         return (state, Vec::new());
     }
     // The first `Esc` in the keys pane with rows marked clears the marks, so a
@@ -1747,6 +1756,93 @@ mod stack_navigation_tests {
             cmds.is_empty(),
             "popping the stack is not itself a scan cancellation"
         );
+    }
+
+    /// A wide, tree-mode browser with `g:a`/`g:b` under an expanded `g:` group,
+    /// the selection inside the group, a key opened (focus on the Viewer).
+    fn viewer_open_in_a_group() -> State {
+        let mut state = browsing();
+        state.cols = 130;
+        state.tree_mode = true;
+        state.keys.push(b"g:a");
+        state.keys.push(b"g:b");
+        state.rebuild_list();
+        let row = (0..state.row_count())
+            .find(|&r| {
+                matches!(
+                    state.tree.row(r),
+                    Some(crate::state::tree::Row::Group { .. })
+                )
+            })
+            .expect("a group row");
+        // Make sure the group is expanded, then open a key inside it.
+        state.view.selected = row;
+        (state, _) = update(state, Msg::Key(KeyPress::plain(KeyCode::Right)));
+        state.rebuild_list();
+        let inside = (0..state.row_count())
+            .find(|&r| matches!(state.tree.row(r), Some(crate::state::tree::Row::Key { depth, .. }) if depth > 0))
+            .expect("a key row inside the expanded group");
+        state.view.selected = inside;
+        // `→` focuses the Viewer; the read's reply is what puts a value on it.
+        let value = crate::state::Value::Hash(crate::state::value::PairValue {
+            pairs: vec![(b"f".to_vec(), "v".into())],
+            total: 1,
+        });
+        let index = state.selected_key().expect("a key row");
+        let name = state.keys.name(index).expect("a name").to_vec();
+        let mut open = OpenKey::new(Some(index), name.into(), value, -1, 10, 0);
+        open.row = Some(inside);
+        state.open = Some(open);
+        state.focus = Pane::Value;
+        assert_eq!(state.focus, Pane::Value, "setup: the Viewer is focused");
+        state
+    }
+
+    #[test]
+    fn left_leaves_the_viewer_without_collapsing_the_key_list_group() {
+        let state = viewer_open_in_a_group();
+        let selected = state.view.selected;
+        let tree = state.tree.clone();
+        assert!(!state.open.as_ref().unwrap().cursor_active);
+
+        let (state, cmds) = update(state, Msg::Key(KeyPress::plain(KeyCode::Left)));
+        assert_eq!(state.focus, Pane::Keys);
+        assert_eq!(state.view.selected, selected, "the key list did not move");
+        assert_eq!(state.tree, tree, "no group was collapsed behind the reader");
+        assert!(cmds.is_empty());
+        assert!(state.open.is_some(), "the Open key is unchanged");
+    }
+
+    #[test]
+    fn left_with_the_value_cursor_on_leaves_the_viewer_and_turns_it_off() {
+        let state = viewer_open_in_a_group();
+        let (state, _) = update(state, Msg::Key(KeyPress::plain(KeyCode::Enter)));
+        assert!(state.open.as_ref().unwrap().cursor_active);
+        let open_name = state.open.as_ref().unwrap().name.clone();
+
+        let (state, cmds) = update(state, Msg::Key(KeyPress::plain(KeyCode::Left)));
+        assert_eq!(state.focus, Pane::Keys);
+        assert!(!state.open.as_ref().unwrap().cursor_active);
+        assert_eq!(state.open.as_ref().unwrap().name, open_name);
+        assert!(cmds.is_empty());
+    }
+
+    #[test]
+    fn h_leaves_the_viewer_like_left() {
+        let state = viewer_open_in_a_group();
+        let (state, _) = update(state, Msg::Key(KeyPress::plain(KeyCode::Char('h'))));
+        assert_eq!(state.focus, Pane::Keys);
+    }
+
+    #[test]
+    fn left_leaves_the_single_pane_viewer() {
+        let mut state = browsing();
+        assert!(state.cols < 70);
+        let (s, _) = update(state, Msg::Key(KeyPress::plain(KeyCode::Char('l'))));
+        state = s;
+        assert_eq!(state.focus, Pane::Value);
+        let (state, _) = update(state, Msg::Key(KeyPress::plain(KeyCode::Left)));
+        assert_eq!(state.focus, Pane::Keys);
     }
 
     #[test]

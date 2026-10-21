@@ -202,6 +202,61 @@ fn filter_key_keys_pane(mut state: State, key: KeyPress) -> (State, Vec<Command>
     }
 }
 
+/// `o` in the keys pane: put the selection back on the Open key.
+///
+/// The Open key may have no row: the filter excludes it, or a collapsed
+/// group hides it. Both are undone first (the filter cleared, with a notice so
+/// it is never silent; every collapsed ancestor unfolded), then one rebuild
+/// runs through the same async path a user trigger takes, and the selection
+/// follows the key by index (`State::follow`, as a rename does). A small
+/// keyspace lands in this very update; a sliced rebuild lands when its final
+/// step swaps in (`follow_after_swap`).
+///
+/// `dispatch_action` clears `follow` before it reaches here, and
+/// `rebuild_list_async` replaces any running job, so the follow is set after
+/// the filter and tree changes and cannot be dropped by a job built before
+/// them.
+pub(super) fn go_to_open_key(mut state: State) -> (State, Vec<Command>) {
+    let notify = |text: &str| vec![Command::Notify { text: text.into() }];
+    let Some(open) = state.open.as_ref() else {
+        return (state, notify("no key is open"));
+    };
+    let Some(index) = open.index else {
+        return (state, notify("the open key isn't in the scanned keys yet"));
+    };
+    if let Some(row) = open.row {
+        if row != state.view.selected {
+            state.view.selected = row;
+            return after_move(state);
+        }
+        return (state, Vec::new());
+    }
+
+    let name = state.keys.name(index).unwrap_or_default().to_vec();
+    let mut commands = Vec::new();
+    let filter_hides = !state.list.filter.is_empty()
+        && !crate::state::view::matches(&name, &state.list.filter, state.list.mode);
+    if filter_hides {
+        state.list.filter.clear();
+        state.filter_pending = false;
+        commands.extend(notify("filter cleared to show the open key"));
+    }
+    if state.target_tree_mode() {
+        state.tree.expand_ancestors(&name);
+    }
+    state.rebuild_list_async();
+    state.follow = Some(index);
+    settle_follow(&mut state);
+    if state.follow.is_some() && !state.rebuild_running() {
+        // No row and no job coming to make one: say so rather than do nothing.
+        state.follow = None;
+        commands.extend(notify("couldn't find the open key in the list"));
+    }
+    let (state, more) = after_move(state);
+    commands.extend(more);
+    (state, commands)
+}
+
 /// `d` with the keys pane focused: stage a delete of the Selected key
 /// (D4, PLAN M2 task 6).
 ///
@@ -329,6 +384,13 @@ pub(super) fn toggle_tree(mut state: State) -> (State, Vec<Command>) {
 /// group with nothing left to collapse has no parent to go to either, so
 /// this is a no-op — the standard treeview Left-arrow behavior.
 pub(super) fn collapse_group(mut state: State) -> (State, Vec<Command>) {
+    // In the Viewer, `←` is the pane navigation `→` mirrors: it does exactly
+    // `Esc`'s focus step, cursor on or off, and never touches the key list
+    // (it used to collapse the group under the key-list cursor from here).
+    if state.focus == Pane::Value {
+        focus_keys_pane(&mut state);
+        return (state, Vec::new());
+    }
     if cursor_active(&state) {
         return (state, Vec::new());
     }
@@ -876,5 +938,230 @@ mod filter_narrowing_tests {
         }
         let (state, _) = update(state, Msg::FilterRebuildDue);
         assert_eq!(rows(&state), rows(&fresh(&state)));
+    }
+}
+
+#[cfg(test)]
+mod go_to_open_tests {
+    //! `o`: the key list's cursor goes back to the Open key (and, if the filter
+    //! or a collapsed group hides it, undoes that first).
+
+    use super::*;
+    use crate::state::value::{StringValue, Value};
+
+    fn browser(names: &[String], tree: bool, slice: Option<usize>) -> State {
+        let mut state = State {
+            cols: 130,
+            rows: 20,
+            tree_mode: tree,
+            rebuild_slice: slice,
+            ..State::default()
+        };
+        (state, _) = update(
+            state,
+            Msg::ScanBatch {
+                keys: names.iter().map(|n| n.as_bytes().to_vec()).collect(),
+            },
+        );
+        state.run_rebuild_to_completion();
+        state
+    }
+
+    fn names(list: &[&str]) -> Vec<String> {
+        list.iter().map(|s| s.to_string()).collect()
+    }
+
+    fn index_of(state: &State, name: &str) -> usize {
+        (0..state.keys.len())
+            .find(|&i| state.keys.name(i) == Some(name.as_bytes()))
+            .expect("key loaded")
+    }
+
+    fn open(state: &mut State, name: &str) -> usize {
+        let index = index_of(state, name);
+        state.open = Some(crate::state::OpenKey::new(
+            Some(index),
+            name.into(),
+            Value::Str(StringValue::new("v", 80)),
+            -1,
+            1,
+            0,
+        ));
+        state.relocate_open_key();
+        index
+    }
+
+    fn collapse(state: &mut State, prefix: &str) {
+        state.tree.toggle(prefix);
+        state.refold();
+    }
+
+    fn press_o(state: State) -> (State, Vec<Command>) {
+        update(state, Msg::Key(KeyPress::plain(KeyCode::Char('o'))))
+    }
+
+    fn drive(mut state: State) -> State {
+        for _ in 0..1000 {
+            if !state.rebuild_running() {
+                break;
+            }
+            state = update(state, Msg::RebuildStep).0;
+        }
+        assert!(!state.rebuild_running());
+        state
+    }
+
+    fn notified(cmds: &[Command], needle: &str) -> bool {
+        cmds.iter()
+            .any(|c| matches!(c, Command::Notify { text } if text.contains(needle)))
+    }
+
+    #[test]
+    fn with_no_open_key_it_says_so() {
+        let state = browser(&names(&["a", "b"]), false, None);
+        let (state, cmds) = press_o(state);
+        assert!(notified(&cmds, "no key is open"), "{cmds:?}");
+        assert_eq!(state.view.selected, 0);
+    }
+
+    #[test]
+    fn an_open_key_without_a_loaded_index_says_so() {
+        let mut state = browser(&names(&["a", "b"]), false, None);
+        open(&mut state, "a");
+        state.open.as_mut().unwrap().index = None;
+        state.open.as_mut().unwrap().row = None;
+        state.view.selected = 1;
+        let (state, cmds) = press_o(state);
+        assert!(notified(&cmds, "isn't in the scanned keys yet"), "{cmds:?}");
+        assert_eq!(state.view.selected, 1);
+    }
+
+    #[test]
+    fn a_visible_but_scrolled_away_open_key_is_selected_and_scrolled_into_view() {
+        let all: Vec<String> = (0..80).map(|i| format!("k{i:02}")).collect();
+        let mut state = browser(&all, false, None);
+        let index = open(&mut state, "k10");
+        state.view.selected = 79;
+        state.view = state.view.scrolled_to_selection(state.visible_rows());
+        let (state, cmds) = press_o(state);
+        assert!(!notified(&cmds, ""), "{cmds:?}");
+        assert_eq!(state.selected_key(), Some(index));
+        let sel = state.view.selected;
+        assert!(state.view.offset <= sel && sel < state.view.offset + state.visible_rows());
+    }
+
+    #[test]
+    fn already_on_the_open_key_is_a_quiet_no_op() {
+        let mut state = browser(&names(&["a", "b", "c"]), false, None);
+        open(&mut state, "b");
+        state.view.selected = 1;
+        let (state, cmds) = press_o(state);
+        assert!(cmds.is_empty());
+        assert_eq!(state.view.selected, 1);
+    }
+
+    #[test]
+    fn a_filtered_out_open_key_clears_the_filter_says_so_and_lands() {
+        let mut state = browser(&names(&["a1", "k5", "k6"]), false, None);
+        let index = open(&mut state, "a1");
+        state.list.filter = "k".into();
+        state.rebuild_list();
+        assert_eq!(state.open.as_ref().unwrap().row, None);
+        let (state, cmds) = press_o(state);
+        assert!(notified(&cmds, "filter cleared"), "{cmds:?}");
+        assert!(state.list.filter.is_empty());
+        assert_eq!(state.selected_key(), Some(index));
+        assert!(state.follow.is_none());
+    }
+
+    #[test]
+    fn a_key_in_a_collapsed_group_unfolds_it_and_lands() {
+        let mut state = browser(&names(&["g:h:a", "g:h:b", "g:x", "z"]), true, None);
+        collapse(&mut state, "g:");
+        let index = open(&mut state, "g:h:a");
+        assert_eq!(state.open.as_ref().unwrap().row, None);
+        let (state, cmds) = press_o(state);
+        assert!(!notified(&cmds, "filter cleared"));
+        assert_eq!(state.selected_key(), Some(index));
+    }
+
+    #[test]
+    fn nested_collapsed_groups_are_all_unfolded() {
+        let mut state = browser(&names(&["g:h:a", "g:h:b", "g:x", "z"]), true, None);
+        collapse(&mut state, "g:h:");
+        collapse(&mut state, "g:");
+        let index = open(&mut state, "g:h:b");
+        let (state, _) = press_o(state);
+        assert_eq!(state.selected_key(), Some(index));
+        assert!(!state.tree.is_collapsed("g:"));
+        assert!(!state.tree.is_collapsed("g:h:"));
+    }
+
+    #[test]
+    fn filtered_and_folded_clears_the_filter_and_unfolds() {
+        let mut state = browser(&names(&["g:h:a", "g:x", "z"]), true, None);
+        collapse(&mut state, "g:");
+        let index = open(&mut state, "g:h:a");
+        state.list.filter = "z".into();
+        state.rebuild_list();
+        let (state, cmds) = press_o(state);
+        assert!(notified(&cmds, "filter cleared"), "{cmds:?}");
+        assert!(state.list.filter.is_empty());
+        assert_eq!(state.selected_key(), Some(index));
+    }
+
+    #[test]
+    fn a_large_keyspace_lands_only_after_the_final_rebuild_step() {
+        let all: Vec<String> = (0..40).map(|i| format!("g:k{i:02}")).collect();
+        let mut state = browser(&all, true, Some(4));
+        collapse(&mut state, "g:");
+        let index = open(&mut state, "g:k07");
+        let (state, _) = press_o(state);
+        assert!(state.rebuild_running(), "a sliced job is under way");
+        assert_ne!(state.selected_key(), Some(index), "not landed yet");
+        assert_eq!(state.follow, Some(index));
+        let state = drive(state);
+        assert_eq!(state.selected_key(), Some(index));
+        assert!(state.follow.is_none());
+    }
+
+    #[test]
+    fn a_large_keyspace_with_a_filter_to_clear_lands_after_the_job() {
+        let all: Vec<String> = (0..40).map(|i| format!("a{i:02}")).collect();
+        let mut state = browser(&all, false, Some(4));
+        let index = open(&mut state, "a07");
+        state.list.filter = "a3".into();
+        state.rebuild_list_async();
+        let state = drive(state);
+        assert_eq!(state.open.as_ref().unwrap().row, None);
+        let (state, cmds) = press_o(state);
+        assert!(notified(&cmds, "filter cleared"), "{cmds:?}");
+        let state = drive(state);
+        assert_eq!(state.selected_key(), Some(index));
+    }
+
+    #[test]
+    fn it_is_a_no_op_and_hidden_from_the_viewer() {
+        let mut state = browser(&names(&["a", "b", "c"]), false, None);
+        open(&mut state, "a");
+        state.view.selected = 2;
+        state.focus = Pane::Value;
+        let (state, cmds) = press_o(state);
+        assert!(cmds.is_empty());
+        assert_eq!(state.view.selected, 2);
+        assert!(!Action::GoToOpenKey.pane_is_on_screen(&state));
+        let rows = crate::help::here(&state, crate::help::context(&state));
+        assert!(rows.iter().all(|r| r.label != "go to open key"));
+    }
+
+    #[test]
+    fn it_is_listed_in_the_key_list_help_only() {
+        let mut state = browser(&names(&["a", "b"]), false, None);
+        open(&mut state, "a");
+        let rows = crate::help::here(&state, crate::help::context(&state));
+        assert!(
+            rows.iter()
+                .any(|r| r.label == "go to open key" && r.keys == "o")
+        );
     }
 }

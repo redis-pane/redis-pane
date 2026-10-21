@@ -10,8 +10,9 @@ one carries to the others:
 - a **footer** with the keys that work here
 
 `Enter` puts a cursor on a row of the body. `↑` `↓`, `PgUp` `PgDn`, `Home` and `End` then move it, and
-`Esc` gives the movement keys back to the key list. Without the cursor, those keys move the key
-list.
+`Esc` or `←` (`h`) gives the movement keys back to the key list. Without the cursor, those keys
+move the key list. `←` from the value pane always goes back to the key list, with the cursor on or
+off; it never folds a group in the list.
 
 <Demo name="types" alt="One key of each type in turn: a binary value in hex, a Hash, a JSON string, a List, a Set, a Stream and a Sorted set, all in the same frame" />
 

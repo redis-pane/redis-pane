@@ -27,6 +27,7 @@ badged `✕ gone`, with its last known size. Removing it would move everything b
 | `PgUp` `PgDn`, `Home` `End` | Page, jump to the top or the bottom. |
 | `→` or `l` | Open the key, or expand a tree group, or step into one that is open. |
 | `←` or `h` | Collapse a group, or jump to its parent. |
+| `o` | Go to the Open key: put the cursor back on the key the value pane is showing. |
 | `Enter` | Open the key (if needed) and put a cursor inside its value. |
 | `Tab` | Move focus to the other pane without opening anything. |
 
@@ -35,6 +36,10 @@ The key under your cursor is the **Selected key**. The key shown in the value pa
 through a thousand keys doesn't send a thousand reads. When they differ, both panes say so. The
 value pane gets a `⊘ not the selected key` badge, and the Open key's name is underlined in the
 list.
+
+Press `o` in the key list to jump back to the Open key. If a filter hides it, `o` clears the
+filter and says so; if a collapsed group hides it, `o` unfolds the groups above it. Either way the
+cursor lands on it.
 
 ## Tree and flat
 

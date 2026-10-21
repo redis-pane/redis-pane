@@ -45,6 +45,7 @@ The left pane. With keys marked, `d` deletes all of them and `Esc` lets them go.
 | `Home/End` | top/bottom |
 | `⏎` | open & move in |
 | `← h` | collapse / parent |
+| `o` | go to open key |
 
 ### Filter prompt
 
@@ -82,6 +83,7 @@ A String key, value cursor on.
 | `↑↓ jk` | move |
 | `PgUp/PgDn` | page |
 | `Home/End` | top/bottom |
+| `← h` | back to keys |
 
 ### Hash
 
@@ -100,6 +102,7 @@ A Hash key, value cursor on.
 | `↑↓ jk` | move |
 | `PgUp/PgDn` | page |
 | `Home/End` | top/bottom |
+| `← h` | back to keys |
 
 ### List
 
@@ -117,6 +120,7 @@ A List key, value cursor on.
 | `↑↓ jk` | move |
 | `PgUp/PgDn` | page |
 | `Home/End` | top/bottom |
+| `← h` | back to keys |
 
 ### Set
 
@@ -134,6 +138,7 @@ A Set key, value cursor on.
 | `↑↓ jk` | move |
 | `PgUp/PgDn` | page |
 | `Home/End` | top/bottom |
+| `← h` | back to keys |
 
 ### Sorted set
 
@@ -152,6 +157,7 @@ A Sorted set key, value cursor on.
 | `↑↓ jk` | move |
 | `PgUp/PgDn` | page |
 | `Home/End` | top/bottom |
+| `← h` | back to keys |
 
 ### Stream
 
@@ -166,6 +172,7 @@ A Stream key, value cursor on.
 | `↑↓ jk` | move |
 | `PgUp/PgDn` | page |
 | `Home/End` | top/bottom |
+| `← h` | back to keys |
 
 ### JSON
 
@@ -181,6 +188,7 @@ A JSON key, value cursor on.
 | `↑↓ jk` | move |
 | `PgUp/PgDn` | page |
 | `Home/End` | top/bottom |
+| `← h` | back to keys |
 
 ### Binary
 
@@ -195,6 +203,7 @@ A Binary key, value cursor on.
 | `↑↓ jk` | move |
 | `PgUp/PgDn` | page |
 | `Home/End` | top/bottom |
+| `← h` | back to keys |
 
 ## Editor
 
@@ -453,6 +462,7 @@ Every default single-key binding, one row per action, straight from the keymap. 
 | `d` | delete |
 | `R` | rename |
 | `D` | duplicate key (COPY) |
+| `o` | go to open key |
 | `Space` | mark |
 | `y` | confirm |
 | `e` | edit |

@@ -53,6 +53,10 @@ pub enum Action {
     /// is already expanded, since Right never collapses (`CollapseGroup` is
     /// the only key that does).
     Open,
+    /// Move the key list's selection back onto the Open key, clearing the
+    /// filter and unfolding groups first if they hide it. Key-list scoped:
+    /// in the Viewer it is neither bound nor offered.
+    GoToOpenKey,
     /// Start moving a cursor inside the open value. No-op with nothing open.
     /// Deliberately a separate, explicit action from `Tab`/focus — merely
     /// looking at the value pane must never silently reprogram what plain
@@ -200,11 +204,15 @@ impl Action {
                 }
             }
             // The rest of the key list: reshaping it, or opening from it.
-            Action::Filter
-            | Action::Sort
-            | Action::CollapseGroup
-            | Action::Open
-            | Action::ToggleMark => state.pane_visible(Pane::Keys),
+            // `o` goes back to the Open key from the key list, and only there.
+            Action::GoToOpenKey => state.focus == Pane::Keys && state.pane_visible(Pane::Keys),
+            Action::Filter | Action::Sort | Action::Open | Action::ToggleMark => {
+                state.pane_visible(Pane::Keys)
+            }
+            // `←` also leaves the Viewer (it does `Esc`'s focus step there),
+            // so it is live whenever the Viewer is the focused pane — which
+            // keeps it working in the single-pane layout (<70 columns).
+            Action::CollapseGroup => state.pane_visible(Pane::Keys) || state.focus == Pane::Value,
             // `d` is focus-dependent, like `c` (D4, PLAN M2 task 6): the keys
             // pane's Selected-key delete and the Viewer's Hash-field delete
             // are different commands on different targets, and whichever
@@ -269,6 +277,7 @@ impl Action {
             Action::EnterValueCursor => "open / move in value",
             Action::Copy => "copy",
             Action::CopyCommand => "copy redis-cli command",
+            Action::GoToOpenKey => "go to open key",
             Action::CyclePane => "focus",
             Action::WidenKeysPane => "widen keys",
             Action::NarrowKeysPane => "narrow keys",
@@ -537,6 +546,10 @@ impl Default for Keymap {
                 Binding {
                     key: KeyPress::plain(KeyCode::Char('D')),
                     action: Action::Duplicate,
+                },
+                Binding {
+                    key: KeyPress::plain(KeyCode::Char('o')),
+                    action: Action::GoToOpenKey,
                 },
                 Binding {
                     key: KeyPress::plain(KeyCode::Char(' ')),
@@ -838,6 +851,7 @@ mod tests {
             Action::Delete,
             Action::Rename,
             Action::Duplicate,
+            Action::GoToOpenKey,
             Action::ConfirmMutation,
             Action::Edit,
             Action::Add,

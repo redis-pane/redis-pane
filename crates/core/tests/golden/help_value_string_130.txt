@@ -3,13 +3,13 @@
  KEY                               TYPE        SIZE   TTL │ user:8812:session
  ● user:8812:cart                  zset       412 B   12m │ string · 2 bytes · 2.1 KB
  ● user:8812:profile               json       880 B     ∞ │ ttl 9m                                                         ● live
- ● user:8812:session               hash      2.1 KB   42m ├
  ● user:88┌─ help · value pane · string ──────────────────────────────────────────────────────────────────────────────┐
- ● cart:91│ e         edit                                                                                            │
- ● feed:gl│ c         copy                                                                                            │
-          │ t         edit ttl                                                                                        │
+ ● user:88│ e         edit                                                                                            │
+ ● cart:91│ c         copy                                                                                            │
+ ● feed:gl│ t         edit ttl                                                                                        │
           │ r         refetch                                                                                         │
           │ C         copy redis-cli command                                                                          │
+          │ ← h       back to keys                                                                                    │
           │                                                                                                           │
           │ Tab focus   ⌃R read-only   g s slowlog   g m monitor   g p pub/sub   g d dashboard   Esc back   q ⌃C quit │
           │ ⌃← ⌃→ narrow / widen keys   ? F1 help                                                                     │
@@ -21,4 +21,4 @@
                                                           │
                                                           │
 
- e edit   c copy   t edit ttl   r refetch   C copy redis-cli command   Tab focus   ⌃R read-only   g s slowlog   ? F1 help
+ e edit   c copy   t edit ttl   r refetch   C copy redis-cli command   ← h back to keys   Tab focus   ⌃R read-only   ? F1 help

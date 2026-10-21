@@ -141,6 +141,14 @@ While a prompt, the editor or a confirmation is open, only `F1` opens help.",
     for (tree, filtered) in [(false, false), (true, false), (false, true)] {
         keys_sets.push(here(&base, HelpContext::Keys { tree, filtered }));
     }
+    // `o` is offered only while a key is open.
+    keys_sets.push(here(
+        &open_state(),
+        HelpContext::Keys {
+            tree: false,
+            filtered: false,
+        },
+    ));
     section(
         &mut out,
         2,
