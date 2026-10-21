@@ -813,6 +813,7 @@ fn dispatch_action(mut state: State, action: Action) -> (State, Vec<Command>) {
             after_move(state)
         }
         Action::Open => open_selected(state),
+        Action::GoToOpenKey => go_to_open_key(state),
         Action::EnterValueCursor => enter_value_cursor(state),
         Action::Copy => {
             // Which pane the reader is looking at decides what `y` copies —

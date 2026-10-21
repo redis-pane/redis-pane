@@ -205,6 +205,28 @@ impl Tree {
         self.collapsed_lens.dedup();
     }
 
+    /// Unfold every collapsed prefix of `name`, so a fold built afterwards
+    /// shows the key. Covers both regular prefixes (ending in the separator)
+    /// and irregular ones (any string prefix, see [`Tree::ancestor_collapsed`]).
+    /// Returns whether anything was unfolded. The shown rows are untouched;
+    /// the caller rebuilds.
+    pub fn expand_ancestors(&mut self, name: &[u8]) -> bool {
+        if self.collapsed.is_empty() {
+            return false;
+        }
+        let name = String::from_utf8_lossy(name);
+        let hits: Vec<String> = self
+            .collapsed
+            .iter()
+            .filter(|p| name.starts_with(p.as_str()))
+            .cloned()
+            .collect();
+        for prefix in &hits {
+            self.toggle(prefix);
+        }
+        !hits.is_empty()
+    }
+
     pub fn is_collapsed(&self, prefix: &str) -> bool {
         self.collapsed.contains(prefix)
     }
@@ -1328,5 +1350,72 @@ mod tests {
         keys.push(b"a:4");
         view.extend(&keys, 4);
         assert!(view.name_lcp().is_none());
+    }
+}
+
+#[cfg(test)]
+mod expand_ancestors_tests {
+    use super::*;
+    use crate::state::view::SortBy;
+
+    fn built(names: &[&str], tree: &mut Tree) -> LoadedSet {
+        let mut keys = LoadedSet::default();
+        for n in names {
+            keys.push(n.as_bytes());
+        }
+        let mut view = KeyView::new("", crate::state::FilterMode::Glob, SortBy::Name);
+        view.rebuild(&keys);
+        tree.rebuild(&keys, &view);
+        keys
+    }
+
+    fn shows(keys: &LoadedSet, tree: &Tree, name: &str) -> bool {
+        (0..tree.len()).any(|r| {
+            matches!(tree.row(r), Some(Row::Key { index, .. })
+                if keys.name(index as usize) == Some(name.as_bytes()))
+        })
+    }
+
+    #[test]
+    fn every_collapsed_prefix_of_the_name_is_removed() {
+        let names = ["a:b:c", "a:b:d", "a:x", "z"];
+        let mut tree = Tree::new(':');
+        tree.toggle("a:");
+        tree.toggle("a:b:");
+        tree.toggle("z:");
+        let keys = built(&names, &mut tree);
+        assert!(!shows(&keys, &tree, "a:b:c"));
+
+        assert!(tree.expand_ancestors(b"a:b:c"));
+        assert!(!tree.is_collapsed("a:") && !tree.is_collapsed("a:b:"));
+        assert!(tree.is_collapsed("z:"), "unrelated prefixes stay collapsed");
+        let keys = built(&names, &mut tree);
+        assert!(shows(&keys, &tree, "a:b:c"));
+    }
+
+    #[test]
+    fn nothing_collapsed_above_the_name_reports_false() {
+        let mut tree = Tree::new(':');
+        tree.toggle("q:");
+        assert!(!tree.expand_ancestors(b"a:b"));
+        assert!(tree.is_collapsed("q:"));
+        assert!(!Tree::new(':').expand_ancestors(b"a:b"));
+    }
+
+    #[test]
+    fn an_irregular_prefix_is_removed_too() {
+        let names = ["user:1", "user:2", "zed"];
+        let mut tree = Tree::new(':');
+        tree.toggle("us");
+        let keys = built(&names, &mut tree);
+        assert!(
+            !shows(&keys, &tree, "user:1"),
+            "hidden by the irregular prefix"
+        );
+
+        assert!(tree.expand_ancestors(b"user:1"));
+        assert!(!tree.is_collapsed("us"));
+        let keys = built(&names, &mut tree);
+        assert!(shows(&keys, &tree, "user:1"));
     }
 }

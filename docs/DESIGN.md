@@ -177,6 +177,7 @@ recomputed each frame from which tile is focused, never a persisted scroll posit
 | `Space` | Mark or unmark the Selected key for a bulk delete and move down. A group row shows a notice and marks nothing. `Esc` clears the marks (first, before it cancels a scan); a rescan clears them too | key list |
 | `→` / `l` | Open key in value pane, or expand/descend a tree group | key list |
 | `←` / `h` | Collapse a tree group, or move to its parent | key list |
+| `o` | Go to the Open key: move the selection onto it, first clearing the filter (with a notice) and unfolding collapsed groups if they hide it. Offered only while a key is open | key list |
 | `←` / `h` | Leave the Viewer for the key list (`Esc`'s focus step: cursor off, value stays open) | value pane, focused |
 | `Enter` | Open the Selected key (if needed) and start moving a cursor inside it | key list / value pane |
 | `r` | Refresh / rescan | pane |
@@ -231,7 +232,7 @@ value pane and rescan in the keys pane, `t` is tree in the keys pane and edit-tt
 
 Derived from the default keymap in `crates/core/src/keymap/mod.rs` (not from the table above,
 which includes keys this document plans but this codebase has not built yet): the free single
-lowercase keys, unclaimed by any default binding, are `b f i m n o u v w x z`. `g` is free too,
+lowercase keys, unclaimed by any default binding, are `b f i m n u v w x z`. `g` is free too,
 but is reserved as the view-jump chord prefix above rather than as a lone binding. `p` is no longer
 free — it is `Action::TogglePause`, scoped to the Monitor view alone (Monitor's own keymap growth
 rule: a bare key whose meaning nothing outside that view gives it, exactly like `d`/`e`/`t`/`c`).

@@ -8,6 +8,9 @@ promise a stable interface.
 
 ### Added
 
+- `o` in the key list moves the cursor back to the Open key. If a filter hides it, `o` clears the
+  filter and says so; if a collapsed group hides it, `o` unfolds the groups above it. With no key
+  open it says `no key is open`. `?` lists it as `go to open key` while a key is open.
 - `←` (or `h`) in the value pane now takes you back to the key list, the way `→` takes you in. It
   does what `Esc` does there: focus returns to the key list and the value cursor turns off, with
   the key staying open. It works at every width, including the single-pane layout below 70

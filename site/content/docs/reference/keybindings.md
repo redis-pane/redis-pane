@@ -45,6 +45,7 @@ The left pane. With keys marked, `d` deletes all of them and `Esc` lets them go.
 | `Home/End` | top/bottom |
 | `⏎` | open & move in |
 | `← h` | collapse / parent |
+| `o` | go to open key |
 
 ### Filter prompt
 
@@ -461,6 +462,7 @@ Every default single-key binding, one row per action, straight from the keymap. 
 | `d` | delete |
 | `R` | rename |
 | `D` | duplicate key (COPY) |
+| `o` | go to open key |
 | `Space` | mark |
 | `y` | confirm |
 | `e` | edit |

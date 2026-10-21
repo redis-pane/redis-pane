@@ -787,6 +787,17 @@ fn keys_rows(state: &State, tree: bool, filtered: bool) -> Vec<HelpRow> {
     // 80-column bar (the marked-rows rows above are the exception, because
     // they only exist while rows are marked).
     rows.push(HelpRow::new(keys_for(state, Action::ToggleMark), "mark"));
+    // Key-list scoped (`Action::pane_is_on_screen`), so it lives here and in no
+    // other context. Only while a key is open, since without one `o` has
+    // nowhere to go (it says so if pressed) and the 80x24 overlay has no spare
+    // row for a key that cannot act. After the verbs, so it cannot push `r` or
+    // `t` off a bar.
+    if state.open.is_some() {
+        rows.push(HelpRow::new(
+            keys_for(state, Action::GoToOpenKey),
+            Action::GoToOpenKey.label(),
+        ));
+    }
     rows.push(HelpRow::new("↑↓ jk", "move"));
     rows.push(HelpRow::new("PgUp/PgDn", "page"));
     rows.push(HelpRow::new("Home/End", "top/bottom"));
