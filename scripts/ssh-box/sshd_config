@@ -1,0 +1,8 @@
+# Key-only, one user. AcceptEnv mirrors the Debian/Ubuntu default, so the
+# client's locale arrives the way it does on a typical bastion; clear it on the
+# client side to see the ASCII fallback (terminal.rs, "aimed at SSH").
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+PermitRootLogin no
+AllowUsers pane
+AcceptEnv LANG LC_*

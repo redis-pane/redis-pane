@@ -1,0 +1,8 @@
+# The build context is the repository root; send only what the build reads.
+**/target
+.git
+.claude
+site
+tapes
+docs
+**/__pycache__

@@ -76,3 +76,32 @@ for i in $(seq 1 300); do docker exec redis-pane-cluster redis-cli -c -p 7100 se
 cargo run -p redis-pane -- --url redis-cluster://127.0.0.1:7100
 docker rm -f redis-pane-cluster                # throw it away
 ```
+
+## `ssh-box.sh`: redis-pane over SSH
+
+A bastion in a box, for checking the paths that only run inside an SSH session. One container
+holds sshd, a redis-pane built from this checkout, and a Redis bound to the container's own
+loopback. Only SSH is published, on `127.0.0.1:2222`, so the one way to reach the keyspace is to
+ssh in and run redis-pane there, the way it runs on a real bastion host.
+
+```bash
+./scripts/ssh-box.sh up        # build from the checkout, start, seed 5000 keys
+./scripts/ssh-box.sh ssh       # ssh in and run redis-pane (extra args go to it)
+./scripts/ssh-box.sh shell     # ssh in to a shell: fixtures, churn, tmux, redis-cli
+./scripts/ssh-box.sh restart   # rebuild after a code change
+./scripts/ssh-box.sh down      # throw it away
+```
+
+What to check over SSH:
+
+- **Copying.** `c` uses OSC 52, because sshd sets `SSH_TTY` (ADR-0013). Paste on your own
+  machine. Run `tmux` in `shell` to try the common bastion case, where it most often goes missing
+  (the box's tmux has `set-clipboard on`).
+- **The locale fallback.** sshd accepts `LANG` and `LC_*`, as Debian and Ubuntu do, so your
+  locale is forwarded. `env -u LANG -u LC_ALL -u LC_CTYPE ./scripts/ssh-box.sh ssh` forwards none,
+  and the frame should draw in ASCII.
+- **Liveness.** Open a key, then `churn --focus <key>` from a `shell` in a second terminal.
+
+The login uses a throwaway key in `target/ssh-box/`. `FIXTURE_KEYS` sets how many keys are seeded,
+and `REDIS_PANE_SSH_PORT` sets the host port. The binary is a musl build, not the shipped
+`x86_64-unknown-linux-gnu` one, which keeps the box on the same `redis:8.4-alpine` as `redis-up.sh`.
