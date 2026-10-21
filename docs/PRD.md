@@ -318,14 +318,22 @@ config file; a **Connection** is a live session, which may be **ad-hoc** (no Pro
   and a tree toggle shows its new list in ~0.1–0.2 s.
   Designed in [`plans/m6-perf-rebuild.md`](plans/m6-perf-rebuild.md), tasks in
   [`plans/m6-planning.md`](plans/m6-planning.md).
+- **1.0 — Release.** Planned 2026-10-21 in [`plans/packaging-and-1.0.md`](plans/packaging-and-1.0.md).
+  Packaging per [ADR-0023](adr/0023-distribution-channels-for-1.0.md): musl Linux builds (x86_64
+  and aarch64) and a Homebrew tap, still unsigned. The beta ends when both of these hold:
+  1. **Packaging shipped and verified:** every channel installs on a clean machine, including old
+     glibc distros for the musl builds.
+  2. **No open Severity 1 or 2 work:** nothing open in `docs/UI_TASKS.md` at Severity 1 or 2, and
+     no open GitHub issue labelled `bug`.
+
+  Measuring the one never-tested metric (§7, a new user finds a known key in under 30 s) and
+  resolving the keybinding-override and fuzzy-filter questions are open work, not gates.
 
 ## 10. Open questions
 
-- **Packaging, still open and not scheduled** (it was to be decided at the end of alpha, which has
-  ended): all four items are wanted — Homebrew (plus release notes), musl and arm64 Linux builds,
-  macOS code signing and notarization, and Windows code signing. None is built; the betas ship the
-  same raw GitHub Release archives (`cargo-dist`, unsigned), the only distribution until this is
-  decided.
+- ~~**Packaging**, scheduled for a decision at the end of alpha.~~ **Resolved 2026-10-21** by
+  [ADR-0023](adr/0023-distribution-channels-for-1.0.md): musl Linux and a Homebrew tap for 1.0;
+  signing (macOS and Windows), crates.io, gnu arm64 and distro packages are not in 1.0.
 - Should Profiles be shareable across a team (checked-in config)? ADR-0002's reference-only
   credential path makes this plausible — is it worth designing for in v1?
 - With one Connection per process, is there any in-app Profile surface left to build, or do
