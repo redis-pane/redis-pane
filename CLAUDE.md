@@ -138,6 +138,10 @@ python3 scripts/churn.py                # second terminal: delete/mutate/expire/
 ./scripts/redis-up.sh down              # throw it away
 ```
 
+`./scripts/ssh-box.sh up && ./scripts/ssh-box.sh ssh` runs redis-pane over SSH, in a container whose Redis is
+reachable only from inside it. Use it for anything that changes under SSH: OSC 52 copying, the locale
+fallback, timeouts.
+
 `python3 scripts/churn.py --focus <key>` aims most of its writes at one key: that is the direct
 check that the Viewer re-arms tracking after every invalidation, and it will not be caught by a
 `cargo test` run. `fixtures.py -n 200000` is the one to reach for when the question is whether
