@@ -802,15 +802,14 @@ mod cursor_mode_tests {
         assert_eq!(state.open.unwrap().cursor, 1);
     }
 
-    /// Left/Right are unbound while the value cursor is active — only
-    /// ↑↓/PgUp/PgDn/Home/End move it. Without the `cursor_active` guard in
-    /// `Action::CollapseGroup`/`Action::Open`, Left silently walked the tree
-    /// selection to its parent group underneath the open value, which is
-    /// what a live session actually hit: the open value stopped matching the
-    /// selected key ("not the selected key") while the cursor still visibly
-    /// sat on a row.
+    /// `←` in the Viewer leaves it (exactly `Esc`'s focus step) and never
+    /// walks the key list: without the focus check in `collapse_group`, it
+    /// moved the tree selection to its parent group underneath the open
+    /// value, which is what a live session hit ("not the selected key"
+    /// while the cursor still sat on a row). `→` stays a no-op while the
+    /// cursor is active.
     #[test]
-    fn left_and_right_do_not_move_the_key_list_while_the_cursor_is_active() {
+    fn left_leaves_and_right_is_a_no_op_while_the_cursor_is_active() {
         let mut state = open_with(5);
         state.tree_mode = true;
         for name in ["page:a", "page:b"] {
@@ -822,22 +821,21 @@ mod cursor_mode_tests {
         let selected_before = state.view.selected;
         let tree_before = state.tree.clone();
 
-        let (state, cmds) = press(state, KeyCode::Left);
-        assert_eq!(
-            state.view.selected, selected_before,
-            "Left must not move the key list while the value cursor is active"
-        );
-        assert_eq!(
-            state.tree, tree_before,
-            "Left must not collapse/expand a group while the value cursor is active"
-        );
-        assert!(cmds.is_empty());
-        assert!(state.open.as_ref().unwrap().cursor_active);
-
         let (state, cmds) = press(state, KeyCode::Right);
         assert_eq!(state.view.selected, selected_before);
         assert!(cmds.is_empty());
-        assert!(state.open.unwrap().cursor_active);
+        assert!(state.open.as_ref().unwrap().cursor_active);
+        assert_eq!(state.focus, Pane::Value);
+
+        let (state, cmds) = press(state, KeyCode::Left);
+        assert_eq!(
+            state.view.selected, selected_before,
+            "Left must not move the key list"
+        );
+        assert_eq!(state.tree, tree_before, "Left must not collapse a group");
+        assert!(cmds.is_empty());
+        assert_eq!(state.focus, Pane::Keys, "Left leaves the Viewer");
+        assert!(!state.open.unwrap().cursor_active);
     }
 
     /// Reported live: open a key, move the cursor, `Esc` back to the key

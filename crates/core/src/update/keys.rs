@@ -329,6 +329,13 @@ pub(super) fn toggle_tree(mut state: State) -> (State, Vec<Command>) {
 /// group with nothing left to collapse has no parent to go to either, so
 /// this is a no-op — the standard treeview Left-arrow behavior.
 pub(super) fn collapse_group(mut state: State) -> (State, Vec<Command>) {
+    // In the Viewer, `←` is the pane navigation `→` mirrors: it does exactly
+    // `Esc`'s focus step, cursor on or off, and never touches the key list
+    // (it used to collapse the group under the key-list cursor from here).
+    if state.focus == Pane::Value {
+        focus_keys_pane(&mut state);
+        return (state, Vec::new());
+    }
     if cursor_active(&state) {
         return (state, Vec::new());
     }

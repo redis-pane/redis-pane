@@ -200,11 +200,13 @@ impl Action {
                 }
             }
             // The rest of the key list: reshaping it, or opening from it.
-            Action::Filter
-            | Action::Sort
-            | Action::CollapseGroup
-            | Action::Open
-            | Action::ToggleMark => state.pane_visible(Pane::Keys),
+            Action::Filter | Action::Sort | Action::Open | Action::ToggleMark => {
+                state.pane_visible(Pane::Keys)
+            }
+            // `←` also leaves the Viewer (it does `Esc`'s focus step there),
+            // so it is live whenever the Viewer is the focused pane — which
+            // keeps it working in the single-pane layout (<70 columns).
+            Action::CollapseGroup => state.pane_visible(Pane::Keys) || state.focus == Pane::Value,
             // `d` is focus-dependent, like `c` (D4, PLAN M2 task 6): the keys
             // pane's Selected-key delete and the Viewer's Hash-field delete
             // are different commands on different targets, and whichever

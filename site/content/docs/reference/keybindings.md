@@ -82,6 +82,7 @@ A String key, value cursor on.
 | `↑↓ jk` | move |
 | `PgUp/PgDn` | page |
 | `Home/End` | top/bottom |
+| `← h` | back to keys |
 
 ### Hash
 
@@ -100,6 +101,7 @@ A Hash key, value cursor on.
 | `↑↓ jk` | move |
 | `PgUp/PgDn` | page |
 | `Home/End` | top/bottom |
+| `← h` | back to keys |
 
 ### List
 
@@ -117,6 +119,7 @@ A List key, value cursor on.
 | `↑↓ jk` | move |
 | `PgUp/PgDn` | page |
 | `Home/End` | top/bottom |
+| `← h` | back to keys |
 
 ### Set
 
@@ -134,6 +137,7 @@ A Set key, value cursor on.
 | `↑↓ jk` | move |
 | `PgUp/PgDn` | page |
 | `Home/End` | top/bottom |
+| `← h` | back to keys |
 
 ### Sorted set
 
@@ -152,6 +156,7 @@ A Sorted set key, value cursor on.
 | `↑↓ jk` | move |
 | `PgUp/PgDn` | page |
 | `Home/End` | top/bottom |
+| `← h` | back to keys |
 
 ### Stream
 
@@ -166,6 +171,7 @@ A Stream key, value cursor on.
 | `↑↓ jk` | move |
 | `PgUp/PgDn` | page |
 | `Home/End` | top/bottom |
+| `← h` | back to keys |
 
 ### JSON
 
@@ -181,6 +187,7 @@ A JSON key, value cursor on.
 | `↑↓ jk` | move |
 | `PgUp/PgDn` | page |
 | `Home/End` | top/bottom |
+| `← h` | back to keys |
 
 ### Binary
 
@@ -195,6 +202,7 @@ A Binary key, value cursor on.
 | `↑↓ jk` | move |
 | `PgUp/PgDn` | page |
 | `Home/End` | top/bottom |
+| `← h` | back to keys |
 
 ## Editor
 

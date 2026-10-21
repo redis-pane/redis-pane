@@ -1014,6 +1014,13 @@ fn value_rows(state: &State, open: Option<ValueContext>) -> Vec<HelpRow> {
         rows.push(HelpRow::new("PgUp/PgDn", "page keys"));
         rows.push(HelpRow::new("Home/End", "top/bottom key"));
     }
+    // `←`/`h` is `Esc`'s focus step in the Viewer, cursor on or off
+    // (`collapse_group`). Ranked last so it cannot push a verb off a narrow
+    // hint bar; `Esc` is the row that has to stay reachable there.
+    rows.push(HelpRow::new(
+        all_keys_for(state, Action::CollapseGroup),
+        "back to keys",
+    ));
     rows
 }
 

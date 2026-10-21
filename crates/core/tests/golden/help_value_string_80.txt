@@ -3,13 +3,13 @@
  KEY                      TYPE      TTL │ user:8812:session
  ● user:8812:cart         zset      12m │ string · 2 bytes · 2.1 KB
  ● user:8812:profile      json        ∞ │ ttl 9m                         ● live
- ● user:8812:session      hash      42m ├
 ┌─ help · value pane · string ─────────────────────────────────────────────────┐
 │ e         edit                                                               │
 │ c         copy                                                               │
 │ t         edit ttl                                                           │
 │ r         refetch                                                            │
 │ C         copy redis-cli command                                             │
+│ ← h       back to keys                                                       │
 │                                                                              │
 │ Tab focus   ⌃R read-only   g s slowlog   g m monitor   g p pub/sub           │
 │ g d dashboard   Esc back   q ⌃C quit   ⌃← ⌃→ narrow / widen keys   ? F1 help │

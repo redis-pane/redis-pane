@@ -6,6 +6,19 @@ promise a stable interface.
 
 ## [Unreleased]
 
+### Added
+
+- `←` (or `h`) in the value pane now takes you back to the key list, the way `→` takes you in. It
+  does what `Esc` does there: focus returns to the key list and the value cursor turns off, with
+  the key staying open. It works at every width, including the single-pane layout below 70
+  columns, and `?` lists it as `back to keys`.
+
+### Fixed
+
+- With the value pane focused and the value cursor off, `←` collapsed or climbed the tree group
+  under the key list's cursor behind your back, so the open key stopped matching the selected one.
+  It now leaves the value pane and does not touch the key list.
+
 ## [0.1.0-beta.6] - 2026-10-21
 
 ### Fixed

@@ -113,6 +113,10 @@ recomputed each frame from which tile is focused, never a persisted scroll posit
 - **In the key list**, `↑↓` / `j k` move, `→` / `l` descends (opens a key,
   expands a collapsed tree group, or steps into an already-expanded one),
   `←` / `h` ascends (collapses an expanded group, or moves to its parent).
+- **In the Viewer**, `←` / `h` leaves it for the key list, exactly `Esc`'s focus step: focus goes
+  to the keys pane and the value cursor turns off, whether it was on or not. It is the mirror of
+  `→` / `l`, works at every width (including the single-pane layout), and never touches the key
+  list. While typing in an editor, `←` moves the text cursor as usual.
 - **`Enter` opens the Selected key and starts moving a real cursor inside
   it** — a highlighted row, not just a scroll position — and `↑↓` / `j k` /
   `PgUp` / `PgDn` / `Home` / `End` then move it instead of the key list,
@@ -173,6 +177,7 @@ recomputed each frame from which tile is focused, never a persisted scroll posit
 | `Space` | Mark or unmark the Selected key for a bulk delete and move down. A group row shows a notice and marks nothing. `Esc` clears the marks (first, before it cancels a scan); a rescan clears them too | key list |
 | `→` / `l` | Open key in value pane, or expand/descend a tree group | key list |
 | `←` / `h` | Collapse a tree group, or move to its parent | key list |
+| `←` / `h` | Leave the Viewer for the key list (`Esc`'s focus step: cursor off, value stays open) | value pane, focused |
 | `Enter` | Open the Selected key (if needed) and start moving a cursor inside it | key list / value pane |
 | `r` | Refresh / rescan | pane |
 | `e` | Open the inline value editor, or (Hash, cursor on a field) edit that field's value | value pane, focused |
@@ -233,7 +238,7 @@ rule: a bare key whose meaning nothing outside that view gives it, exactly like 
 
 **Focus is one concept at every width.** Below 70 columns it decides which pane is *drawn*
 (§2's stack navigation); at or above it, both panes are drawn and focus decides only which one a
-pane-scoped key acts on. Opening a key moves focus to it, `Esc` moves it back, and `Tab` moves it
+pane-scoped key acts on. Opening a key moves focus to it, `Esc` or `←` moves it back, and `Tab` moves it
 without closing the key. Because `r` rescans in one pane and Refetches in the other, focus is
 information rather than decoration: the focused pane's header is drawn in full-strength text and
 the unfocused one muted (dim, not merely grey, so the distinction survives monochrome), and the

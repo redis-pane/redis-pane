@@ -1,18 +1,18 @@
 ─ redis-pane ─ ● staging · cache-01:6379/0 · from profile staging ─────────────────────────────────────────────────────── ● live ─
 
- KEY                               TYPE        SIZE   TTL │ user:8812:cart
- ● user:88┌─ help · value pane · zset ────────────────────────────────────────────────────────────────────────────────┐
- ● user:88│ e         score                                                                                           │    ● live
- ● user:88│ a         add member                                                                                      │
+ KEY      ┌─ help · value pane · zset ────────────────────────────────────────────────────────────────────────────────┐
+ ● user:88│ e         score                                                                                           │
+ ● user:88│ a         add member                                                                                      │    ● live
  ● user:88│ d         remove member                                                                                   │
- ● cart:91│ c         copy                                                                                            │
- ● feed:gl│ t         edit ttl                                                                                        │
-          │ r         refetch                                                                                         │
+ ● user:88│ c         copy                                                                                            │
+ ● cart:91│ t         edit ttl                                                                                        │
+ ● feed:gl│ r         refetch                                                                                         │
           │ C         copy redis-cli command                                                                          │
           │ R         rename member                                                                                   │
           │ ↑↓ jk     move                                                                                            │
           │ PgUp/PgDn page                                                                                            │
           │ Home/End  top/bottom                                                                                      │
+          │ ← h       back to keys                                                                                    │
           │                                                                                                           │
           │ Tab focus   ⌃R read-only   g s slowlog   g m monitor   g p pub/sub   g d dashboard   Esc back   q ⌃C quit │
           │ ⌃← ⌃→ narrow / widen keys   ? F1 help                                                                     │

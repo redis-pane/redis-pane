@@ -1,6 +1,5 @@
 ─ redis-pane ─ ● staging · from profile staging ───── READ-ONLY environment ⌃R ─
 
- KEY                      TYPE      TTL │ user:8812:session
 ┌─ help · value pane · hash ───────────────────────────────────────────────────┐
 │ e         edit field  read-only (environment) · preview only                 │
 │ a         add field  read-only (environment) · preview only                  │
@@ -13,6 +12,7 @@
 │ ↑↓ jk     move                                                               │
 │ PgUp/PgDn page                                                               │
 │ Home/End  top/bottom                                                         │
+│ ← h       back to keys                                                       │
 │                                                                              │
 │ Tab focus   ⌃R read-only   g s slowlog   g m monitor   g p pub/sub           │
 │ g d dashboard   Esc back   q ⌃C quit   ⌃← ⌃→ narrow / widen keys   ? F1 help │
