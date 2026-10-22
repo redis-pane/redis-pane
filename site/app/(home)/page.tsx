@@ -137,7 +137,7 @@ export default function HomePage() {
         />
         <div className="mx-auto flex max-w-5xl flex-col items-center gap-7 px-4 pb-16 pt-20 text-center sm:pt-28">
           <span className="rounded-full border bg-fd-card px-3 py-1 text-xs text-fd-muted-foreground">
-            v{releaseVersion} · beta
+            v{releaseVersion}
           </span>
           <h1 className="flex items-center gap-4 sm:gap-5">
             <BrandIcon className="size-14 sm:size-20" />
