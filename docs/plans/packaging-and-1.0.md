@@ -1,6 +1,6 @@
 # Packaging, and the road to 1.0
 
-Status: **done 2026-10-22, pending the `v1.0.0` tag**. Task 1 **done** (PR #129); task 2 **done** and verified (PRs #132, #133; `v0.1.0-beta.8`); task 3 **done** (the "Release 1.0.0" PR). Four tasks, in order. Tasks 1, 3 and 4 run on one Sonnet
+Status: **done 2026-10-22, released as `v1.0.0`** (verified below). Task 1 **done** (PR #129); task 2 **done** and verified (PRs #132, #133; `v0.1.0-beta.8`); task 3 **done** (#135). Four tasks, in order. Tasks 1, 3 and 4 run on one Sonnet
 subagent each, and each PR merges once every check has finished and passed. Task 2 has steps
 only the user can do. Tags are pushed only after the user says so.
 
@@ -343,3 +343,18 @@ done. `publish-prereleases` is left as it is. The tag waits for the user's go.
   1.0 unless the user says so.
 - **The tap token expires.** A fine-grained token has an expiry date. RELEASING must say how to
   renew it, and the publish job fails loudly when it has expired.
+
+## Release verification (`v1.0.0`, 2026-10-22)
+
+- The tag is on `3dd191b`, the merge of #135. The Release workflow succeeded on its first run.
+  It published five platform archives, their checksums, both installers and `redis-pane.rb`.
+- GitHub marks `v1.0.0` **Latest**, not a prerelease. `/releases/latest/download/…` now
+  resolves to it.
+- The tap has the commit `redis-pane 1.0.0`, with all four `sha256` lines.
+- `brew install redis-pane/tap/redis-pane`:
+  - **macOS arm64:** `redis-pane 1.0.0`, with no quarantine attribute. It was uninstalled and
+    untapped afterwards.
+  - **Linux** (`homebrew/brew`, x86_64): `redis-pane 1.0.0`.
+- **The shell installer** installs the static musl build on `amazonlinux:2` (x86_64 and arm64)
+  and on `ubuntu:24.04`, and each prints `redis-pane 1.0.0`.
+- **The download-size footnote** is measured from `1.0.0`: still 2.7–5.5 MB.

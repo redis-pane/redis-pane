@@ -318,7 +318,7 @@ config file; a **Connection** is a live session, which may be **ad-hoc** (no Pro
   and a tree toggle shows its new list in ~0.1–0.2 s.
   Designed in [`plans/m6-perf-rebuild.md`](plans/m6-perf-rebuild.md), tasks in
   [`plans/m6-planning.md`](plans/m6-planning.md).
-- **1.0 — Release.** **Done 2026-10-22, pending the tag.** Planned 2026-10-21 in [`plans/packaging-and-1.0.md`](plans/packaging-and-1.0.md).
+- **1.0 — Release.** **Done 2026-10-22, released as `1.0.0`.** Planned 2026-10-21 in [`plans/packaging-and-1.0.md`](plans/packaging-and-1.0.md).
   Packaging per [ADR-0023](adr/0023-distribution-channels-for-1.0.md): musl Linux builds (x86_64
   and aarch64) and a Homebrew tap, still unsigned. The beta ends when both of these hold (both did, 2026-10-22; evidence in the plan's "Task 3: 1.0 gate"):
   1. **Packaging shipped and verified:** every channel installs on a clean machine, including old
