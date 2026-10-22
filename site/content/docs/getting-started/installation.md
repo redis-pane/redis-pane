@@ -2,6 +2,19 @@
 title: "Installation"
 ---
 
+## Homebrew
+
+On macOS, and on Linux with [Homebrew](https://brew.sh):
+
+```bash
+brew install redis-pane/tap/redis-pane
+```
+
+The formula installs the same release binaries described below. On x86_64 Linux it takes the gnu
+build, which needs glibc 2.34 or newer; on an older host, use the installer script or a musl
+archive instead. Whether a Homebrew install avoids the macOS first-run prompt for an unsigned
+binary is untested, so the note under "The first run of an unsigned binary" still applies.
+
 ## Release binaries
 
 Download the binary for your system from the

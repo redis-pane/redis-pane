@@ -23,6 +23,26 @@ The release steps. The tag push is the only irreversible one, and it waits for t
    Linux x86_64 and aarch64 musl, Windows x86_64), their checksums and both installers. Run the
    installer and confirm `redis-pane --version` prints the new version. Run it on a current host,
    and in an `amazonlinux:2` container, where it must pick the musl archive.
+   Also check the Homebrew tap:
+   - `gh api repos/redis-pane/homebrew-tap/commits --jq '.[0].commit.message'` shows a formula
+     commit for the new version (the `publish-homebrew-formula` job in the Release run);
+   - `brew install redis-pane/tap/redis-pane` works on a clean machine, and
+     `redis-pane --version` prints the new version.
 9. **Re-measure the download sizes** in the asset-size footnote (README `[^2]`,
    `site/content/docs/index.mdx` and `site/app/(home)/page.tsx`) from
    `gh release view <tag> --json assets`, and name the new release in it.
+
+## Renewing `HOMEBREW_TAP_TOKEN`
+
+The Release workflow pushes the formula to `redis-pane/homebrew-tap` with the repo secret
+`HOMEBREW_TAP_TOKEN`. It is a fine-grained token with an expiry date, scoped to the
+`homebrew-tap` repo alone with Contents read and write. When it expires, the
+`publish-homebrew-formula` job fails loudly. Create a new token with the same scope, then:
+
+```bash
+gh secret set HOMEBREW_TAP_TOKEN -R redis-pane/redis-pane
+```
+
+`publish-prereleases = true` in `dist-workspace.toml` makes the beta tags publish to the tap.
+At 1.0 it can be turned off so only stable tags reach the tap; the tap is then verified on the
+first beta tag, and `1.0.0` is stable either way.

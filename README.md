@@ -108,7 +108,17 @@ The full list is [Limits and non-goals](https://redis-pane.github.io/redis-pane/
 
 ## Install
 
-Download the binary for your OS from the [Releases page](https://github.com/redis-pane/redis-pane/releases) — macOS, Linux (static musl builds for x86_64 and arm64, which run on old distros such as Amazon Linux 2, RHEL 8 and Debian 11; a gnu x86_64 build for glibc 2.34 and newer) and Windows are all covered. Or run the install script:
+With [Homebrew](https://brew.sh), on macOS or Linux:
+
+```bash
+brew install redis-pane/tap/redis-pane
+```
+
+On x86_64 Linux the formula takes the gnu build, which needs glibc 2.34 or newer; older hosts
+should use the install script below. Whether Homebrew avoids the macOS first-run prompt for an
+unsigned binary is untested.
+
+Or download the binary for your OS from the [Releases page](https://github.com/redis-pane/redis-pane/releases) — macOS, Linux (static musl builds for x86_64 and arm64, which run on old distros such as Amazon Linux 2, RHEL 8 and Debian 11; a gnu x86_64 build for glibc 2.34 and newer) and Windows are all covered. Or run the install script:
 
 ```bash
 curl --proto '=https' --tlsv1.2 -LsSf https://github.com/redis-pane/redis-pane/releases/download/v0.1.0-beta.7/redis-pane-installer.sh | sh

@@ -6,6 +6,11 @@ promise a stable interface.
 
 ## [Unreleased]
 
+### Added
+
+- A Homebrew tap: `brew install redis-pane/tap/redis-pane` on macOS and on Linux with Homebrew.
+  The release workflow publishes the formula to `redis-pane/homebrew-tap`, prereleases included.
+
 ## [0.1.0-beta.7] - 2026-10-22
 
 ### Added
