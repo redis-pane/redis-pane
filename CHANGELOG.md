@@ -6,6 +6,8 @@ promise a stable interface.
 
 ## [Unreleased]
 
+## [0.1.0-beta.7] - 2026-10-22
+
 ### Added
 
 - Static Linux builds for x86_64 and arm64 (`x86_64-unknown-linux-musl` and
@@ -136,7 +138,8 @@ Eighteen alpha releases (`0.1.0-alpha.1` to `0.1.0-alpha.18`) built the first us
 - Monitor, Pub/Sub, Slowlog and Dashboard views.
 - Clipboard copy, including OSC 52 over SSH, and prebuilt binaries for macOS, Linux and Windows.
 
-[Unreleased]: https://github.com/redis-pane/redis-pane/compare/v0.1.0-beta.6...HEAD
+[Unreleased]: https://github.com/redis-pane/redis-pane/compare/v0.1.0-beta.7...HEAD
+[0.1.0-beta.7]: https://github.com/redis-pane/redis-pane/compare/v0.1.0-beta.6...v0.1.0-beta.7
 [0.1.0-beta.6]: https://github.com/redis-pane/redis-pane/compare/v0.1.0-beta.5...v0.1.0-beta.6
 [0.1.0-beta.5]: https://github.com/redis-pane/redis-pane/compare/v0.1.0-beta.4...v0.1.0-beta.5
 [0.1.0-beta.4]: https://github.com/redis-pane/redis-pane/compare/v0.1.0-beta.3...v0.1.0-beta.4

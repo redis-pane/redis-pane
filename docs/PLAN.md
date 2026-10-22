@@ -429,7 +429,7 @@ Released as `0.1.0-beta.5`. Issue fixes #106, #107, #108 and #111 (#120, #121) f
 | # | What | Release |
 |---|---|---|
 | 0 | ADR-0023, the PRD's 1.0 milestone, this section | none |
-| 1 | musl Linux builds (x86_64, aarch64), verified on old distros, perf measured on musl | `0.1.0-beta.7` |
+| 1 | musl Linux builds (x86_64, aarch64), verified on old distros, perf measured on musl (**done**, #129) | `0.1.0-beta.7` |
 | 2 | Homebrew tap (the user creates the tap repo and its token) | `0.1.0-beta.8` |
 | 3 | 1.0 gate check (packaging verified; no open Severity 1/2 or `bug` issue) and close-out | `1.0.0` |
 
