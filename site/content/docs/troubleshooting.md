@@ -4,7 +4,7 @@ title: "Troubleshooting and FAQ"
 
 ## The binary won't open
 
-The beta builds aren't signed. On macOS, right-click the binary, choose Open and confirm, or run
+The binaries aren't signed. On macOS, right-click the binary, choose Open and confirm, or run
 `xattr -d com.apple.quarantine ./redis-pane`. On Windows, click "More info" then "Run anyway" in
 the SmartScreen prompt. See [Installation](./getting-started/installation.md).
 

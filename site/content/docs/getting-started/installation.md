@@ -34,25 +34,24 @@ Rocky 8, Debian 11 and Alpine. The installer script picks the right one for you.
 A static build reads the system's CA bundle for `rediss://` connections, from the system. On a
 minimal image, install your distro's `ca-certificates` package first.
 
-Or run the installer script. The beta releases are marked as GitHub prereleases, so the
-`/latest/` URL doesn't resolve to them. Use the tagged URL and change the tag to the current
-one from the Releases page.
+Or run the installer script. The URLs below name a release tag. To install a different version, change the tag to one
+from the Releases page.
 
 On macOS and Linux:
 
 ```bash
-curl --proto '=https' --tlsv1.2 -LsSf https://github.com/redis-pane/redis-pane/releases/download/v0.1.0-beta.8/redis-pane-installer.sh | sh
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/redis-pane/redis-pane/releases/download/v1.0.0/redis-pane-installer.sh | sh
 ```
 
 On Windows, from PowerShell:
 
 ```powershell
-irm https://github.com/redis-pane/redis-pane/releases/download/v0.1.0-beta.8/redis-pane-installer.ps1 | iex
+irm https://github.com/redis-pane/redis-pane/releases/download/v1.0.0/redis-pane-installer.ps1 | iex
 ```
 
 ## The first run of an unsigned binary
 
-The beta builds are not signed, so your system may refuse them the first time.
+The binaries are not signed, so your system may refuse them the first time.
 
 - **macOS** says the app is from an unidentified developer. Right-click the binary, choose
   Open, and confirm. Or run `xattr -d com.apple.quarantine ./redis-pane` once.

@@ -1,6 +1,6 @@
 # Packaging, and the road to 1.0
 
-Status: **planned** 2026-10-21; task 1 **done** (PR #129); task 2 **done** and verified (PRs #132, #133; `v0.1.0-beta.8`). Four tasks, in order. Tasks 1, 3 and 4 run on one Sonnet
+Status: **done 2026-10-22, pending the `v1.0.0` tag**. Task 1 **done** (PR #129); task 2 **done** and verified (PRs #132, #133; `v0.1.0-beta.8`); task 3 **done** (the "Release 1.0.0" PR). Four tasks, in order. Tasks 1, 3 and 4 run on one Sonnet
 subagent each, and each PR merges once every check has finished and passed. Task 2 has steps
 only the user can do. Tags are pushed only after the user says so.
 
@@ -279,6 +279,51 @@ Status: **done, verified after `beta.8`** (see "Task 2 verification" below).
     reworded without "beta".
 - **PRD §9 and PLAN:** mark 1.0 done. The README's "Expect rough edges" goes.
 - **The tag waits for the user.** After it, verify every channel again.
+
+#### Task 3: 1.0 gate (2026-10-22)
+
+**1. Packaging, shipped and verified.** See "Task 1 results" (musl builds, old distros, TLS, perf,
+binary size; against `v0.1.0-beta.7`) and "Task 2 verification" (tap formula with real `sha256`
+lines, `brew install` on macOS arm64 and Linux Homebrew, the shell installer on `amazonlinux:2` and
+`ubuntu:24.04`; against `v0.1.0-beta.8`). One gap: `debian:11` could not be tested end to end for the
+installer because its security mirror 404s on `curl`; the musl binaries themselves passed on
+`debian:11` in task 1. The `v1.0.0` tag is verified again after it is pushed (RELEASING step 8).
+
+**2. No open `bug` issue.**
+
+```
+$ gh issue list --label bug --state open
+$                                   # empty
+$ gh issue list --state open
+122  OPEN  copy to clipboard enhancement                                  enhancement
+112  OPEN  Bulk delete progress only updates per 500-key batch            enhancement
+110  OPEN  Decide on keybinding overrides: DESIGN §4 promises ...         documentation, question
+109  OPEN  Fuzzy filter exists in the core but nothing can switch it on   enhancement
+```
+
+None is labelled `bug`.
+
+**3. `docs/UI_TASKS.md`: no open Severity 1 or 2.**
+
+```
+$ grep -c '\[ \]' docs/UI_TASKS.md
+0
+$ grep -nE '\[~\]' docs/UI_TASKS.md
+5:requirements and ADRs for decisions already made. `[~]` marks an item partially closed on
+200:- [~] **Streams have no timeline (R3.4).** Partially closed ...
+```
+
+The one `[~]` item, "Streams have no timeline (R3.4)" at Severity 2, is a deliberate, documented
+partial close (done: newest-first `XREVRANGE`, a live AGE column; not built: expandable entry
+fields, and the consumer-group panel with `XINFO GROUPS` / `XPENDING`). **Decision (user,
+2026-10-22): it passes the gate,** on condition that the user guide's Limits page names the two
+missing pieces. It does now (`site/content/docs/limits.md`, and a pointer from
+`site/content/docs/viewing/types.mdx`).
+
+**Close-out.** Version `1.0.0`; installer URLs, the bug form placeholder, `CLAUDE.md` and the
+CHANGELOG updated; present-tense "beta" wording removed (the unsigned-binary notes stay, reworded);
+`TESTING.md` deleted, its "how to report" content moved to the README; PRD §9 and PLAN §7.5 marked
+done. `publish-prereleases` is left as it is. The tag waits for the user's go.
 
 ## Shared rules
 

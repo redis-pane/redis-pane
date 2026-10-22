@@ -12,6 +12,11 @@ title: "Limits and non-goals"
   in the terminal you're already in. A command palette shipped briefly and was withdrawn, because
   every action it listed already had a key.
 - **A Streams timeline.** A Stream is shown as a list of its newest 500 entries, and is read-only.
+  Two pieces of it aren't built:
+  - **Expandable entry fields.** An entry's fields are shown inline; you can't open an entry to see
+    them laid out.
+  - **A consumer-group panel.** Nothing shows `XINFO GROUPS` or `XPENDING`, so you can't see a
+    Stream's consumer groups or their pending entries.
 - **Rebinding keys.** The keys are fixed in this release.
 - **Marking a whole tree group, or everything a filter matches, for deletion.** You can mark
   only keys you've loaded, one at a time. A marked key that a filter hides is still deleted.

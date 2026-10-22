@@ -120,16 +120,16 @@ first-run prompt the unsigned release binaries get.
 Or download the binary for your OS from the [Releases page](https://github.com/redis-pane/redis-pane/releases) — macOS, Linux (static musl builds for x86_64 and arm64, which run on any distro, including old ones such as Amazon Linux 2, RHEL 8 and Debian 11) and Windows are all covered. Or run the install script:
 
 ```bash
-curl --proto '=https' --tlsv1.2 -LsSf https://github.com/redis-pane/redis-pane/releases/download/v0.1.0-beta.8/redis-pane-installer.sh | sh
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/redis-pane/redis-pane/releases/download/v1.0.0/redis-pane-installer.sh | sh
 ```
 
 On Windows, from PowerShell:
 
 ```powershell
-irm https://github.com/redis-pane/redis-pane/releases/download/v0.1.0-beta.8/redis-pane-installer.ps1 | iex
+irm https://github.com/redis-pane/redis-pane/releases/download/v1.0.0/redis-pane-installer.ps1 | iex
 ```
 
-These beta builds are unsigned, so your OS may flag them on first run — on macOS, right-click the
+The binaries are unsigned, so your OS may flag them on first run — on macOS, right-click the
 binary → Open → confirm; on Windows, click "More info" → "Run anyway" in the SmartScreen prompt.
 
 Prefer to build it yourself? You'll need [Rust](https://rustup.rs):
@@ -173,14 +173,27 @@ Its source is in [`site/content/docs`](site/content/docs/index.mdx).
 
 ## Compatibility
 
-- A beta: `0.1.0-beta.8`. Expect rough edges.
+- Version `1.0.0`. What isn't built is on the [limits page](https://redis-pane.github.io/redis-pane/docs/limits/).
 - Redis 6.0 or newer, and Valkey. RESP3 only.
 - Standalone, Sentinel and Cluster, with TLS.
 - Prebuilt for macOS (arm64 and x86_64), Linux (x86_64 and arm64, static musl, any distro) and Windows. Build from source for anything else.
 
 ## Feedback, contributing and license
 
-[TESTING.md](TESTING.md) says what to try in this beta and how to report what you find. See the
+To report a bug, use the [bug report form](https://github.com/redis-pane/redis-pane/issues/new?template=bug.yml).
+For questions and ideas, use [Discussions](https://github.com/redis-pane/redis-pane/discussions). Check the
+[limits page](https://redis-pane.github.io/redis-pane/docs/limits/) first, in case it isn't built yet. Please include:
+
+- what you were doing, what you expected, and what happened instead
+- the version (`redis-pane --version`)
+- what you were connected to: Redis version, and whether it was local, a cloud service or
+  something else
+- your terminal, and whether you were over SSH
+- the output of `redis-pane --print-target` and `redis-pane --probe` for that target, with any
+  password removed
+
+To try it without a Redis of your own, `scripts/` gives you a disposable one and a keyspace to put
+in it; see [`scripts/README.md`](scripts/README.md). See the
 [CHANGELOG](CHANGELOG.md) for what changed. To work on the code, read [CLAUDE.md](CLAUDE.md), the
 glossary in [CONTEXT.md](CONTEXT.md) and the design docs under [`docs/`](docs/).
 

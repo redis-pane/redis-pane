@@ -1,10 +1,25 @@
 # Changelog
 
 All notable changes to `redis-pane` are listed here, newest first. The format follows
-[Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The project is a beta and does not yet
-promise a stable interface.
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/). From 1.0.0 the project follows
+[Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
+
+## [1.0.0] - 2026-10-22
+
+This release ends the beta. It changes no behaviour from `0.1.0-beta.8`; it records that the 1.0 gate
+is met and updates the documentation to match.
+
+### Changed
+
+- Version `1.0.0`. Packaging is shipped and verified (static musl Linux builds, a Homebrew tap, the
+  shell and PowerShell installers), and nothing is open at Severity 1 or 2.
+- The docs no longer call the builds a beta. The binaries are still unsigned, and the first-run
+  workaround is unchanged.
+- The limits page names the two missing pieces of the Streams view: expandable entry fields and a
+  consumer-group panel.
+- `TESTING.md` is removed. How to report a problem is now in the README.
 
 ## [0.1.0-beta.8] - 2026-10-22
 
@@ -150,7 +165,8 @@ Eighteen alpha releases (`0.1.0-alpha.1` to `0.1.0-alpha.18`) built the first us
 - Monitor, Pub/Sub, Slowlog and Dashboard views.
 - Clipboard copy, including OSC 52 over SSH, and prebuilt binaries for macOS, Linux and Windows.
 
-[Unreleased]: https://github.com/redis-pane/redis-pane/compare/v0.1.0-beta.8...HEAD
+[Unreleased]: https://github.com/redis-pane/redis-pane/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/redis-pane/redis-pane/compare/v0.1.0-beta.8...v1.0.0
 [0.1.0-beta.8]: https://github.com/redis-pane/redis-pane/compare/v0.1.0-beta.7...v0.1.0-beta.8
 [0.1.0-beta.7]: https://github.com/redis-pane/redis-pane/compare/v0.1.0-beta.6...v0.1.0-beta.7
 [0.1.0-beta.6]: https://github.com/redis-pane/redis-pane/compare/v0.1.0-beta.5...v0.1.0-beta.6
