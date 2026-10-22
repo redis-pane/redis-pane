@@ -3,6 +3,10 @@
 //! The binary is a thin wrapper: it parses arguments, resolves a target, and
 //! hands off to the shells in the library.
 
+#[cfg(target_env = "musl")]
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 use clap::Parser;
 use fred::interfaces::ClientLike;
 use fred::prelude::Client;

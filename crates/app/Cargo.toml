@@ -33,3 +33,9 @@ tokio-util = "0.7.19"
 testcontainers = "0.28.0"
 tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros"] }
 tokio-util = "0.7.19"
+
+# musl's allocator is several times slower than glibc's on the allocation-heavy paths
+# (ScanBatch, scroll, Space); mimalloc restores the gnu figures. musl targets only, and only
+# here: the core never names an allocator (ADR-0023, docs/plans/packaging-and-1.0.md).
+[target.'cfg(target_env = "musl")'.dependencies]
+mimalloc = "0.1"

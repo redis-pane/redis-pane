@@ -8,6 +8,11 @@ promise a stable interface.
 
 ### Added
 
+- Static Linux builds for x86_64 and arm64 (`x86_64-unknown-linux-musl` and
+  `aarch64-unknown-linux-musl`). They have no glibc dependency, so they run on Amazon Linux 2, RHEL
+  and Rocky 8, Debian 11 and Alpine, where the gnu build fails with `GLIBC_2.34 not found`. The
+  shell installer uses the gnu build only on glibc 2.34 or newer, and the musl build otherwise.
+  The musl builds use `mimalloc`, which brings their 1M-key interaction times level with gnu.
 - `o` in the key list moves the cursor back to the Open key. If a filter hides it, `o` clears the
   filter and says so; if a collapsed group hides it, `o` unfolds the groups above it. With no key
   open it says `no key is open`. `?` lists it as `go to open key` while a key is open.
