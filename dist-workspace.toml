@@ -8,17 +8,21 @@ cargo-dist-version = "0.32.0"
 # CI backends to support
 ci = "github"
 # The installers to generate for each app
-installers = ["shell", "powershell"]
+installers = ["shell", "powershell", "homebrew"]
 # Target platforms to build apps for (Rust target-triple syntax)
-targets = ["aarch64-apple-darwin", "x86_64-apple-darwin", "x86_64-unknown-linux-gnu", "x86_64-unknown-linux-musl", "aarch64-unknown-linux-musl", "x86_64-pc-windows-msvc"]
+targets = ["aarch64-apple-darwin", "x86_64-apple-darwin", "x86_64-unknown-linux-musl", "aarch64-unknown-linux-musl", "x86_64-pc-windows-msvc"]
 # Path that installers should place binaries in
 install-path = "CARGO_HOME"
+# The Homebrew tap that dist pushes the formula to (secret HOMEBREW_TAP_TOKEN, ADR-0023)
+tap = "redis-pane/homebrew-tap"
+# The formula is named redis-pane, so `brew install redis-pane/tap/redis-pane`
+formula = "redis-pane"
+# Publish the formula to the tap
+publish-jobs = ["homebrew"]
+# Publish prereleases to the tap too. dist skips them by default, and the betas are all
+# prereleases; this lets the tap be verified before 1.0. See docs/plans/packaging-and-1.0.md.
+publish-prereleases = true
 # Where to host releases
 hosting = "github"
 # Whether to install an updater program
 install-updater = false
-
-# The gnu build links glibc 2.34 symbols (built on ubuntu-22.04); the installer falls back to
-# the static musl build on anything older. dist's default floor is 2.31, which is too low.
-[dist.min-glibc-version]
-x86_64-unknown-linux-gnu = "2.34"

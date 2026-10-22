@@ -53,3 +53,13 @@ bastion hosts (PRD §1). Two facts follow from that:
   than skipping the tap.
 - The installation docs lead with Homebrew on macOS and say which Linux build runs where.
 - Plan: [`plans/packaging-and-1.0.md`](../plans/packaging-and-1.0.md).
+
+## Amendment, 2026-10-22: Linux is musl only
+
+Linux ships static musl builds only, for x86_64 and arm64. The `x86_64-unknown-linux-gnu` build is
+dropped, and the release has five platform archives.
+
+A Homebrew formula cannot choose musl while a gnu build exists: dist prefers gnu for x86_64 Linux,
+so Linuxbrew hosts with an old glibc would get a binary that cannot start. musl with `mimalloc`
+matched gnu on task 1's measurements (on arm64; x86_64 musl was not measured natively). The shell
+installer now sends every Linux host to musl, with no glibc check.

@@ -34,7 +34,7 @@ binary that runs in the terminal you are already in, driven from the keyboard.
 | Sentinel | ✓ | ✗ [^12] | ✓ [^11] |
 
 [^1]: RedisInsight describes itself as a "desktop GUI client" built on Electron, also shipped as a Docker image. It has no terminal interface.
-[^2]: The `redis-pane-aarch64-apple-darwin.tar.xz` asset of release `0.1.0-beta.7` is 2.7 MB. The six platform downloads range from 2.7 MB to 5.5 MB (the Windows zip).
+[^2]: The `redis-pane-aarch64-apple-darwin.tar.xz` asset of release `0.1.0-beta.7` is 2.7 MB. The five platform downloads range from 2.7 MB to 5.5 MB (the Windows zip); re-measured after `0.1.0-beta.8`.
 [^3]: An Electron desktop application, or a Docker image, per its README.
 [^4]: Its documentation describes a configurable automatic refresh rate for Streams and for the Slow Log. It documents no push update for an open key's value.
 [^5]: `crates/core/tests/perf.rs` drives 1,000,000 keys in real `SCAN` order. No single update, which includes any slice of a rebuild, takes longer than the 16 ms frame budget.
@@ -108,7 +108,16 @@ The full list is [Limits and non-goals](https://redis-pane.github.io/redis-pane/
 
 ## Install
 
-Download the binary for your OS from the [Releases page](https://github.com/redis-pane/redis-pane/releases) — macOS, Linux (static musl builds for x86_64 and arm64, which run on old distros such as Amazon Linux 2, RHEL 8 and Debian 11; a gnu x86_64 build for glibc 2.34 and newer) and Windows are all covered. Or run the install script:
+With [Homebrew](https://brew.sh), on macOS or Linux:
+
+```bash
+brew install redis-pane/tap/redis-pane
+```
+
+The formula installs the static musl build on Linux. Whether Homebrew avoids the macOS first-run
+prompt for an unsigned binary is untested.
+
+Or download the binary for your OS from the [Releases page](https://github.com/redis-pane/redis-pane/releases) — macOS, Linux (static musl builds for x86_64 and arm64, which run on any distro, including old ones such as Amazon Linux 2, RHEL 8 and Debian 11) and Windows are all covered. Or run the install script:
 
 ```bash
 curl --proto '=https' --tlsv1.2 -LsSf https://github.com/redis-pane/redis-pane/releases/download/v0.1.0-beta.7/redis-pane-installer.sh | sh
@@ -167,7 +176,7 @@ Its source is in [`site/content/docs`](site/content/docs/index.mdx).
 - A beta: `0.1.0-beta.7`. Expect rough edges.
 - Redis 6.0 or newer, and Valkey. RESP3 only.
 - Standalone, Sentinel and Cluster, with TLS.
-- Prebuilt for macOS (arm64 and x86_64), Linux (x86_64 and arm64, static musl, plus a gnu x86_64 build) and Windows. Build from source for anything else.
+- Prebuilt for macOS (arm64 and x86_64), Linux (x86_64 and arm64, static musl, any distro) and Windows. Build from source for anything else.
 
 ## Feedback, contributing and license
 
