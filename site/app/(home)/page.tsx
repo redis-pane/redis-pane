@@ -57,7 +57,7 @@ const features = [
 
 const footnotes: [string, ...string[]][] = [
   ['RedisInsight describes itself as a "desktop GUI client" built on Electron, also shipped as a Docker image. It has no terminal interface.'],
-  ['The `redis-pane-aarch64-apple-darwin.tar.xz` asset of release `0.1.0-beta.6` is 2.7 MB. The four platform downloads range from 2.7 MB to 5.5 MB (the Windows zip).'],
+  ['The `redis-pane-aarch64-apple-darwin.tar.xz` asset of release `0.1.0-beta.7` is 2.7 MB. The six platform downloads range from 2.7 MB to 5.5 MB (the Windows zip).'],
   ['An Electron desktop application, or a Docker image, per its README.'],
   ["Its documentation describes a configurable automatic refresh rate for Streams and for the Slow Log. It documents no push update for an open key's value."],
   ['`crates/core/tests/perf.rs` drives 1,000,000 keys in real `SCAN` order. No single update, which includes any slice of a rebuild, takes longer than the 16 ms frame budget.'],
