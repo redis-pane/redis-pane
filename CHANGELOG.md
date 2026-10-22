@@ -6,6 +6,8 @@ promise a stable interface.
 
 ## [Unreleased]
 
+## [0.1.0-beta.8] - 2026-10-22
+
 ### Added
 
 - A Homebrew tap: `brew install redis-pane/tap/redis-pane` on macOS and on Linux with Homebrew.
@@ -148,7 +150,8 @@ Eighteen alpha releases (`0.1.0-alpha.1` to `0.1.0-alpha.18`) built the first us
 - Monitor, Pub/Sub, Slowlog and Dashboard views.
 - Clipboard copy, including OSC 52 over SSH, and prebuilt binaries for macOS, Linux and Windows.
 
-[Unreleased]: https://github.com/redis-pane/redis-pane/compare/v0.1.0-beta.7...HEAD
+[Unreleased]: https://github.com/redis-pane/redis-pane/compare/v0.1.0-beta.8...HEAD
+[0.1.0-beta.8]: https://github.com/redis-pane/redis-pane/compare/v0.1.0-beta.7...v0.1.0-beta.8
 [0.1.0-beta.7]: https://github.com/redis-pane/redis-pane/compare/v0.1.0-beta.6...v0.1.0-beta.7
 [0.1.0-beta.6]: https://github.com/redis-pane/redis-pane/compare/v0.1.0-beta.5...v0.1.0-beta.6
 [0.1.0-beta.5]: https://github.com/redis-pane/redis-pane/compare/v0.1.0-beta.4...v0.1.0-beta.5

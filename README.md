@@ -120,13 +120,13 @@ prompt for an unsigned binary is untested.
 Or download the binary for your OS from the [Releases page](https://github.com/redis-pane/redis-pane/releases) — macOS, Linux (static musl builds for x86_64 and arm64, which run on any distro, including old ones such as Amazon Linux 2, RHEL 8 and Debian 11) and Windows are all covered. Or run the install script:
 
 ```bash
-curl --proto '=https' --tlsv1.2 -LsSf https://github.com/redis-pane/redis-pane/releases/download/v0.1.0-beta.7/redis-pane-installer.sh | sh
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/redis-pane/redis-pane/releases/download/v0.1.0-beta.8/redis-pane-installer.sh | sh
 ```
 
 On Windows, from PowerShell:
 
 ```powershell
-irm https://github.com/redis-pane/redis-pane/releases/download/v0.1.0-beta.7/redis-pane-installer.ps1 | iex
+irm https://github.com/redis-pane/redis-pane/releases/download/v0.1.0-beta.8/redis-pane-installer.ps1 | iex
 ```
 
 These beta builds are unsigned, so your OS may flag them on first run — on macOS, right-click the
@@ -173,7 +173,7 @@ Its source is in [`site/content/docs`](site/content/docs/index.mdx).
 
 ## Compatibility
 
-- A beta: `0.1.0-beta.7`. Expect rough edges.
+- A beta: `0.1.0-beta.8`. Expect rough edges.
 - Redis 6.0 or newer, and Valkey. RESP3 only.
 - Standalone, Sentinel and Cluster, with TLS.
 - Prebuilt for macOS (arm64 and x86_64), Linux (x86_64 and arm64, static musl, any distro) and Windows. Build from source for anything else.
