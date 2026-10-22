@@ -423,7 +423,7 @@ Released as `0.1.0-beta.5`. Issue fixes #106, #107, #108 and #111 (#120, #121) f
 
 ### 7.5 Packaging and 1.0
 
-**Progress: done 2026-10-22, pending the tag** (planned 2026-10-21), in [`packaging-and-1.0.md`](plans/packaging-and-1.0.md), per
+**Progress: done 2026-10-22, released as `1.0.0`** (planned 2026-10-21), in [`packaging-and-1.0.md`](plans/packaging-and-1.0.md), per
 [ADR-0023](adr/0023-distribution-channels-for-1.0.md). Four tasks:
 
 | # | What | Release |
