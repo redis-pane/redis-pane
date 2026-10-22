@@ -1,6 +1,6 @@
 # Packaging, and the road to 1.0
 
-Status: **planned** 2026-10-21; task 1 **done** (PR #129); task 2 subagent half **done**, pending verification after `beta.8`. Four tasks, in order. Tasks 1, 3 and 4 run on one Sonnet
+Status: **planned** 2026-10-21; task 1 **done** (PR #129); task 2 **done** and verified (PRs #132, #133; `v0.1.0-beta.8`). Four tasks, in order. Tasks 1, 3 and 4 run on one Sonnet
 subagent each, and each PR merges once every check has finished and passed. Task 2 has steps
 only the user can do. Tags are pushed only after the user says so.
 
@@ -209,8 +209,7 @@ tagging (RELEASING step 8).
 
 #### Task 2 results (subagent half, 2026-10-22)
 
-Status: **pending verification after `beta.8`.** Nothing has been published; the formula has only
-been generated locally.
+Status: **done, verified after `beta.8`** (see "Task 2 verification" below).
 
 - **Config (`dist-workspace.toml`):** `installers` gains `"homebrew"`; `tap = "redis-pane/homebrew-tap"`,
   `formula = "redis-pane"`, `publish-jobs = ["homebrew"]`, `publish-prereleases = true`. The
@@ -243,6 +242,27 @@ been generated locally.
 - **Still to do after `beta.8`:** the tap has the formula commit; `brew install
   redis-pane/tap/redis-pane` works on macOS and in a Linux Homebrew container; the `sha256`
   lines are present; whether Homebrew avoids the Gatekeeper prompt (untested).
+
+
+#### Task 2 verification (`v0.1.0-beta.8`, 2026-10-22)
+
+- **The first publish failed, and was fixed.** The tap repo was empty, with no `main` branch. The
+  publish job's checkout failed with `couldn't find remote ref refs/heads/main`, after the token
+  had authenticated. The main session seeded the tap with a README commit on `main` and re-ran the
+  failed jobs. The run then succeeded. **A new tap needs at least one commit.**
+- **The tap** has the commit `redis-pane 0.1.0-beta.8` (`Formula/redis-pane.rb`). It has a real
+  `sha256` for each of its four URLs: macOS arm64 and x86_64, and Linux musl arm64 and x86_64.
+- **macOS (arm64):** `brew install redis-pane/tap/redis-pane` installs `0.1.0-beta.8`, which
+  runs. The binary carries **no `com.apple.quarantine` attribute**, so Gatekeeper's first-run
+  prompt doesn't appear. `spctl` still reports it as unsigned. It was then uninstalled and untapped.
+- **Linux Homebrew** (`homebrew/brew`, x86_64): installs `0.1.0-beta.8`, a statically linked
+  x86-64 ELF.
+- **The shell installer** gives the static musl build everywhere:
+  - `amazonlinux:2`, x86_64 and arm64;
+  - `ubuntu:24.04`, x86_64, which got gnu before.
+
+  `debian:11` couldn't be tested: its security mirror 404s on `curl`.
+- **`brew test`:** dist 0.32 generates no test block, so there is nothing to run.
 
 ### Task 3: the 1.0 gate and close-out
 
