@@ -11,8 +11,9 @@ brew install redis-pane/tap/redis-pane
 ```
 
 The formula installs the same release binaries described below: the static musl build on Linux.
-Whether a Homebrew install avoids the macOS first-run prompt for an unsigned binary is untested, so
-the note under "The first run of an unsigned binary" still applies.
+On macOS a Homebrew install doesn't get the first-run prompt for an unsigned binary: Homebrew
+doesn't mark what it downloads as quarantined, so the note under "The first run of an unsigned
+binary" applies only to the release binaries and the install script.
 
 ## Release binaries
 
