@@ -2,7 +2,10 @@
 
 All notable changes to `redis-pane` are listed here, newest first. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). From 1.0.0 the project follows
-[Semantic Versioning](https://semver.org/).
+[Semantic Versioning](https://semver.org/). The public interface it covers is the command-line
+flags, the config file format (`~/.config/redis-pane/config.json`) and the keybindings. Any of
+them changes incompatibly only in a new major version. The screen layout, wording and colours are
+not part of it.
 
 ## [Unreleased]
 
