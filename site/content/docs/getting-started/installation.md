@@ -10,10 +10,9 @@ On macOS, and on Linux with [Homebrew](https://brew.sh):
 brew install redis-pane/tap/redis-pane
 ```
 
-The formula installs the same release binaries described below. On x86_64 Linux it takes the gnu
-build, which needs glibc 2.34 or newer; on an older host, use the installer script or a musl
-archive instead. Whether a Homebrew install avoids the macOS first-run prompt for an unsigned
-binary is untested, so the note under "The first run of an unsigned binary" still applies.
+The formula installs the same release binaries described below: the static musl build on Linux.
+Whether a Homebrew install avoids the macOS first-run prompt for an unsigned binary is untested, so
+the note under "The first run of an unsigned binary" still applies.
 
 ## Release binaries
 
@@ -21,21 +20,17 @@ Download the binary for your system from the
 [Releases page](https://github.com/redis-pane/redis-pane/releases). There are builds for macOS
 (Intel and Apple Silicon), Linux (x86_64 and arm64) and Windows.
 
-Linux has three builds:
+Linux builds are static musl binaries, one for x86_64 and one for arm64:
 
 | Archive | Runs on |
 |---|---|
-| `redis-pane-x86_64-unknown-linux-musl` | any x86_64 Linux, including old ones. It is a static binary with no dependency on the system's C library. |
-| `redis-pane-aarch64-unknown-linux-musl` | any arm64 Linux, the same way. |
-| `redis-pane-x86_64-unknown-linux-gnu` | x86_64 Linux with glibc 2.34 or newer (Ubuntu 22.04, Debian 12, RHEL 9 and later). |
+| `redis-pane-x86_64-unknown-linux-musl` | any x86_64 Linux distro, including old ones. It has no dependency on the system's C library. |
+| `redis-pane-aarch64-unknown-linux-musl` | any arm64 Linux distro, the same way. |
 
-The static builds run on the hosts that are common for bastions and old servers: Amazon Linux 2,
-RHEL and Rocky 8, Debian 11 and Alpine. The gnu build does not run there, and fails with
-`GLIBC_2.34 not found`. If you download by hand and are unsure, take the musl one.
-The installer script chooses for you: it uses the gnu build only where glibc is new enough, and
-the musl build everywhere else, including every arm64 Linux.
+They run on the hosts that are common for bastions and old servers: Amazon Linux 2, RHEL and
+Rocky 8, Debian 11 and Alpine. The installer script picks the right one for you.
 
-A static build reads the system's CA bundle for `rediss://` connections, as the gnu one does. On a
+A static build reads the system's CA bundle for `rediss://` connections, from the system. On a
 minimal image, install your distro's `ca-certificates` package first.
 
 Or run the installer script. The beta releases are marked as GitHub prereleases, so the

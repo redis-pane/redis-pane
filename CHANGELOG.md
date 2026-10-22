@@ -11,6 +11,11 @@ promise a stable interface.
 - A Homebrew tap: `brew install redis-pane/tap/redis-pane` on macOS and on Linux with Homebrew.
   The release workflow publishes the formula to `redis-pane/homebrew-tap`, prereleases included.
 
+### Changed
+
+- The gnu Linux archive (`x86_64-unknown-linux-gnu`) is no longer published. Linux ships static musl
+  builds only, for x86_64 and arm64, and the shell installer and Homebrew both install them.
+
 ## [0.1.0-beta.7] - 2026-10-22
 
 ### Added

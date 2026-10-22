@@ -19,10 +19,10 @@ The release steps. The tag push is the only irreversible one, and it waits for t
 6. **Merge** the release PR.
 7. **Tag the merge commit and push the tag**, only after the user says so. The `Release` workflow
    (cargo-dist) builds the assets.
-8. **Verify the assets:** `gh release view <tag> --json assets` lists the six platform archives (macOS arm64 and x86_64, Linux x86_64 gnu,
+8. **Verify the assets:** `gh release view <tag> --json assets` lists the five platform archives (macOS arm64 and x86_64,
    Linux x86_64 and aarch64 musl, Windows x86_64), their checksums and both installers. Run the
    installer and confirm `redis-pane --version` prints the new version. Run it on a current host,
-   and in an `amazonlinux:2` container, where it must pick the musl archive.
+   and in an `amazonlinux:2` container.
    Also check the Homebrew tap:
    - `gh api repos/redis-pane/homebrew-tap/commits --jq '.[0].commit.message'` shows a formula
      commit for the new version (the `publish-homebrew-formula` job in the Release run);
