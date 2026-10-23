@@ -9,6 +9,12 @@ not part of it.
 
 ## [Unreleased]
 
+### Changed
+
+- The install commands in the README and the user guide fetch the latest release
+  (`/releases/latest/download/…`), so they no longer name a version. To install a specific
+  version, the installation page says how.
+
 ## [1.0.0] - 2026-10-22
 
 This release ends the beta. It changes no behaviour from `0.1.0-beta.8`; it records that the 1.0 gate

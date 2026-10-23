@@ -11,7 +11,7 @@ body:
     attributes:
       label: redis-pane version
       description: The output of `redis-pane --version`.
-      placeholder: redis-pane 1.0.0
+      placeholder: redis-pane 1.2.3
     validations:
       required: true
   - type: input

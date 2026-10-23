@@ -1,12 +1,11 @@
-// The one place the released version and installer URLs are written.
-// Re-pin this on every release (docs/RELEASING.md).
+// The landing page's version badge. Bump it on every release (docs/RELEASING.md). The installer
+// URLs use /releases/latest and never change; `latest` is the newest non-prerelease.
 import { gitConfig } from './shared';
 
 export const releaseVersion = '1.0.0';
-export const releaseTag = `v${releaseVersion}`;
 
 const repoUrl = `https://github.com/${gitConfig.user}/${gitConfig.repo}`;
-const downloadBase = `${repoUrl}/releases/download/${releaseTag}`;
+const downloadBase = `${repoUrl}/releases/latest/download`;
 
 export const installCommands = {
   shell: `curl --proto '=https' --tlsv1.2 -LsSf ${downloadBase}/redis-pane-installer.sh | sh`,

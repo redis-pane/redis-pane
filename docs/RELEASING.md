@@ -6,11 +6,9 @@ The release steps. The tag push is the only irreversible one, and it waits for t
    [`plans/m6-close-out.md`](plans/m6-close-out.md)): PLAN, PRD and DESIGN catch up with what shipped.
 2. **Bump the version** in the root `Cargo.toml` (`[workspace.package] version`) and let
    `Cargo.lock` follow.
-3. **Re-pin the installer URLs** (`.../releases/download/vX/redis-pane-installer.{sh,ps1}`) in:
-   - `README.md`
-   - `site/content/docs/getting-started/installation.md`
-   - `site/lib/release.ts`, the landing page's version and installer URLs (one constant)
-   - the version named in the README's Compatibility section
+3. **Bump the landing page's version badge**, `releaseVersion` in `site/lib/release.ts`. The
+   installer URLs everywhere use `/releases/latest/download/…`, so they never change. `latest` is
+   the newest non-prerelease, so a prerelease tag doesn't move it.
 4. **Update `CHANGELOG.md`.** Rename `Unreleased` to the new version and date, add a fresh empty
    `Unreleased` above it, and update the compare links at the bottom.
 5. **Check:** `cargo test --workspace`, clippy, `cargo fmt --all -- --check`, and `pnpm --dir site build` (it builds the docs site).
@@ -20,7 +18,9 @@ The release steps. The tag push is the only irreversible one, and it waits for t
    (cargo-dist) builds the assets.
 8. **Verify the assets:** `gh release view <tag> --json assets` lists the five platform archives (macOS arm64 and x86_64,
    Linux x86_64 and aarch64 musl, Windows x86_64), their checksums and both installers. Run the
-   installer and confirm `redis-pane --version` prints the new version. Run it on a current host,
+   installer and confirm `redis-pane --version` prints the new version.
+   For a stable release, `curl -sI https://github.com/redis-pane/redis-pane/releases/latest/download/redis-pane-installer.sh`
+   redirects to the new tag. For a prerelease, it should still point at the previous stable tag. Run it on a current host,
    and in an `amazonlinux:2` container.
    Also check the Homebrew tap:
    - `gh api repos/redis-pane/homebrew-tap/commits --jq '.[0].commit.message'` shows a formula
