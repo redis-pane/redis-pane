@@ -6,15 +6,21 @@
 </h1>
 
 [![CI](https://github.com/redis-pane/redis-pane/actions/workflows/ci.yml/badge.svg)](https://github.com/redis-pane/redis-pane/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/redis-pane/redis-pane?include_prereleases)](https://github.com/redis-pane/redis-pane/releases)
+[![Release](https://img.shields.io/github/v/release/redis-pane/redis-pane)](https://github.com/redis-pane/redis-pane/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-A terminal UI for Redis: see your keyspace, open a key, watch it change, edit it safely.
+A terminal UI for Redis and Valkey: see your keyspace, open a key, watch it change, edit it safely.
 
 ![Browsing a keyspace in redis-pane: filtering to a key, then watching it update on screen the moment another client changes it, with no keypress or refresh](docs/demos/hero.gif)
 
 *Filter to a key, open it, and watch it update live the moment it changes on the server. There is
 no refresh button.*
+
+```bash
+brew install redis-pane/tap/redis-pane
+```
+
+Other platforms: see [Install](#install).
 
 ## Why
 
@@ -123,7 +129,7 @@ Or download the binary for your OS from the [Releases page](https://github.com/r
 curl --proto '=https' --tlsv1.2 -LsSf https://github.com/redis-pane/redis-pane/releases/latest/download/redis-pane-installer.sh | sh
 ```
 
-On Windows, from PowerShell:
+On Windows (experimental, see [Compatibility](#compatibility)), from PowerShell:
 
 ```powershell
 irm https://github.com/redis-pane/redis-pane/releases/latest/download/redis-pane-installer.ps1 | iex
@@ -176,7 +182,10 @@ Its source is in [`site/content/docs`](site/content/docs/index.mdx).
 - The latest release is on the [Releases page](https://github.com/redis-pane/redis-pane/releases/latest). What isn't built is on the [limits page](https://redis-pane.github.io/redis-pane/docs/limits/).
 - Redis 6.0 or newer, and Valkey. RESP3 only.
 - Standalone, Sentinel and Cluster, with TLS.
-- Prebuilt for macOS (arm64 and x86_64), Linux (x86_64 and arm64, static musl, any distro) and Windows. Build from source for anything else.
+- Prebuilt for macOS (arm64 and x86_64) and Linux (x86_64 and arm64, static musl, any distro). Build from source for anything else.
+- **Windows is experimental.** A Windows build ships, but it hasn't been verified on Windows, and
+  some things don't work yet ([#138](https://github.com/redis-pane/redis-pane/issues/138)):
+  Profiles and session restore need `HOME` set, and `passwordCommand` needs `sh` on your `PATH`.
 
 ## Feedback, contributing and license
 
@@ -194,7 +203,11 @@ For questions and ideas, use [Discussions](https://github.com/redis-pane/redis-p
 
 To try it without a Redis of your own, `scripts/` gives you a disposable one and a keyspace to put
 in it; see [`scripts/README.md`](scripts/README.md). See the
-[CHANGELOG](CHANGELOG.md) for what changed. To work on the code, read [CLAUDE.md](CLAUDE.md), the
-glossary in [CONTEXT.md](CONTEXT.md) and the design docs under [`docs/`](docs/).
+[CHANGELOG](CHANGELOG.md) for what changed.
+
+To work on the code, read [CONTRIBUTING.md](CONTRIBUTING.md). It covers building, testing and
+sending a change, and points to the glossary in [CONTEXT.md](CONTEXT.md) and the design docs under
+[`docs/`](docs/). Please follow the [Code of Conduct](CODE_OF_CONDUCT.md), and report security
+problems as [SECURITY.md](SECURITY.md) describes.
 
 [MIT](LICENSE).

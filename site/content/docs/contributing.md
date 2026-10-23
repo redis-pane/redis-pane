@@ -2,19 +2,23 @@
 title: "Contributing"
 ---
 
-Working on the code? These are where to start, all in the
-[repository](https://github.com/redis-pane/redis-pane):
+Working on the code? Start with
+[`CONTRIBUTING.md`](https://github.com/redis-pane/redis-pane/blob/main/CONTRIBUTING.md) in the
+[repository](https://github.com/redis-pane/redis-pane). It covers building, the two test suites,
+the generated docs and how to send a change. It points to:
 
-- **`CLAUDE.md`** has the architecture notes, the commands to build and test, and the
-  conventions. Despite the name, it's the guide for any contributor.
-- **`CONTEXT.md`** is the glossary. Several terms are deliberately distinct (a Profile isn't a
+- **`CONTEXT.md`**, the glossary. Several terms are deliberately distinct (a Profile isn't a
   Connection), and the distinctions matter.
-- **`docs/`** holds the design record: the product requirements (`PRD.md`), the plan (`PLAN.md`),
-  the screens and keymap (`DESIGN.md`), and `adr/`, the decisions with the alternatives that were
+- **`docs/`**, the design record: the product requirements (`PRD.md`), the plan (`PLAN.md`), the
+  screens and keymap (`DESIGN.md`), and `adr/`, the decisions with the alternatives that were
   rejected. Check for an ADR before changing connection, config or safety behaviour.
-- **`scripts/README.md`** describes a disposable Redis and a keyspace to put in it, with a
+- **`scripts/README.md`**, which describes a disposable Redis and a keyspace to put in it, with a
   churn script that keeps the data moving, so you can watch live updates and `SCAN` instead of
   reasoning about them.
+
+Issues labelled
+[`good first issue`](https://github.com/redis-pane/redis-pane/labels/good%20first%20issue) are a
+good place to begin.
 
 ## Working on this guide
 

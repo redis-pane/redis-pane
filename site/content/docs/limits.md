@@ -34,6 +34,12 @@ title: "Limits and non-goals"
 - **Keys beyond 2,000,000** aren't loaded. See [Large keyspaces](./browsing/large-keyspaces.md).
 - **RedisJSON module keys** are listed with the type `json`, but haven't been checked here.
 - **Sentinel** has been checked resolving to a master, but not through a failover.
+- **Windows is experimental.** A build ships, but it hasn't been verified on Windows, and some
+  things don't work yet (tracked in
+  [#138](https://github.com/redis-pane/redis-pane/issues/138)). Profiles and session restore need
+  `HOME` set, because the config and state files are looked up under it, and `passwordCommand`
+  needs `sh` on your `PATH`. Without them, a Profile is not found and a saved session is not
+  restored.
 - **Older than Redis 6.0 and RESP2** aren't supported. You get a clear message, not a crash.
 
 ## Not planning to build
