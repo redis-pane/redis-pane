@@ -2,15 +2,17 @@
 
 import { useState } from 'react';
 import { Check, Copy } from 'lucide-react';
-import { installCommands } from '@/lib/release';
+import { installCommands, links } from '@/lib/release';
 
+// Homebrew first: on macOS it is also the install that skips Gatekeeper's first-run prompt.
 const tabs = [
-  { id: 'shell', label: 'macOS / Linux' },
-  { id: 'powershell', label: 'PowerShell' },
+  { id: 'homebrew', label: 'Homebrew', prompt: '$ ' },
+  { id: 'shell', label: 'Shell script', prompt: '$ ' },
+  { id: 'powershell', label: 'Windows', prompt: 'PS> ' },
 ] as const;
 
 export function InstallCommand() {
-  const [tab, setTab] = useState<(typeof tabs)[number]['id']>('shell');
+  const [tab, setTab] = useState<(typeof tabs)[number]['id']>('homebrew');
   const [copied, setCopied] = useState(false);
   const command = installCommands[tab];
 
@@ -55,10 +57,26 @@ export function InstallCommand() {
       </div>
       <pre className="overflow-x-auto px-4 py-4 font-mono text-[13px] leading-relaxed">
         <code>
-          <span className="select-none text-fd-muted-foreground">$ </span>
+          <span className="select-none text-fd-muted-foreground">
+            {tabs.find((t) => t.id === tab)?.prompt}
+          </span>
           {command}
         </code>
       </pre>
+      <p className="border-t px-4 py-2 text-xs text-fd-muted-foreground">
+        {tab === 'homebrew' && 'macOS and Linux.'}
+        {tab === 'shell' && 'macOS and Linux, without Homebrew. Linux gets a static build that runs on any distro.'}
+        {tab === 'powershell' && (
+          <>
+            Experimental: config files, session restore and <code>passwordCommand</code> don&apos;t
+            work yet on Windows (
+            <a href={links.windowsIssue} className="underline hover:text-fd-foreground">
+              #138
+            </a>
+            ).
+          </>
+        )}
+      </p>
     </div>
   );
 }
