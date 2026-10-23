@@ -9,7 +9,7 @@
 [![Release](https://img.shields.io/github/v/release/redis-pane/redis-pane)](https://github.com/redis-pane/redis-pane/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-A terminal UI for Redis and Valkey: see your keyspace, open a key, watch it change, edit it safely.
+A terminal UI for the Redis® database and Valkey: see your keyspace, open a key, watch it change, edit it safely.
 
 ![Browsing a keyspace in redis-pane: filtering to a key, then watching it update on screen the moment another client changes it, with no keypress or refresh](docs/demos/hero.gif)
 
@@ -211,3 +211,7 @@ sending a change, and points to the glossary in [CONTEXT.md](CONTEXT.md) and the
 problems as [SECURITY.md](SECURITY.md) describes.
 
 [MIT](LICENSE).
+
+## Trademarks
+
+`redis-pane` is an independent open-source project. It is not affiliated with, endorsed, supported or certified by Redis Ltd. Redis is a registered trademark of Redis Ltd. Any rights therein are reserved to Redis Ltd.

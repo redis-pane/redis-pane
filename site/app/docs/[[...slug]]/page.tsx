@@ -5,6 +5,7 @@ import { getMDXComponents } from '@/components/mdx';
 import type { Metadata } from 'next';
 import { createRelativeLink } from 'fumadocs-ui/mdx';
 import { gitConfig } from '@/lib/shared';
+import { TrademarkNotice } from '@/components/trademark';
 
 export default async function Page(props: PageProps<'/docs/[[...slug]]'>) {
   const params = await props.params;
@@ -34,6 +35,7 @@ export default async function Page(props: PageProps<'/docs/[[...slug]]'>) {
       >
         Edit this page on GitHub
       </a>
+      <TrademarkNotice className="mt-6" />
     </DocsPage>
   );
 }

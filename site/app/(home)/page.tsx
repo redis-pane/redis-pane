@@ -13,6 +13,7 @@ import { DemoVideo } from '@/components/demo';
 import { InstallCommand } from '@/components/landing/install';
 import { links, releaseVersion } from '@/lib/release';
 import { siteDescription } from '@/lib/shared';
+import { TrademarkNotice } from '@/components/trademark';
 
 const docs = (path: string) => `/docs/${path}`;
 
@@ -145,7 +146,7 @@ export default function HomePage() {
             <span className="sr-only">redis-pane</span>
           </h1>
           <p className="max-w-xl text-balance text-lg text-fd-muted-foreground sm:text-xl">
-            A terminal UI for Redis: see your keyspace, open a key, watch it change, edit it safely.
+            A terminal UI for the Redis® database and Valkey: see your keyspace, open a key, watch it change, edit it safely.
           </p>
           <InstallCommand />
           <div className="flex flex-wrap justify-center gap-3">
@@ -289,6 +290,7 @@ export default function HomePage() {
             <a href={links.license} className="hover:text-fd-foreground">MIT license</a>
           </nav>
         </div>
+        <TrademarkNotice className="mx-auto max-w-5xl px-4 pb-8" />
       </footer>
     </main>
   );

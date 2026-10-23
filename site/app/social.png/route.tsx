@@ -30,7 +30,7 @@ export async function GET() {
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img src={lockup} width={420} height={73} alt="" />
         <div style={{ display: 'flex', fontSize: 48, fontWeight: 700, lineHeight: 1.15, marginTop: 36, maxWidth: 1000 }}>
-          A terminal UI for Redis and Valkey. Watch keys update live, edit safely, over SSH too.
+          A terminal UI for the Redis® database and Valkey. Watch keys update live, edit safely, over SSH too.
         </div>
         <div
           style={{

@@ -8,7 +8,7 @@ const socialImage = {
   url: '/social.png',
   width: 1280,
   height: 640,
-  alt: 'redis-pane: a terminal UI for Redis and Valkey',
+  alt: 'redis-pane: a terminal UI for the Redis® database and Valkey',
 };
 
 export const metadata: Metadata = {
