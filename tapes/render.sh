@@ -25,6 +25,7 @@ cleanup() {
   local rc=$?
   # Writers a tape failed to kill: matched by our port, so nobody else's churn is touched.
   pkill -f "churn.py.*--port $PORT" 2>/dev/null || true
+  pkill -f "_social_writer.py.*--port $PORT" 2>/dev/null || true
   docker rm -f "$NAME" >/dev/null 2>&1 || true
   rm -rf "$WORK"
   [ "$rc" -eq 0 ] || echo "render.sh: failed (exit $rc)" >&2
@@ -108,6 +109,13 @@ EOF2
       rcli EXPIRE demo:live 55 ;;
     social)
       rcli HSET demo:live status idle hits 0 owner worker-3
+      # Sessions among other per-user keys, for the search scene's glob.
+      for id in 1001 1002 1003 1004 1005 1006; do
+        rpipe <<EOF2
+SET user:$id:session "tok_$id" EX 3600
+SET user:$id:profile "{\"id\":$id}"
+EOF2
+      done
       rcli SET demo:config '{"feature:alpha":true,"feature:orion":false,"version":12,"owner":"platform"}' ;;
     edit-value)
       rcli SET demo:config '{"feature:alpha":true,"feature:orion":false,"version":12,"owner":"platform"}' ;;
@@ -155,11 +163,34 @@ EOF2
   fi
 }
 
+# caption <in.mp4> <out.mp4> <captions file>: a 64 px band under the recording with one caption
+# per line of the file (start<TAB>end<TAB>text, seconds). Only `social` has one. This ffmpeg has
+# no drawtext (no freetype), so each caption is rendered to a PNG by tapes/_caption.swift (macOS)
+# and overlaid for its time window.
+caption() {
+  local in="$1" out="$2" file="$3" i=0 inputs=() chain="[0:v]pad=iw:ih+64:0:0:color=0x16181C[v0]" s e t
+  while IFS=$'\t' read -r s e t; do
+    [ -n "$s" ] || continue
+    i=$((i+1))
+    swift "$TAPES/_caption.swift" "$t" "$WORK/cap$i.png"
+    inputs+=(-i "$WORK/cap$i.png")
+    chain="$chain;[v$((i-1))][$i:v]overlay=0:H-64:enable='between(t,$s,$e)'[v$i]"
+  done < "$file"
+  ffmpeg -v error -y -i "$in" "${inputs[@]}" -filter_complex "$chain" -map "[v$i]" -an \
+    -c:v libx264 -crf 14 -pix_fmt yuv420p "$out"
+}
+
 encode() {  # encode <name>: the VHS master (mp4) becomes webm + mp4 + poster (+ gif)
   local n="$1" raw="$WORK/$1.master.mp4" poster
   poster="$(sed -n 's/^# poster: *\([0-9.]*\).*/\1/p' "$TAPES/$n.tape" | head -1)"
   [ -n "$poster" ] || die "tapes/$n.tape has no '# poster: <seconds>' line"
   mv "$OUT/$n.mp4" "$raw"
+  # Dev knob: keep the uncaptioned VHS master, to read caption times off it.
+  [ -z "${KEEP_MASTER:-}" ] || cp "$raw" "$KEEP_MASTER"
+  if [ -f "$TAPES/$n.captions" ]; then
+    caption "$raw" "$WORK/$n.captioned.mp4" "$TAPES/$n.captions"
+    mv "$WORK/$n.captioned.mp4" "$raw"
+  fi
   ffmpeg -v error -y -i "$raw" -an -c:v libvpx-vp9 -crf 38 -b:v 0 -row-mt 1 -pix_fmt yuv420p "$OUT/$n.webm"
   ffmpeg -v error -y -i "$raw" -an -c:v libx264 -preset slow -crf 30 -pix_fmt yuv420p -movflags +faststart "$OUT/$n.mp4"
   ffmpeg -v error -y -ss "$poster" -i "$raw" -frames:v 1 "$OUT/$n.png"
@@ -179,8 +210,13 @@ for s in "${SCENARIOS[@]}"; do
   seed "$s"
   # Run from tapes/ so `Source _settings.tape` and the relative Output paths resolve.
   # The tape writes its master as $OUT/$s.mp4; encode() replaces it.
-  (cd "$TAPES" && vhs "$s.tape")
+  if [ -n "${REUSE_MASTER:-}" ]; then
+    cp "$REUSE_MASTER" "$OUT/$s.mp4"   # dev knob: re-encode and re-caption a kept master, no VHS run
+  else
+    (cd "$TAPES" && vhs "$s.tape")
+  fi
   pkill -f "churn.py.*--port $PORT" 2>/dev/null || true
+  pkill -f "_social_writer.py.*--port $PORT" 2>/dev/null || true
   encode "$s"
 done
 

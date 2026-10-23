@@ -28,11 +28,16 @@ For each tape `render.sh` writes:
 
 Budget: a `.webm` or `.mp4` is at most 1 MB and a `.gif` at most 1.5 MB. Aim for 8 to 20 seconds.
 
-Exception: `social` is allowed up to **3 MB** for its `.mp4`. It is a 20 to 30 second clip, longer than
-the others, because it shows two things (a live update, then a safe edit) in one take, and it is for
-downloading and posting on social platforms, not for the site. It is embedded on no page and has no
-GIF; it is served at `https://redis-pane.github.io/redis-pane/demos/social.mp4`. Its `.mp4` is H.264 in
-`yuv420p`, which social platforms autoplay.
+Exception: `social` is allowed up to **3 MB** for its `.mp4`. It is a 45 second clip, longer than
+the others, because it walks six scenes in one take (a live update, the tree, search, a safe edit, the
+dashboard, the monitor), and it is for downloading and posting on social platforms, not for the site.
+It is embedded on no page and has no GIF; it is served at
+`https://redis-pane.github.io/redis-pane/demos/social.mp4`. Its `.mp4` is H.264 in `yuv420p`, which
+social platforms autoplay muted, so it carries a burned-in caption per scene: a 64 px band under the
+recording (1200x784 in all), from `tapes/social.captions` (`start<TAB>end<TAB>text`, seconds). The
+times are read off the rendered video, so re-check them after changing the tape. The band is drawn by
+`tapes/_caption.swift` (macOS) because Homebrew's ffmpeg has no `drawtext`. Only `social` has a
+captions file; the other tapes stay caption-free. Its hidden writer is `tapes/_social_writer.py`.
 
 ## What `render.sh` does, and what it never does
 
