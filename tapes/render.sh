@@ -106,6 +106,9 @@ EOF2
     live)
       rcli HSET demo:live status idle hits 0 owner worker-3
       rcli EXPIRE demo:live 55 ;;
+    social)
+      rcli HSET demo:live status idle hits 0 owner worker-3
+      rcli SET demo:config '{"feature:alpha":true,"feature:orion":false,"version":12,"owner":"platform"}' ;;
     edit-value)
       rcli SET demo:config '{"feature:alpha":true,"feature:orion":false,"version":12,"owner":"platform"}' ;;
     edit-members)

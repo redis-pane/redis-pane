@@ -28,6 +28,12 @@ For each tape `render.sh` writes:
 
 Budget: a `.webm` or `.mp4` is at most 1 MB and a `.gif` at most 1.5 MB. Aim for 8 to 20 seconds.
 
+Exception: `social` is allowed up to **3 MB** for its `.mp4`. It is a 20 to 30 second clip, longer than
+the others, because it shows two things (a live update, then a safe edit) in one take, and it is for
+downloading and posting on social platforms, not for the site. It is embedded on no page and has no
+GIF; it is served at `https://redis-pane.github.io/redis-pane/demos/social.mp4`. Its `.mp4` is H.264 in
+`yuv420p`, which social platforms autoplay.
+
 ## What `render.sh` does, and what it never does
 
 - Starts **its own** Redis, the container `redis-pane-demo` (`redis:8.4-alpine`) on port **6390**,

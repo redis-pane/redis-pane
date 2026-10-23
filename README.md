@@ -28,6 +28,8 @@ Other platforms: see [Install](#install).
 a desktop GUI, so it is no use in an SSH session on a bastion host. `redis-pane` is one small
 binary that runs in the terminal you are already in, driven from the keyboard.
 
+The story behind it: [The Refresh Button That Didn't Refresh](https://vinodsantharam.github.io/blog/the-refresh-button-that-didnt-refresh/).
+
 | | redis-pane | `redis-cli` | RedisInsight |
 | --- | :---: | :---: | :---: |
 | Runs in a terminal and over SSH | ✓ | ✓ | ✗ [^1] |
