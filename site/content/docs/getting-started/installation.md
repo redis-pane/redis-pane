@@ -19,7 +19,8 @@ binary" applies only to the release binaries and the install script.
 
 Download the binary for your system from the
 [Releases page](https://github.com/redis-pane/redis-pane/releases). There are builds for macOS
-(Intel and Apple Silicon), Linux (x86_64 and arm64) and Windows.
+(Intel and Apple Silicon), Linux (x86_64 and arm64) and Windows (experimental, see
+[Limits](../limits.md)).
 
 Linux builds are static musl binaries, one for x86_64 and one for arm64:
 
@@ -44,7 +45,7 @@ On macOS and Linux:
 curl --proto '=https' --tlsv1.2 -LsSf https://github.com/redis-pane/redis-pane/releases/latest/download/redis-pane-installer.sh | sh
 ```
 
-On Windows, from PowerShell:
+On Windows (experimental), from PowerShell:
 
 ```powershell
 irm https://github.com/redis-pane/redis-pane/releases/latest/download/redis-pane-installer.ps1 | iex
