@@ -75,7 +75,10 @@ seed() {
   # stops one recording's filter from opening the next one.
   rm -rf "$XDG_STATE_HOME" && mkdir -p "$XDG_STATE_HOME/redis-pane"
   rm -f "$XDG_CONFIG_HOME/redis-pane/config.json"
-  python3 "$ROOT/scripts/fixtures.py" --port "$PORT" --flush --seed 7 >/dev/null
+  # social is a promo: no fixture TTLs, so no row expires mid-recording and shows as gone.
+  local ttl=()
+  [ "$1" != social ] || ttl=(--ttl-fraction 0)
+  python3 "$ROOT/scripts/fixtures.py" --port "$PORT" --flush --seed 7 ${ttl[@]+"${ttl[@]}"} >/dev/null
   # Slowlog threshold back to the default; only the slowlog scenario lowers it, and only on this
   # container.
   rcli CONFIG SET slowlog-log-slower-than 10000
@@ -112,7 +115,7 @@ EOF2
       # Sessions among other per-user keys, for the search scene's glob.
       for id in 1001 1002 1003 1004 1005 1006; do
         rpipe <<EOF2
-SET user:$id:session "tok_$id" EX 3600
+SET user:$id:session "tok_$id"
 SET user:$id:profile "{\"id\":$id}"
 EOF2
       done

@@ -50,15 +50,18 @@ Sleep 600ms
 Show
 Sleep 7s
 
-# ---- 2 Tree: clear the filter, back to the tree, fold and unfold ----------------------------
+# ---- 2 Tree: clear the filter and go back to the tree off camera (a cut, no flicker) --------
+Hide
 Escape
-Sleep 400ms
+Sleep 300ms
 Type "/"
 Sleep 200ms
 Escape
-Sleep 400ms
+Sleep 300ms
 Type "t"
-Sleep 1s
+Sleep 600ms
+Show
+Sleep 800ms
 Left
 Sleep 900ms
 Down
