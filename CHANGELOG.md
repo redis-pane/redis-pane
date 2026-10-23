@@ -11,6 +11,8 @@ not part of it.
 
 ### Changed
 
+- The README and every page of the user guide say that `redis-pane` is independent of Redis Ltd and
+  carry the Redis trademark attribution, as the Redis trademark policy asks of open-source projects.
 - Windows is marked experimental in the README and the user guide, until
   [#138](https://github.com/redis-pane/redis-pane/issues/138) is fixed. The repository also gains
   `CONTRIBUTING.md`, a code of conduct, a security policy and a pull request template.
