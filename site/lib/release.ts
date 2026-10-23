@@ -16,5 +16,6 @@ export const links = {
   repo: repoUrl,
   releases: `${repoUrl}/releases`,
   discussions: `${repoUrl}/discussions`,
+  story: 'https://vinodsantharam.github.io/blog/the-refresh-button-that-didnt-refresh/',
   license: `${repoUrl}/blob/${gitConfig.branch}/LICENSE`,
 };

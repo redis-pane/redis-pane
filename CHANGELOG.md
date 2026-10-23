@@ -9,6 +9,11 @@ not part of it.
 
 ## [Unreleased]
 
+### Added
+
+- A "What's next" page in the user guide, listing the open issues that shape the next release, and
+  a link to the story behind the project from the README, the landing page and the introduction.
+
 ### Changed
 
 - The README and every page of the user guide say that `redis-pane` is independent of Redis Ltd and

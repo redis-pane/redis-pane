@@ -220,6 +220,13 @@ export default function HomePage() {
           show you what is in your keyspace. RedisInsight can, but it is a desktop GUI, so it is no use in an SSH session on a
           bastion host. redis-pane is one small binary that runs in the terminal you are already in, driven from the keyboard.
         </p>
+        <p className="-mt-4 mb-8 max-w-2xl text-fd-muted-foreground">
+          The story behind it:{' '}
+          <a href={links.story} className="font-medium text-fd-foreground underline underline-offset-4 hover:no-underline">
+            The Refresh Button That Didn&apos;t Refresh
+          </a>
+          .
+        </p>
         <div className="overflow-x-auto rounded-xl border">
           <table className="w-full min-w-[640px] border-collapse text-sm">
             <thead>
@@ -285,6 +292,7 @@ export default function HomePage() {
           <p>{siteDescription}</p>
           <nav className="flex flex-wrap gap-x-6 gap-y-2">
             <Link href="/docs" className="hover:text-fd-foreground">Docs</Link>
+            <Link href="/docs/whats-next" className="hover:text-fd-foreground">What&apos;s next</Link>
             <a href={links.releases} className="hover:text-fd-foreground">Releases</a>
             <a href={links.discussions} className="hover:text-fd-foreground">Discussions</a>
             <a href={links.license} className="hover:text-fd-foreground">MIT license</a>
