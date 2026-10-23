@@ -120,13 +120,13 @@ first-run prompt the unsigned release binaries get.
 Or download the binary for your OS from the [Releases page](https://github.com/redis-pane/redis-pane/releases) — macOS, Linux (static musl builds for x86_64 and arm64, which run on any distro, including old ones such as Amazon Linux 2, RHEL 8 and Debian 11) and Windows are all covered. Or run the install script:
 
 ```bash
-curl --proto '=https' --tlsv1.2 -LsSf https://github.com/redis-pane/redis-pane/releases/download/v1.0.0/redis-pane-installer.sh | sh
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/redis-pane/redis-pane/releases/latest/download/redis-pane-installer.sh | sh
 ```
 
 On Windows, from PowerShell:
 
 ```powershell
-irm https://github.com/redis-pane/redis-pane/releases/download/v1.0.0/redis-pane-installer.ps1 | iex
+irm https://github.com/redis-pane/redis-pane/releases/latest/download/redis-pane-installer.ps1 | iex
 ```
 
 The binaries are unsigned, so your OS may flag them on first run — on macOS, right-click the
@@ -173,7 +173,7 @@ Its source is in [`site/content/docs`](site/content/docs/index.mdx).
 
 ## Compatibility
 
-- Version `1.0.0`. What isn't built is on the [limits page](https://redis-pane.github.io/redis-pane/docs/limits/).
+- The latest release is on the [Releases page](https://github.com/redis-pane/redis-pane/releases/latest). What isn't built is on the [limits page](https://redis-pane.github.io/redis-pane/docs/limits/).
 - Redis 6.0 or newer, and Valkey. RESP3 only.
 - Standalone, Sentinel and Cluster, with TLS.
 - Prebuilt for macOS (arm64 and x86_64), Linux (x86_64 and arm64, static musl, any distro) and Windows. Build from source for anything else.
