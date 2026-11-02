@@ -32,6 +32,19 @@ is not a flat line. `--ttl-fraction` (default 0.4) of the keys get a TTL
 between **10s and 2m**, which is short enough that the countdown visibly moves
 and keys really do disappear while you watch.
 
+It also writes four fixed `json:sample:*` keys, with no TTL, for checking the
+JSON viewer:
+
+| Key | What it checks |
+|---|---|
+| `json:sample:order` | every colour, a long sentence that word-wraps, a long token that is cut |
+| `json:sample:large` | a large document, about 70 KB, to scroll |
+| `json:sample:truncated` | JSON cut off mid-value, shown as plain text |
+| `json:sample:invalid` | single quotes and trailing commas, shown as plain text |
+
+They don't use the random generator, so `--seed` gives the same keyspace as before. Pass
+`--no-json-samples` to leave them out.
+
 ```bash
 python3 scripts/fixtures.py -n 200000            # enough to watch SCAN stream
 python3 scripts/fixtures.py --ttl-fraction 1     # everything expires

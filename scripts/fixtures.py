@@ -77,6 +77,62 @@ def json_object(rng, key):
     }
 
 
+def json_samples():
+    """Fixed JSON-as-string keys for eyeballing the JSON viewer (#144): its
+    colours, the word-wrap of long strings, the cut of long unbroken tokens,
+    scrolling a large document, and the plain-text fallback for JSON that does
+    not parse. Built without the RNG, so a seeded keyspace is unchanged."""
+    order = {
+        "id": 8812,
+        "status": "shipped",
+        "paid": True,
+        "discount": None,
+        "total": 129.95,
+        "weight_kg": -0.5e-3,
+        "items": [
+            {"sku": "A-100", "qty": 2, "price": 19.5, "gift": False},
+            {"sku": "B-220", "qty": 1, "price": 90.95, "gift": True},
+        ],
+        "customer": {
+            "name": "Ada Lovelace",
+            "email": "ada@example.com",
+            "vip": False,
+            "address": {"city": "Strasbourg", "zip": "67000", "lines": ["1 rue du Dôme", "3e étage"]},
+        },
+        "note": (
+            "Leave the parcel at the reception desk on the ground floor if nobody answers the door, "
+            "and call the customer before 6pm so they know it has arrived. The \"back entrance\" "
+            "is closed on Sundays."
+        ),
+        "token": (
+            "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI4ODEyIiwicm9sZSI6ImFkbWluIiwiZXhwIjoxOTk5"
+            "OTk5OTk5fQ.c2lnbmF0dXJlLW9mLWEtdmVyeS1sb25nLWp3dC10b2tlbi1mb3ItdGVzdGluZw"
+        ),
+        "empty_object": {},
+        "empty_array": [],
+    }
+    events = [
+        {
+            "seq": i,
+            "type": ("login", "purchase", "refund", "view")[i % 4],
+            "ok": i % 7 != 0,
+            "amount": None if i % 4 != 1 else round(i * 3.25, 2),
+            "user": {"id": 1000 + i, "name": "user-%d" % i, "tags": [WORDS[i % len(WORDS)], WORDS[(i * 3) % len(WORDS)]]},
+            "message": " ".join(WORDS[(i + j) % len(WORDS)] for j in range(12 + i % 20)),
+        }
+        for i in range(250)
+    ]
+    large = {"report": "daily", "generated_by": "fixtures.py", "count": len(events), "events": events}
+    return [
+        ("json:sample:order", json.dumps(order, ensure_ascii=False)),
+        ("json:sample:large", json.dumps(large)),
+        # Starts like JSON, so it is classified as JSON, but does not parse:
+        # the viewer must show the raw text, uncoloured, without an error.
+        ("json:sample:truncated", '{"id": 42, "items": [1, 2, 3], "note": "cut off mid-'),
+        ("json:sample:invalid", "{'id': 1, \"tags\": [\"a\", \"b\",], unquoted: true,}"),
+    ]
+
+
 def size_for(rng):
     """Log-ish size distribution: mostly small, a few fat keys."""
     roll = rng.random()
@@ -144,6 +200,8 @@ def main():
     p.add_argument("--flush", action="store_true", help="FLUSHDB first")
     p.add_argument("--seed", type=int, default=None, help="seed the RNG for a reproducible keyspace")
     p.add_argument("--batch", type=int, default=500, help="commands per pipeline flush")
+    p.add_argument("--no-json-samples", action="store_true",
+                   help="skip the fixed json:sample:* keys (long, large, truncated and invalid JSON)")
     args = p.parse_args()
 
     rng = random.Random(args.seed)
@@ -173,6 +231,10 @@ def main():
         made += 1
         if len(pending) >= args.batch:
             flush()
+    if not args.no_json_samples:
+        for name, body in json_samples():
+            pending.append(("SET", args.prefix + name, body))
+            made += 1
     flush()
 
     print(

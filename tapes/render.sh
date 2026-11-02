@@ -78,7 +78,8 @@ seed() {
   # social is a promo: no fixture TTLs, so no row expires mid-recording and shows as gone.
   local ttl=()
   [ "$1" != social ] || ttl=(--ttl-fraction 0)
-  python3 "$ROOT/scripts/fixtures.py" --port "$PORT" --flush --seed 7 ${ttl[@]+"${ttl[@]}"} >/dev/null
+  # --no-json-samples keeps the recorded keyspace exactly as the committed demos show it.
+  python3 "$ROOT/scripts/fixtures.py" --port "$PORT" --flush --seed 7 --no-json-samples ${ttl[@]+"${ttl[@]}"} >/dev/null
   # Slowlog threshold back to the default; only the slowlog scenario lowers it, and only on this
   # container.
   rcli CONFIG SET slowlog-log-slower-than 10000
