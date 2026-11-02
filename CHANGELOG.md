@@ -9,6 +9,8 @@ not part of it.
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-11-02
+
 ### Added
 
 - A JSON value is coloured: object keys, strings, numbers, `true`/`false`/`null` and punctuation
@@ -17,6 +19,8 @@ not part of it.
   with `…`. Five new theme tokens, `json.key`, `json.string`, `json.number`, `json.literal` and
   `json.punct`, let a custom theme choose the colours; a theme that sets none inherits its base's
   ([#144](https://github.com/redis-pane/redis-pane/issues/144)).
+- `scripts/fixtures.py` writes four `json:sample:*` keys (a nested order, a large document, truncated
+  and invalid JSON) for checking the JSON viewer; `--no-json-samples` leaves them out.
 - A "What's next" page in the user guide, listing the open issues that shape the next release, and
   a link to the story behind the project from the README, the landing page and the introduction.
 
@@ -190,7 +194,8 @@ Eighteen alpha releases (`0.1.0-alpha.1` to `0.1.0-alpha.18`) built the first us
 - Monitor, Pub/Sub, Slowlog and Dashboard views.
 - Clipboard copy, including OSC 52 over SSH, and prebuilt binaries for macOS, Linux and Windows.
 
-[Unreleased]: https://github.com/redis-pane/redis-pane/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/redis-pane/redis-pane/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/redis-pane/redis-pane/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/redis-pane/redis-pane/compare/v0.1.0-beta.8...v1.0.0
 [0.1.0-beta.8]: https://github.com/redis-pane/redis-pane/compare/v0.1.0-beta.7...v0.1.0-beta.8
 [0.1.0-beta.7]: https://github.com/redis-pane/redis-pane/compare/v0.1.0-beta.6...v0.1.0-beta.7
