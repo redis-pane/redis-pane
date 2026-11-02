@@ -1,0 +1,24 @@
+─ redis-pane ─ ● staging · cache-01:6379/0 · from profile staging ───── ● live ─
+
+ KEY                      TYPE      TTL │ config:feature-flags
+ ● user:8812:cart         zset      12m │ json · 8 lines · 2.1 KB
+ ● user:8812:profile      json        ∞ │ ttl ∞                          ● live
+ ● user:8812:session      hash      42m │
+ ● user:8813:session      hash      56m │ {
+ ● cart:91af3c9d2e        zset      12m │   "id": 8812,
+ ● feed:global:hot        list        ∞ │   "note": "The quick brown fox
+ · config:feature-flags   ·           · ├           jumps over the lazy dog.
+                                        │           The quick brown fox jumps
+                                        │           over the lazy dog. The
+                                        │           quick brown fox jumps
+                                        │           over the lazy dog. The
+                                        │           quick brown fox jumps
+                                        │           over the lazy dog. ",
+                                        │   "tags": [
+                                        │     "a",
+                                        │     "b"
+                                        │   ]
+                                        │ }
+                                        │
+
+ → open / expand   / filter   s sort   t tree view   d delete   ? F1 help

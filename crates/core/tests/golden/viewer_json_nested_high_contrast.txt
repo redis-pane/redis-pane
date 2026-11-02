@@ -1,0 +1,76 @@
+─ redis-pane ─ ● staging · cache-01:6379/0 · from profile staging ───────────────────────── ● live ─
+
+ KEY                                TYPE      TTL │ config:feature-flags
+ ● user:8812:cart                   zset      12m │ json · 20 lines · 2.1 KB
+ ● user:8812:profile                json        ∞ │ ttl ∞                                    ● live
+ ● user:8812:session                hash      42m │
+ ● user:8813:session                hash      56m │ {
+ ● cart:91af3c9d2e                  zset      12m │   "active": true,
+ ● feed:global:hot                  list        ∞ │   "address": {
+ · config:feature-flags             ·           · ├     "city": "London",
+                                                  │     "geo": [
+                                                  │       51.5,
+                                                  │       -0.12
+                                                  │     ]
+                                                  │   },
+                                                  │   "empty": {},
+                                                  │   "id": 8812,
+                                                  │   "manager": null,
+                                                  │   "name": "Ada \"the first\" Lovelace",
+                                                  │   "none": [],
+                                                  │   "roles": [
+                                                  │     "admin",
+                                                  │     "ops"
+                                                  │   ],
+                                                  │   "score": -12500.0
+                                                  │ }
+                                                  │
+                                                  │
+
+ → open / expand   / filter   s sort   t tree view   d delete   c copy   r rescan   ? F1 help
+--- styles ---
+a fg=#999999 bg=#000000
+b fg=#ffd700 bg=#000000
+c fg=#cccccc bg=#000000
+d fg=#ffffff bg=#000000
+e fg=#5fff5f bg=#000000
+f fg=Reset bg=#000000
+g fg=#ffaf5f bg=#000000
+h fg=#5fffd7 bg=#000000
+i fg=#bbbbbb bg=#000000
+j fg=#87afff bg=#000000
+k fg=#d7afff bg=#000000
+l fg=#87ff5f bg=#000000
+m fg=#000000 bg=#ffd700
+n fg=#000000 bg=#ffd700 UNDERLINED
+--- map ---
+aaaaaaaaaaaaaaabbbbbbbbbcccdddddddddddddddcccccccccccccccccccccccaaaaaaaaaaaaaaaaaaaaaaaaaaaeeeeeeaa
+ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+fdddffffffffffffffffffffffffffffffffddddffffffdddfafccccccccccccccccccccffffffffffffffffffffffffffff
+fgfddddddddddddddfffffffffffffffffffggggffffffcccfafhhhhccccccccccccccccccccffffffffffffffffffffffff
+fhfdddddddddddddddddffffffffffffffffhhhhffffffffcfafcccccffffffffffffffffffffffffffffffffffffeeeeeef
+fbfdddddddddddddddddffffffffffffffffbbbbffffffcccfafffffffffffffffffffffffffffffffffffffffffffffffff
+fbfdddddddddddddddddffffffffffffffffbbbbffffffcccfafifffffffffffffffffffffffffffffffffffffffffffffff
+fgfdddddddddddddddffffffffffffffffffggggffffffcccfafddjjjjjjjjidkkkkifffffffffffffffffffffffffffffff
+flfdddddddddddddddffffffffffffffffffllllffffffffcfafddjjjjjjjjjidiffffffffffffffffffffffffffffffffff
+mmmnnnnnnnnnnnnnnnnnnnnmmmmmmmmmmmmmmmmmmmmmmmmmmmbfddddjjjjjjidllllllllifffffffffffffffffffffffffff
+ffffffffffffffffffffffffffffffffffffffffffffffffffafddddjjjjjidiffffffffffffffffffffffffffffffffffff
+ffffffffffffffffffffffffffffffffffffffffffffffffffafddddddggggifffffffffffffffffffffffffffffffffffff
+ffffffffffffffffffffffffffffffffffffffffffffffffffafddddddgggggfffffffffffffffffffffffffffffffffffff
+ffffffffffffffffffffffffffffffffffffffffffffffffffafddddifffffffffffffffffffffffffffffffffffffffffff
+ffffffffffffffffffffffffffffffffffffffffffffffffffafddiiffffffffffffffffffffffffffffffffffffffffffff
+ffffffffffffffffffffffffffffffffffffffffffffffffffafddjjjjjjjidiiiffffffffffffffffffffffffffffffffff
+ffffffffffffffffffffffffffffffffffffffffffffffffffafddjjjjidggggifffffffffffffffffffffffffffffffffff
+ffffffffffffffffffffffffffffffffffffffffffffffffffafddjjjjjjjjjidkkkkiffffffffffffffffffffffffffffff
+ffffffffffffffffffffffffffffffffffffffffffffffffffafddjjjjjjidllllllllllllllllllllllllllllifffffffff
+ffffffffffffffffffffffffffffffffffffffffffffffffffafddjjjjjjidiiifffffffffffffffffffffffffffffffffff
+ffffffffffffffffffffffffffffffffffffffffffffffffffafddjjjjjjjidiffffffffffffffffffffffffffffffffffff
+ffffffffffffffffffffffffffffffffffffffffffffffffffafddddllllllliffffffffffffffffffffffffffffffffffff
+ffffffffffffffffffffffffffffffffffffffffffffffffffafddddlllllfffffffffffffffffffffffffffffffffffffff
+ffffffffffffffffffffffffffffffffffffffffffffffffffafddiiffffffffffffffffffffffffffffffffffffffffffff
+ffffffffffffffffffffffffffffffffffffffffffffffffffafddjjjjjjjidggggggggfffffffffffffffffffffffffffff
+ffffffffffffffffffffffffffffffffffffffffffffffffffafifffffffffffffffffffffffffffffffffffffffffffffff
+ffffffffffffffffffffffffffffffffffffffffffffffffffafffffffffffffffffffffffffffffffffffffffffffffffff
+ffffffffffffffffffffffffffffffffffffffffffffffffffafffffffffffffffffffffffffffffffffffffffffffffffff
+ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+fccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccfffffff

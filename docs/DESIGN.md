@@ -259,6 +259,7 @@ when focus was inferred from "is a key open" instead of tracked.
 | `text` / `muted` | Primary content vs. metadata (TTL, sizes, counts) |
 | `selected` | Selection and cursor row: a full bar, a fixed foreground and background pair |
 | `type.string` … `type.json` | One hue per Redis type — consistent everywhere a type appears |
+| `json.key` / `json.string` / `json.number` / `json.literal` / `json.punct` | The parts of a JSON String in the Viewer (§6.3). Built-in themes set all five, and a custom theme inherits them from its base like every other token. Monochrome: keys bold, punctuation dim, the rest plain |
 | `env.local` / `env.staging` / `env.prod` / `env.unknown` | Title bar band and confirmation dialogs |
 | `danger` / `warn` / `ok` | Destructive actions, expiring TTLs, success toasts |
 
@@ -413,7 +414,13 @@ ASCII text, so it is identical under the Unicode and ASCII glyph sets.
 One viewer per type, each with the same frame (header: key, type, size, TTL; body: type-specific;
 footer: actions) so navigation muscle memory transfers:
 
-- **String** — syntax-highlighted when JSON/XML/YAML is detected, toggleable raw/pretty/hex.
+- **String** — a String that is JSON is pretty-printed and syntax-coloured (keys, strings, numbers,
+  `true`/`false`/`null`, punctuation; the `json.*` tokens, §5). A line longer than the pane
+  soft-wraps under its value (after `"key": `, or after the indent for an array item) instead of
+  being clipped, and wraps again when the pane resizes; the header's line count stays the logical
+  one. The cursor row is drawn in `selected` alone. A value that does not parse stays plain.
+  Hash fields, List items, RedisJSON keys and Pub/Sub payloads are not coloured. Folding, XML/YAML
+  highlighting and a raw/pretty/hex toggle are not built.
 - **Hash** — two-column table, sortable by field, filterable, inline edit.
 - **List** — indexed rows with head/tail jump; push/pop actions surfaced.
 - **Set / Sorted set** — member table; zset adds a score column and rank, sortable by either.

@@ -533,6 +533,57 @@ mod tests {
         );
     }
 
+    /// #144: a JSON value soft-wraps to its pane like a String does, on arrival
+    /// and on every resize; the header's line count stays logical.
+    #[test]
+    fn a_json_value_is_wrapped_to_its_pane_and_rewrapped_when_the_pane_changes() {
+        use crate::state::value::{JsonValue, Value, Viewer};
+        let rows = |s: &State| match &s.open.as_ref().unwrap().value {
+            Some(Value::Json(v)) => (v.row_count(), v.measure()),
+            other => panic!("expected json, got {other:?}"),
+        };
+        let state = State {
+            cols: 130,
+            rows: 40,
+            ..State::default()
+        };
+        let token = state.read_token;
+        let text = format!(r#"{{"note":"{}"}}"#, "x".repeat(300));
+        let (state, _) = update(
+            state,
+            Msg::ValueLoaded {
+                token,
+                index: None,
+                name: "k".into(),
+                // As the shell builds it: not wrapped at all.
+                value: Value::Json(JsonValue::parse(&text)),
+                ttl_seconds: -1,
+                size_bytes: 300,
+                at_ms: 0,
+            },
+        );
+        let (wide_rows, measure) = rows(&state);
+        assert!(wide_rows > 3, "wrapped to the pane on arrival: {wide_rows}");
+        assert_eq!(measure, "3 lines");
+
+        let (state, _) = update(state, Msg::Resized { cols: 90, rows: 40 });
+        let (narrow_rows, measure) = rows(&state);
+        assert!(
+            narrow_rows > wide_rows,
+            "and again when the terminal narrows"
+        );
+        assert_eq!(measure, "3 lines", "the count stays logical");
+
+        let (state, _) = update(
+            state,
+            Msg::Resized {
+                cols: 400,
+                rows: 40,
+            },
+        );
+        assert!(rows(&state).0 < wide_rows);
+    }
+
     #[test]
     fn a_held_update_is_applied_before_either_pane_gets_a_say() {
         // The cheapest possible answer, and re-asking the server for something
