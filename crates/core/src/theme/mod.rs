@@ -83,16 +83,15 @@ pub enum Token {
     /// test measures is what is on screen. In monochrome it is nothing, like
     /// every other hue.
     Background,
-    /// An object key in a JSON value (DESIGN §5's `json.key`). A custom theme
-    /// that does not set it falls back to [`Token::TypeJson`].
+    /// An object key in a JSON value (DESIGN §5's `json.key`).
     JsonKey,
-    /// A JSON string value. Falls back to [`Token::Text`].
+    /// A JSON string value.
     JsonString,
-    /// A JSON number. Falls back to [`Token::Text`].
+    /// A JSON number.
     JsonNumber,
-    /// `true`, `false` and `null`. Falls back to [`Token::Text`].
+    /// `true`, `false` and `null`.
     JsonLiteral,
-    /// `{ } [ ] , :` in a JSON value. Falls back to [`Token::Muted`].
+    /// `{ } [ ] , :` in a JSON value.
     JsonPunct,
 }
 
@@ -553,12 +552,6 @@ impl Palette {
         self.ansi_256[i] = quantize_slot(slot);
     }
 
-    /// Give `token` exactly what `from` sets, at both depths.
-    fn inherit(&mut self, token: Token, from: Token) {
-        self.true_color[token.index()] = self.true_color[from.index()];
-        self.ansi_256[token.index()] = self.ansi_256[from.index()];
-    }
-
     /// The colour this palette paints behind everything at `depth`, if it
     /// paints one. `None` for `dark`, for a user theme that says
     /// `"background": "terminal"`, and always in monochrome.
@@ -587,15 +580,6 @@ impl Palette {
         self.ansi_256[token.index()]
     }
 }
-
-/// The token each JSON token follows in a custom theme that does not set it.
-const JSON_FALLBACKS: &[(Token, Token)] = &[
-    (Token::JsonKey, Token::TypeJson),
-    (Token::JsonString, Token::Text),
-    (Token::JsonNumber, Token::Text),
-    (Token::JsonLiteral, Token::Text),
-    (Token::JsonPunct, Token::Muted),
-];
 
 /// The built-in theme names, for messages.
 pub const BUILTIN_NAMES: [&str; 3] = ["dark", "light", "high-contrast"];
@@ -641,13 +625,6 @@ pub fn select(
         p.name = name.to_string();
         for (token, spec) in &def.colors {
             p.set(*token, *spec);
-        }
-        // A JSON token the theme does not set follows the token it falls back
-        // to, so an existing theme renders a JSON value as it always did.
-        for (token, fallback) in JSON_FALLBACKS {
-            if !def.colors.iter().any(|(t, _)| t == token) {
-                p.inherit(*token, *fallback);
-            }
         }
         return Ok(p);
     }
@@ -1154,9 +1131,7 @@ mod tests {
             light.true_color(Token::Selected).fg
         );
         for t in Token::ALL {
-            // The JSON tokens are the one exception: a theme that does not
-            // set them follows their fallbacks, not its base's colours.
-            if t != Token::BorderFocus && t != Token::Selected && !is_json(t) {
+            if t != Token::BorderFocus && t != Token::Selected {
                 assert_eq!(p.true_color(t), light.true_color(t), "{t:?} not inherited");
                 assert_eq!(p.ansi_256(t), light.ansi_256(t), "{t:?} not inherited");
             }
@@ -1168,9 +1143,13 @@ mod tests {
         );
     }
 
-    fn is_json(t: Token) -> bool {
-        JSON_FALLBACKS.iter().any(|(j, _)| *j == t)
-    }
+    const JSON_TOKENS: [Token; 5] = [
+        Token::JsonKey,
+        Token::JsonString,
+        Token::JsonNumber,
+        Token::JsonLiteral,
+        Token::JsonPunct,
+    ];
 
     #[test]
     fn json_tokens_have_dotted_config_names() {
@@ -1187,30 +1166,36 @@ mod tests {
     }
 
     #[test]
-    fn a_custom_theme_without_json_tokens_falls_back_to_text_muted_and_type_json() {
-        let cfg = config(
-            r##"{"theme":"m","themes":{"m":{"base":"light","text":"#101010","muted":"#202020","type.json":"#303030"}}}"##,
-        );
-        let p = select(None, Some(&cfg)).unwrap();
-        for (json, from) in JSON_FALLBACKS {
-            assert_eq!(p.true_color(*json), p.true_color(*from), "{json:?}");
-            assert_eq!(p.ansi_256(*json), p.ansi_256(*from), "{json:?}");
+    fn a_custom_theme_without_json_tokens_inherits_its_bases_json_colours() {
+        for base in ["dark", "light", "high-contrast"] {
+            let cfg = config(&format!(
+                r##"{{"theme":"m","themes":{{"m":{{"base":"{base}","text":"#101010"}}}}}}"##
+            ));
+            let p = select(None, Some(&cfg)).unwrap();
+            let builtin = Palette::builtin(base).unwrap();
+            for t in JSON_TOKENS {
+                assert!(builtin.true_color(t).fg.is_some(), "{base} {t:?}");
+                assert_eq!(p.true_color(t), builtin.true_color(t), "{base} {t:?}");
+                assert_eq!(p.ansi_256(t), builtin.ansi_256(t), "{base} {t:?}");
+            }
         }
-        assert_eq!(p.true_color(Token::JsonKey).fg, Some(Rgb(0x30, 0x30, 0x30)));
     }
 
     #[test]
-    fn a_custom_theme_can_set_json_tokens_and_the_rest_still_fall_back() {
+    fn a_custom_theme_can_set_json_tokens_and_the_rest_come_from_the_base() {
         let cfg = config(
             r##"{"theme":"m","themes":{"m":{"json.string":"#00ff00","json.key":"#ff0000"}}}"##,
         );
         let p = select(None, Some(&cfg)).unwrap();
         assert_eq!(p.true_color(Token::JsonString).fg, Some(Rgb(0, 255, 0)));
         assert_eq!(p.true_color(Token::JsonKey).fg, Some(Rgb(255, 0, 0)));
-        assert_eq!(p.true_color(Token::JsonNumber), p.true_color(Token::Text));
+        assert_eq!(
+            p.true_color(Token::JsonNumber),
+            Palette::dark().true_color(Token::JsonNumber),
+        );
         assert_ne!(
             p.ansi_256(Token::JsonString),
-            p.ansi_256(Token::Text),
+            Palette::dark().ansi_256(Token::JsonString),
             "the 256-colour slot follows the override"
         );
     }
@@ -1235,7 +1220,7 @@ mod tests {
 
     #[test]
     fn the_json_tokens_are_five_distinct_hues_in_every_builtin() {
-        let json: Vec<Token> = JSON_FALLBACKS.iter().map(|(t, _)| *t).collect();
+        let json = JSON_TOKENS;
         for p in builtins() {
             for depth in [ColorDepth::TrueColor, ColorDepth::Ansi256] {
                 let theme = Theme::with_palette(depth, &p);

@@ -6371,23 +6371,21 @@ fn json_keys_strings_numbers_and_literals_land_in_their_own_colours() {
 }
 
 #[test]
-fn a_custom_theme_without_json_tokens_renders_a_json_value_in_text_muted_and_type_json() {
+fn a_custom_theme_without_json_tokens_renders_a_json_value_in_its_bases_colours() {
     let cfg = redis_pane_core::config::parse(
-        r##"{"theme":"m","themes":{"m":{"text":"#111111","muted":"#222222","type.json":"#333333"}}}"##,
+        r##"{"theme":"m","themes":{"m":{"base":"light","text":"#111111"}}}"##,
     )
     .unwrap();
     let palette = redis_pane_core::theme::select(None, Some(&cfg)).unwrap();
     let theme = Theme::with_palette(ColorDepth::TrueColor, &palette);
-    assert_eq!(
-        theme.style(Token::JsonKey).fg,
-        theme.style(Token::TypeJson).fg
-    );
-    assert_eq!(
-        theme.style(Token::JsonString).fg,
-        theme.style(Token::Text).fg
-    );
-    assert_eq!(
-        theme.style(Token::JsonPunct).fg,
-        theme.style(Token::Muted).fg
-    );
+    let light = Theme::with_palette(ColorDepth::TrueColor, &Palette::light());
+    for t in [
+        Token::JsonKey,
+        Token::JsonString,
+        Token::JsonNumber,
+        Token::JsonLiteral,
+        Token::JsonPunct,
+    ] {
+        assert_eq!(theme.style(t), light.style(t), "{t:?}");
+    }
 }

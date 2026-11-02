@@ -259,7 +259,7 @@ when focus was inferred from "is a key open" instead of tracked.
 | `text` / `muted` | Primary content vs. metadata (TTL, sizes, counts) |
 | `selected` | Selection and cursor row: a full bar, a fixed foreground and background pair |
 | `type.string` … `type.json` | One hue per Redis type — consistent everywhere a type appears |
-| `json.key` / `json.string` / `json.number` / `json.literal` / `json.punct` | The parts of a JSON String in the Viewer (§6.3). Built-in themes set all five. A custom theme that does not set one falls back to `type.json` (key), `text` (string, number, literal) or `muted` (punct). Monochrome: keys bold, punctuation dim, the rest plain |
+| `json.key` / `json.string` / `json.number` / `json.literal` / `json.punct` | The parts of a JSON String in the Viewer (§6.3). Built-in themes set all five, and a custom theme inherits them from its base like every other token. Monochrome: keys bold, punctuation dim, the rest plain |
 | `env.local` / `env.staging` / `env.prod` / `env.unknown` | Title bar band and confirmation dialogs |
 | `danger` / `warn` / `ok` | Destructive actions, expiring TTLs, success toasts |
 

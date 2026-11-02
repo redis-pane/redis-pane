@@ -15,8 +15,8 @@ not part of it.
   each have their own colour in every built-in theme (bold keys and dim punctuation in
   monochrome), and a line longer than the pane now wraps under its value instead of being cut off
   with `…`. Five new theme tokens, `json.key`, `json.string`, `json.number`, `json.literal` and
-  `json.punct`, let a custom theme choose the colours; a theme that sets none renders a JSON value
-  as it did before ([#144](https://github.com/redis-pane/redis-pane/issues/144)).
+  `json.punct`, let a custom theme choose the colours; a theme that sets none inherits its base's
+  ([#144](https://github.com/redis-pane/redis-pane/issues/144)).
 - A "What's next" page in the user guide, listing the open issues that shape the next release, and
   a link to the story behind the project from the README, the landing page and the introduction.
 

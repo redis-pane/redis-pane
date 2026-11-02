@@ -578,6 +578,31 @@ struct JsonRow {
     indent: usize,
 }
 
+/// Where to end a row of at most `room` characters cut from `rest` (which is
+/// longer than `room`), as a byte offset into `rest`.
+///
+/// The same rule as the greedy word-wrap the dialogs use (`render::wrap_words`):
+/// break after the last space that fits, so a word is never split, and the
+/// space stays at the end of the earlier row. Only a word that has no space
+/// before it within `room` characters, or whose preceding space comes before
+/// `min_chars` (so a long value is not pushed off its `"key": ` onto a row of
+/// its own), is cut mid-word, at `room` characters. It takes only the
+/// characters of one row, so its cost is the row's, not the line's.
+fn break_at(rest: &str, room: usize, min_chars: usize) -> usize {
+    let mut cut = None;
+    let mut hard = rest.len();
+    for (n, (at, ch)) in rest.char_indices().enumerate() {
+        if n == room {
+            hard = at;
+            break;
+        }
+        if ch == ' ' && n + 1 >= min_chars {
+            cut = Some(at + 1);
+        }
+    }
+    cut.unwrap_or(hard)
+}
+
 /// The narrowest a row's text may get, so a deep indent in a narrow pane
 /// cannot squeeze a line into one character per row.
 const MIN_JSON_TEXT: usize = 16;
@@ -659,28 +684,28 @@ impl JsonValue {
                 0
             };
             let mut start = 0;
-            let mut room = width;
-            let mut taken = 0;
-            for (at, _) in line.char_indices() {
-                if taken == room {
+            loop {
+                let first = start == 0;
+                let room = if first { width } else { width - indent };
+                let rest = &line[start..];
+                if rest.chars().take(room + 1).count() <= room {
                     self.rows.push(JsonRow {
                         line: n,
                         start,
-                        end: at,
-                        indent: if start == 0 { 0 } else { indent },
+                        end: line.len(),
+                        indent: if first { 0 } else { indent },
                     });
-                    start = at;
-                    room = width - indent;
-                    taken = 0;
+                    break;
                 }
-                taken += 1;
+                let end = start + break_at(rest, room, if first { value_col + 1 } else { 2 });
+                self.rows.push(JsonRow {
+                    line: n,
+                    start,
+                    end,
+                    indent: if first { 0 } else { indent },
+                });
+                start = end;
             }
-            self.rows.push(JsonRow {
-                line: n,
-                start,
-                end: line.len(),
-                indent: if start == 0 { 0 } else { indent },
-            });
         }
     }
 
@@ -1090,6 +1115,75 @@ mod tests {
             .chain(rows[2..rows.len() - 2].iter().map(|r| r[10..].to_string()))
             .collect();
         assert!(rejoined.contains(&"abcdefghij".repeat(10)), "{rejoined}");
+    }
+
+    fn rows_of(v: &JsonValue) -> Vec<String> {
+        (0..v.row_count()).map(|i| v.row(i, 0).remove(0)).collect()
+    }
+
+    #[test]
+    fn a_long_string_breaks_at_a_space_and_keeps_the_space_on_the_earlier_row() {
+        let mut v = JsonValue::parse(r#"["the quick brown fox jumps over the lazy dog"]"#);
+        v.rewrap(24);
+        assert_eq!(
+            rows_of(&v),
+            [
+                "[",
+                "  \"the quick brown fox ",
+                "  jumps over the lazy ",
+                "  dog\"",
+                "]"
+            ]
+        );
+        // Every row fits, so nothing is clipped.
+        assert!(rows_of(&v).iter().all(|r| r.chars().count() <= 24));
+    }
+
+    #[test]
+    fn a_word_longer_than_the_row_is_still_cut_mid_word() {
+        let url = "x".repeat(40);
+        let mut v = JsonValue::parse(&format!(r#"["see {url} now"]"#));
+        v.rewrap(24);
+        let rows = rows_of(&v);
+        assert!(rows.iter().all(|r| r.chars().count() <= 24), "{rows:?}");
+        let joined: String = rows.concat().replace("  ", "");
+        assert!(
+            joined.contains(&url),
+            "the token survives the cut: {rows:?}"
+        );
+        assert!(rows[1].starts_with("  \"see "), "{rows:?}");
+    }
+
+    #[test]
+    fn a_string_with_no_spaces_at_all_is_cut_at_the_width() {
+        let mut v = JsonValue::parse(&format!(r#"{{"k":"{}"}}"#, "q".repeat(60)));
+        v.rewrap(30);
+        let rows = rows_of(&v);
+        assert_eq!(rows[1].chars().count(), 30, "{rows:?}");
+        assert!(
+            rows[1].starts_with("  \"k\": \"q"),
+            "not pushed off its key"
+        );
+    }
+
+    #[test]
+    fn a_long_value_is_not_pushed_off_its_key_by_the_space_after_the_colon() {
+        let mut v = JsonValue::parse(&format!(r#"{{"key":"{}"}}"#, "z".repeat(50)));
+        v.rewrap(30);
+        assert!(rows_of(&v)[1].contains("zzz"));
+    }
+
+    #[test]
+    fn word_wrapped_pieces_keep_their_token() {
+        let mut v = JsonValue::parse(r#"["the quick brown fox jumps over the lazy dog"]"#);
+        v.rewrap(24);
+        for i in 1..=3 {
+            let spans = &v.row_spans(i, 0)[0];
+            assert!(
+                spans.iter().any(|(_, k)| *k == Token::JsonString),
+                "row {i}: {spans:?}"
+            );
+        }
     }
 
     #[test]

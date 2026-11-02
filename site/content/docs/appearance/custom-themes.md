@@ -57,11 +57,8 @@ isn't in this list is an error, so a typo such as `bordr-focus` is caught, not i
 
 ## JSON colours
 
-The built-in themes colour a JSON value. A custom theme that doesn't set the `json.*` tokens gets
-no new colours: `json.key` follows `type.json`, `json.string`, `json.number` and `json.literal`
-follow `text`, and `json.punct` follows `muted`. It does not take the five colours from its
-`base`, since your `text` or `background` may not suit them. To colour JSON in your theme, set
-them:
+A theme inherits the five `json.*` colours from its `base` like any other token, so a custom theme
+colours JSON with no further setting. Set them only to change them:
 
 ```json
 {
