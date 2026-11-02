@@ -157,9 +157,9 @@ impl EditBuffer {
             // Already pretty-printed at read time (`JsonValue::parse`) —
             // handed to the editor in that form on purpose. A JSON-looking
             // string is still a string underneath: whatever comes back is
-            // staged as a plain `SET`, reformatting included. Its rows are its
-            // lines, one for one.
-            Value::Json(j) => (j.lines.join("\n"), true, (viewer_row, 0)),
+            // staged as a plain `SET`, reformatting included. A long line may
+            // wrap into several rows, so the row is mapped back to its line.
+            Value::Json(j) => (j.lines.join("\n"), true, (j.line_of_row(viewer_row), 0)),
             Value::Binary(_) => return Err("binary values aren't editable here yet"),
             Value::Hash(_) | Value::List(_) | Value::Set(_) | Value::ZSet(_) | Value::Stream(_) => {
                 return Err("only string values are editable so far");

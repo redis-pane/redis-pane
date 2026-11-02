@@ -783,25 +783,36 @@ fn value_pane(
             let blank = " ".repeat(inner as usize);
             put(buf, x0, y + r as u16, &blank, sty(Token::Selected));
         }
-        for (c, cell) in viewer.row(i, now).into_iter().enumerate() {
+        for (c, spans) in viewer.row_spans(i, now).into_iter().enumerate() {
             let width = if cols.len() > 1 { col_w } else { inner };
-            put(
-                buf,
-                x0 + c as u16 * col_w,
-                y + r as u16,
-                &clip(
-                    &cell,
-                    width.saturating_sub(1) as usize,
-                    g.get(Glyph::Ellipsis),
-                ),
-                sty(if cursor_row {
+            let mut x = x0 + c as u16 * col_w;
+            let mut room = width.saturating_sub(1) as usize;
+            let total: usize = spans.iter().map(|(t, _)| t.chars().count()).sum();
+            let clipped = total > room;
+            if clipped {
+                // As `clip` does for a whole cell: one column goes to the
+                // ellipsis.
+                room = room.saturating_sub(1);
+            }
+            for (text, token) in &spans {
+                if room == 0 {
+                    break;
+                }
+                let piece: String = text.chars().take(room).collect();
+                room -= piece.chars().count();
+                // The cursor row is one "row you're on" colour, not a
+                // rainbow on a bar.
+                let token = if cursor_row { Token::Selected } else { *token };
+                x = put(buf, x, y + r as u16, &piece, sty(token));
+            }
+            if clipped && width > 2 {
+                let token = if cursor_row {
                     Token::Selected
-                } else if c == 0 && cols.len() > 1 {
-                    Token::Muted
                 } else {
-                    Token::Text
-                }),
-            );
+                    spans.last().map_or(Token::Text, |(_, t)| *t)
+                };
+                put(buf, x, y + r as u16, g.get(Glyph::Ellipsis), sty(token));
+            }
         }
     }
 }
@@ -927,18 +938,6 @@ fn detached_chip(attachment: Option<Attachment>) -> Option<&'static [&'static st
         // No row to point at, so this one has to say why on its own.
         Attachment::DetachedOffList => Some(&["⊘ not in the list", "⊘ not listed", "⊘"]),
     }
-}
-
-fn clip(s: &str, width: usize, ellipsis: &str) -> String {
-    if s.chars().count() <= width {
-        return s.to_string();
-    }
-    if width <= 1 {
-        return String::new();
-    }
-    let mut out: String = s.chars().take(width - 1).collect();
-    out.push_str(ellipsis);
-    out
 }
 
 /// The status bar: scan progress and its cancel affordance (DESIGN §6.2).

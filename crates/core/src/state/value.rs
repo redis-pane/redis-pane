@@ -11,6 +11,7 @@
 //! nowhere here for a cache to accrete.
 
 use super::loaded::KeyKind;
+use crate::theme::Token;
 
 /// Whether `text` is shaped like JSON — an object or an array, after leading
 /// whitespace — rather than merely something `serde_json` happens to parse.
@@ -69,10 +70,13 @@ impl Value {
         }
     }
 
-    /// Re-wrap to a pane `width`. Only a String's rows depend on it.
+    /// Re-wrap to a pane `width`. Only a String's and a JSON value's rows
+    /// depend on it.
     pub fn rewrap(&mut self, width: usize) {
-        if let Value::Str(s) = self {
-            s.rewrap(width);
+        match self {
+            Value::Str(s) => s.rewrap(width),
+            Value::Json(j) => j.rewrap(width),
+            _ => {}
         }
     }
 
@@ -125,6 +129,28 @@ pub trait Viewer {
     /// only Stream's age column uses it, but every type takes it, so no
     /// special-casing is needed at the one call site that draws a row.
     fn row(&self, i: usize, now_ms: u64) -> Vec<String>;
+
+    /// The same row as [`Viewer::row`], each cell cut into styled spans.
+    ///
+    /// The default is one span per cell in the token every viewer has always
+    /// drawn it in — `Muted` for the first column of a multi-column view,
+    /// `Text` otherwise — so only a viewer with something to colour overrides
+    /// it. Concatenating a cell's spans gives exactly the cell `row` returns.
+    fn row_spans(&self, i: usize, now_ms: u64) -> Vec<Vec<(String, Token)>> {
+        let table = self.columns().len() > 1;
+        self.row(i, now_ms)
+            .into_iter()
+            .enumerate()
+            .map(|(c, cell)| {
+                let token = if c == 0 && table {
+                    Token::Muted
+                } else {
+                    Token::Text
+                };
+                vec![(cell, token)]
+            })
+            .collect()
+    }
 }
 
 // ── string ──────────────────────────────────────────────────────────────────
@@ -431,9 +457,141 @@ pub fn stream_entry_age(id: &str, now_ms: u64) -> String {
 
 // ── JSON ────────────────────────────────────────────────────────────────────
 
+/// What a run of a pretty-printed JSON line is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JsonKind {
+    /// Whitespace and anything unrecognised.
+    Plain,
+    /// A quoted string followed by `:`.
+    Key,
+    String,
+    Number,
+    /// `true`, `false` or `null`.
+    Literal,
+    /// `{ } [ ] , :`.
+    Punct,
+}
+
+impl JsonKind {
+    /// The theme token a run of this kind is drawn in.
+    pub fn token(self) -> Token {
+        match self {
+            JsonKind::Plain => Token::Text,
+            JsonKind::Key => Token::JsonKey,
+            JsonKind::String => Token::JsonString,
+            JsonKind::Number => Token::JsonNumber,
+            JsonKind::Literal => Token::JsonLiteral,
+            JsonKind::Punct => Token::JsonPunct,
+        }
+    }
+}
+
+/// A run of one line, as byte offsets into it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct JsonSpan {
+    pub start: usize,
+    pub end: usize,
+    pub kind: JsonKind,
+}
+
+/// Cut one line of JSON into contiguous runs covering all of it.
+///
+/// Pure, and tolerant: it never fails, so a line it does not understand is
+/// simply `Plain`. A string ends at the first quote not escaped by a
+/// backslash, and is a key when a `:` follows it. It works on pretty-printed
+/// lines but does not require them.
+pub fn tokenize_json_line(line: &str) -> Vec<JsonSpan> {
+    let bytes = line.as_bytes();
+    let mut out: Vec<JsonSpan> = Vec::new();
+    let mut i = 0;
+    let mut push = |start: usize, end: usize, kind: JsonKind| {
+        out.push(JsonSpan { start, end, kind });
+    };
+    while i < bytes.len() {
+        let start = i;
+        let b = bytes[i];
+        if b == b' ' || b == b'\t' {
+            while i < bytes.len() && (bytes[i] == b' ' || bytes[i] == b'\t') {
+                i += 1;
+            }
+            push(start, i, JsonKind::Plain);
+        } else if b == b'"' {
+            i += 1;
+            while i < bytes.len() {
+                match bytes[i] {
+                    b'\\' => i = (i + 2).min(bytes.len()),
+                    b'"' => {
+                        i += 1;
+                        break;
+                    }
+                    _ => i += 1,
+                }
+            }
+            let mut j = i;
+            while j < bytes.len() && (bytes[j] == b' ' || bytes[j] == b'\t') {
+                j += 1;
+            }
+            let kind = if bytes.get(j) == Some(&b':') {
+                JsonKind::Key
+            } else {
+                JsonKind::String
+            };
+            push(start, i, kind);
+        } else if matches!(b, b'{' | b'}' | b'[' | b']' | b',' | b':') {
+            i += 1;
+            push(start, i, JsonKind::Punct);
+        } else if b == b'-' || b.is_ascii_digit() {
+            i += 1;
+            while i < bytes.len()
+                && matches!(bytes[i], b'0'..=b'9' | b'.' | b'e' | b'E' | b'+' | b'-')
+            {
+                i += 1;
+            }
+            push(start, i, JsonKind::Number);
+        } else if b.is_ascii_alphabetic() {
+            while i < bytes.len() && bytes[i].is_ascii_alphabetic() {
+                i += 1;
+            }
+            let kind = match &line[start..i] {
+                "true" | "false" | "null" => JsonKind::Literal,
+                _ => JsonKind::Plain,
+            };
+            push(start, i, kind);
+        } else {
+            // Any other character, whole: never split a UTF-8 sequence.
+            i += line[i..].chars().next().map_or(1, char::len_utf8);
+            push(start, i, JsonKind::Plain);
+        }
+    }
+    out
+}
+
+/// One row on screen: a slice of one logical line.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct JsonRow {
+    line: usize,
+    /// Byte range of the line this row shows.
+    start: usize,
+    end: usize,
+    /// Columns of indent in front of it: 0 on a line's first row, the line's
+    /// value column on a continuation.
+    indent: usize,
+}
+
+/// The narrowest a row's text may get, so a deep indent in a narrow pane
+/// cannot squeeze a line into one character per row.
+const MIN_JSON_TEXT: usize = 16;
+
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct JsonValue {
+    /// The logical lines, as pretty-printed. Not wrapped: the header's
+    /// `N lines`, the editor and Pub/Sub all want these.
     pub lines: Vec<String>,
+    /// Per line, its coloured runs. Empty when the text did not parse as JSON,
+    /// which is then drawn plain.
+    spans: Vec<Vec<JsonSpan>>,
+    /// The visual rows `lines` wrap into at the pane width.
+    rows: Vec<JsonRow>,
 }
 
 impl JsonValue {
@@ -441,19 +599,122 @@ impl JsonValue {
     ///
     /// A value that claims to be JSON and is not should still be readable —
     /// showing an error instead of the bytes helps nobody debugging it.
+    ///
+    /// Built unwrapped, one row per line; the core re-wraps it to the pane
+    /// ([`Value::rewrap`]) when the read lands, as it does for a String.
     pub fn parse(text: &str) -> Self {
-        match serde_json::from_str::<serde_json::Value>(text) {
-            Ok(v) => Self {
-                lines: serde_json::to_string_pretty(&v)
-                    .unwrap_or_else(|_| text.to_string())
-                    .lines()
-                    .map(str::to_string)
-                    .collect(),
-            },
-            Err(_) => Self {
-                lines: text.lines().map(str::to_string).collect(),
-            },
+        let (lines, valid): (Vec<String>, bool) =
+            match serde_json::from_str::<serde_json::Value>(text) {
+                Ok(v) => (
+                    serde_json::to_string_pretty(&v)
+                        .unwrap_or_else(|_| text.to_string())
+                        .lines()
+                        .map(str::to_string)
+                        .collect(),
+                    true,
+                ),
+                Err(_) => (text.lines().map(str::to_string).collect(), false),
+            };
+        let spans = if valid {
+            lines.iter().map(|l| tokenize_json_line(l)).collect()
+        } else {
+            Vec::new()
+        };
+        let mut v = Self {
+            lines,
+            spans,
+            rows: Vec::new(),
+        };
+        v.rewrap(usize::MAX);
+        v
+    }
+
+    /// Wrap the same lines to a different pane width.
+    ///
+    /// Each continuation row is indented to the column where its line's value
+    /// starts (after `"key": `, else after the leading whitespace), so a long
+    /// string reads as one block under its key. Cutting is by characters, like
+    /// a String's.
+    pub fn rewrap(&mut self, width: usize) {
+        let width = width.max(8);
+        self.rows.clear();
+        for (n, line) in self.lines.iter().enumerate() {
+            let chars = line.chars().count();
+            if chars <= width {
+                self.rows.push(JsonRow {
+                    line: n,
+                    start: 0,
+                    end: line.len(),
+                    indent: 0,
+                });
+                continue;
+            }
+            let lead = line.len() - line.trim_start().len();
+            let value_col = self.value_column(n, line).max(lead);
+            let indent = if value_col + MIN_JSON_TEXT <= width {
+                value_col
+            } else if lead + MIN_JSON_TEXT <= width {
+                lead
+            } else {
+                0
+            };
+            let mut start = 0;
+            let mut room = width;
+            let mut taken = 0;
+            for (at, _) in line.char_indices() {
+                if taken == room {
+                    self.rows.push(JsonRow {
+                        line: n,
+                        start,
+                        end: at,
+                        indent: if start == 0 { 0 } else { indent },
+                    });
+                    start = at;
+                    room = width - indent;
+                    taken = 0;
+                }
+                taken += 1;
+            }
+            self.rows.push(JsonRow {
+                line: n,
+                start,
+                end: line.len(),
+                indent: if start == 0 { 0 } else { indent },
+            });
         }
+    }
+
+    /// The column (in characters) where line `n`'s value starts.
+    fn value_column(&self, n: usize, line: &str) -> usize {
+        let lead = line.len() - line.trim_start().len();
+        let Some(spans) = self.spans.get(n) else {
+            return lead;
+        };
+        let mut end = lead;
+        let mut iter = spans.iter().filter(|s| s.start >= lead).peekable();
+        if let Some(key) = iter.next_if(|s| s.kind == JsonKind::Key) {
+            end = key.end;
+            if let Some(colon) = iter.next_if(|s| s.kind == JsonKind::Punct) {
+                end = colon.end;
+            }
+            if let Some(gap) = iter.next_if(|s| s.kind == JsonKind::Plain) {
+                end = gap.end;
+            }
+        }
+        line[..end].chars().count()
+    }
+
+    /// The logical line that visual row `row` belongs to (the last line for a
+    /// row past the end).
+    pub fn line_of_row(&self, row: usize) -> usize {
+        self.rows
+            .get(row)
+            .map_or(self.lines.len().saturating_sub(1), |r| r.line)
+    }
+
+    fn row_text(&self, r: &JsonRow) -> String {
+        let text = &self.lines[r.line][r.start..r.end];
+        format!("{}{text}", " ".repeat(r.indent))
     }
 }
 
@@ -465,10 +726,39 @@ impl Viewer for JsonValue {
         &[]
     }
     fn row_count(&self) -> usize {
-        self.lines.len()
+        self.rows.len()
     }
     fn row(&self, i: usize, _now_ms: u64) -> Vec<String> {
-        vec![self.lines.get(i).cloned().unwrap_or_default()]
+        vec![
+            self.rows
+                .get(i)
+                .map(|r| self.row_text(r))
+                .unwrap_or_default(),
+        ]
+    }
+    fn row_spans(&self, i: usize, _now_ms: u64) -> Vec<Vec<(String, Token)>> {
+        let Some(r) = self.rows.get(i) else {
+            return vec![vec![(String::new(), Token::Text)]];
+        };
+        let line = &self.lines[r.line];
+        let mut out: Vec<(String, Token)> = Vec::new();
+        if r.indent > 0 {
+            out.push((" ".repeat(r.indent), Token::Text));
+        }
+        match self.spans.get(r.line) {
+            None => out.push((line[r.start..r.end].to_string(), Token::Text)),
+            Some(spans) => {
+                let first = spans.partition_point(|s| s.end <= r.start);
+                for s in &spans[first..] {
+                    if s.start >= r.end {
+                        break;
+                    }
+                    let (a, b) = (s.start.max(r.start), s.end.min(r.end));
+                    out.push((line[a..b].to_string(), s.kind.token()));
+                }
+            }
+        }
+        vec![out]
     }
 }
 
@@ -655,6 +945,277 @@ mod tests {
             bad.lines,
             ["{not json"],
             "a broken value must stay readable"
+        );
+    }
+
+    // ── JSON tokenizer and wrap (#144) ──────────────────────────────────────
+
+    fn kinds(line: &str) -> Vec<(&str, JsonKind)> {
+        tokenize_json_line(line)
+            .into_iter()
+            .map(|s| (&line[s.start..s.end], s.kind))
+            .collect()
+    }
+
+    #[test]
+    fn the_tokenizer_covers_the_whole_line_with_no_gaps() {
+        for line in [
+            r#"  "a": [1, -2.5e+3, true, null],"#,
+            r#"  "é\"x": "ü😀\\","#,
+            "",
+            "{}",
+            r#""unterminated"#,
+        ] {
+            let spans = tokenize_json_line(line);
+            let mut at = 0;
+            for s in &spans {
+                assert_eq!(s.start, at, "gap in {line:?}");
+                assert!(line.is_char_boundary(s.end));
+                at = s.end;
+            }
+            assert_eq!(at, line.len(), "{line:?}");
+        }
+    }
+
+    #[test]
+    fn a_key_string_number_and_literal_are_each_their_own_kind() {
+        use JsonKind::*;
+        assert_eq!(
+            kinds(r#"  "name": "Ada","#),
+            [
+                ("  ", Plain),
+                ("\"name\"", Key),
+                (":", Punct),
+                (" ", Plain),
+                ("\"Ada\"", String),
+                (",", Punct),
+            ]
+        );
+        assert_eq!(kinds("  1.5,")[1], ("1.5", Number));
+        assert_eq!(kinds("  true")[1], ("true", Literal));
+        assert_eq!(kinds("null")[0], ("null", Literal));
+        assert_eq!(kinds("false,")[0], ("false", Literal));
+    }
+
+    #[test]
+    fn negative_and_exponent_numbers_are_one_number() {
+        for n in ["-12", "0.25", "1e10", "-1.5E-3", "2e+8"] {
+            assert_eq!(kinds(n), [(n, JsonKind::Number)], "{n}");
+        }
+    }
+
+    #[test]
+    fn brackets_are_punctuation_and_empty_containers_stay_whole() {
+        use JsonKind::*;
+        assert_eq!(kinds("[]"), [("[", Punct), ("]", Punct)]);
+        assert_eq!(kinds("{}"), [("{", Punct), ("}", Punct)]);
+        assert_eq!(
+            kinds(r#"  "a": {"#),
+            [
+                ("  ", Plain),
+                ("\"a\"", Key),
+                (":", Punct),
+                (" ", Plain),
+                ("{", Punct)
+            ]
+        );
+    }
+
+    #[test]
+    fn an_escaped_quote_does_not_end_a_string() {
+        let line = r#"  "q": "say \"hi\": ok","#;
+        let k = kinds(line);
+        assert_eq!(k[4], (r#""say \"hi\": ok""#, JsonKind::String));
+        // A string ending in an escaped backslash does end.
+        let k = kinds(r#""a\\" "#);
+        assert_eq!(k[0], (r#""a\\""#, JsonKind::String));
+    }
+
+    #[test]
+    fn unicode_inside_a_string_or_key_stays_in_it() {
+        let k = kinds(r#"  "日本語": "héllo 😀","#);
+        assert_eq!(k[1], ("\"日本語\"", JsonKind::Key));
+        assert_eq!(k[4], ("\"héllo 😀\"", JsonKind::String));
+    }
+
+    #[test]
+    fn invalid_json_is_not_tokenized_and_draws_plain() {
+        let bad = JsonValue::parse("{not json: 1,");
+        assert_eq!(
+            bad.row_spans(0, 0),
+            vec![vec![("{not json: 1,".to_string(), Token::Text)]]
+        );
+    }
+
+    #[test]
+    fn valid_json_rows_are_coloured_and_concatenate_to_the_row() {
+        let v = JsonValue::parse(r#"{"a":{"b":[1,"x",null]}}"#);
+        for i in 0..v.row_count() {
+            let joined: String = v.row_spans(i, 0)[0]
+                .iter()
+                .map(|(t, _)| t.as_str())
+                .collect();
+            assert_eq!(vec![joined], v.row(i, 0));
+        }
+        let first_key = &v.row_spans(1, 0)[0];
+        assert!(
+            first_key
+                .iter()
+                .any(|(t, k)| t == "\"a\"" && *k == Token::JsonKey)
+        );
+    }
+
+    fn long_string_value() -> JsonValue {
+        JsonValue::parse(&format!(
+            r#"{{"note":"{}","z":1}}"#,
+            "abcdefghij".repeat(10)
+        ))
+    }
+
+    #[test]
+    fn a_long_string_wraps_under_its_value_column() {
+        let mut v = long_string_value();
+        assert_eq!(v.row_count(), v.lines.len(), "unwrapped to begin with");
+        v.rewrap(40);
+        assert!(v.row_count() > v.lines.len());
+        // `  "note": ` is 10 columns, so continuations start there.
+        let rows: Vec<String> = (0..v.row_count()).map(|i| v.row(i, 0).remove(0)).collect();
+        assert!(rows[1].starts_with("  \"note\": \"abc"), "{rows:?}");
+        assert!(rows.iter().all(|r| r.chars().count() <= 40), "{rows:?}");
+        let cont = &rows[2];
+        assert!(cont.starts_with(&" ".repeat(10)), "{cont:?}");
+        assert!(!cont[10..].starts_with(' '));
+        // Nothing is lost: the pieces rejoin to the logical line.
+        let rejoined: String = std::iter::once(rows[1][11..].to_string())
+            .chain(rows[2..rows.len() - 2].iter().map(|r| r[10..].to_string()))
+            .collect();
+        assert!(rejoined.contains(&"abcdefghij".repeat(10)), "{rejoined}");
+    }
+
+    #[test]
+    fn a_split_string_keeps_its_token_on_every_piece() {
+        let mut v = long_string_value();
+        v.rewrap(40);
+        let mut string_rows = 0;
+        for i in 0..v.row_count() {
+            let spans = &v.row_spans(i, 0)[0];
+            if spans
+                .iter()
+                .any(|(t, k)| *k == Token::JsonString && t.contains("abcd"))
+            {
+                string_rows += 1;
+            }
+            // The indent is plain; no text is ever dropped on a continuation.
+            if spans[0].0.trim().is_empty() && spans.len() > 1 {
+                assert_eq!(spans[0].1, Token::Text);
+            }
+        }
+        assert!(string_rows >= 3, "{string_rows}");
+    }
+
+    #[test]
+    fn row_count_equals_the_visual_rows_and_measure_stays_the_logical_lines() {
+        let mut v = long_string_value();
+        let lines = v.lines.len();
+        v.rewrap(30);
+        let by_hand: usize = v
+            .lines
+            .iter()
+            .map(|l| {
+                let n = l.chars().count();
+                if n <= 30 {
+                    1
+                } else {
+                    1 + (n - 30).div_ceil(30 - 10)
+                }
+            })
+            .sum();
+        assert_eq!(v.row_count(), by_hand);
+        assert_eq!(v.measure(), format!("{lines} lines"));
+    }
+
+    #[test]
+    fn rewrapping_wider_gives_the_rows_back() {
+        let mut v = long_string_value();
+        v.rewrap(20);
+        let narrow = v.row_count();
+        v.rewrap(500);
+        assert_eq!(v.row_count(), v.lines.len());
+        assert!(narrow > v.row_count());
+        assert_eq!(v, long_string_value());
+    }
+
+    #[test]
+    fn a_narrow_pane_hits_the_floor_and_still_progresses() {
+        let mut v = long_string_value();
+        for width in [0, 1, 5, 8, 12, 20] {
+            v.rewrap(width);
+            for i in 0..v.row_count() {
+                let row = v.row(i, 0).remove(0);
+                assert!(row.chars().count() <= width.max(8), "{width}: {row:?}");
+            }
+            // 100 + a few characters in a 8-wide pane is a bounded number of rows.
+            assert!(v.row_count() < 200, "{width}: {}", v.row_count());
+        }
+    }
+
+    #[test]
+    fn a_deep_indent_in_a_narrow_pane_does_not_squeeze_the_text() {
+        let mut v = JsonValue::parse(&format!(
+            r#"{{"a":{{"b":{{"c":{{"verylongkeyname":"{}"}}}}}}}}"#,
+            "z".repeat(60)
+        ));
+        v.rewrap(24);
+        for i in 0..v.row_count() {
+            let row = v.row(i, 0).remove(0);
+            assert!(row.chars().count() <= 24, "{row:?}");
+        }
+        assert!(v.row_count() < 40, "{}", v.row_count());
+    }
+
+    #[test]
+    fn an_array_item_continues_under_its_leading_indent() {
+        let mut v = JsonValue::parse(&format!(r#"["{}"]"#, "x".repeat(50)));
+        v.rewrap(30);
+        assert_eq!(v.row(2, 0)[0], format!("  {}\"", "x".repeat(23)));
+    }
+
+    #[test]
+    fn invalid_json_wraps_too_under_its_own_indent() {
+        let mut v = JsonValue::parse(&format!("{{oops\n  {}", "y".repeat(60)));
+        v.rewrap(30);
+        assert!(v.row_count() > 2);
+        assert!(v.row(2, 0)[0].starts_with("  y"));
+    }
+
+    #[test]
+    fn a_visual_row_maps_back_to_its_logical_line() {
+        let mut v = long_string_value();
+        v.rewrap(30);
+        assert_eq!(v.line_of_row(0), 0);
+        assert_eq!(v.line_of_row(1), 1);
+        assert_eq!(v.line_of_row(2), 1);
+        assert_eq!(v.line_of_row(v.row_count() - 1), v.lines.len() - 1);
+        assert_eq!(v.line_of_row(10_000), v.lines.len() - 1);
+    }
+
+    #[test]
+    fn other_viewers_keep_todays_tokens() {
+        let h = PairValue {
+            pairs: vec![(b"f".to_vec(), b"v".to_vec())],
+            total: 1,
+        };
+        assert_eq!(
+            h.row_spans(0, 0),
+            vec![
+                vec![("f".to_string(), Token::Muted)],
+                vec![("v".to_string(), Token::Text)]
+            ]
+        );
+        let s = StringValue::new("hi", 40);
+        assert_eq!(
+            s.row_spans(0, 0),
+            vec![vec![("hi".to_string(), Token::Text)]]
         );
     }
 

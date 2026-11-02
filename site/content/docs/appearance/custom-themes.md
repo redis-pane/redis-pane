@@ -47,12 +47,37 @@ Widgets ask for a role, not a colour, and a theme maps each role.
 | `selected` | The cursor row: a full bar with a fixed foreground and background. |
 | `env.local`, `env.staging`, `env.prod`, `env.unknown` | The title bar band and confirm dialogs for each [Environment](../safety/environments.md). |
 | `type.string`, `type.hash`, `type.list`, `type.set`, `type.zset`, `type.stream`, `type.json` | The hue for each type, wherever it appears. |
+| `json.key`, `json.string`, `json.number`, `json.literal`, `json.punct` | The parts of a JSON value: object keys, strings, numbers, `true`/`false`/`null`, and `{ } [ ] , :`. |
 | `ok`, `warn`, `danger` | Success, expiring or alarming, and destructive. |
 | `surface-detached` | The wash on the value pane while it holds a key that isn't the Selected key. |
 | `background` | Painted behind everything, overlays included. |
 
 The underline on the open key's name is not a colour, and can't be themed. A token name that
 isn't in this list is an error, so a typo such as `bordr-focus` is caught, not ignored.
+
+## JSON colours
+
+The built-in themes colour a JSON value. A custom theme that doesn't set the `json.*` tokens gets
+no new colours: `json.key` follows `type.json`, `json.string`, `json.number` and `json.literal`
+follow `text`, and `json.punct` follows `muted`. It does not take the five colours from its
+`base`, since your `text` or `background` may not suit them. To colour JSON in your theme, set
+them:
+
+```json
+{
+  "theme": "mine",
+  "themes": {
+    "mine": {
+      "base": "dark",
+      "json.key": "#7aa2f7",
+      "json.string": "#9ece6a",
+      "json.number": "#ff9e64",
+      "json.literal": "#bb9af7",
+      "json.punct": "#9aa0b4"
+    }
+  }
+}
+```
 
 ## Rules
 

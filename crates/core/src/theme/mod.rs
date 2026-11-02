@@ -83,11 +83,22 @@ pub enum Token {
     /// test measures is what is on screen. In monochrome it is nothing, like
     /// every other hue.
     Background,
+    /// An object key in a JSON value (DESIGN §5's `json.key`). A custom theme
+    /// that does not set it falls back to [`Token::TypeJson`].
+    JsonKey,
+    /// A JSON string value. Falls back to [`Token::Text`].
+    JsonString,
+    /// A JSON number. Falls back to [`Token::Text`].
+    JsonNumber,
+    /// `true`, `false` and `null`. Falls back to [`Token::Text`].
+    JsonLiteral,
+    /// `{ } [ ] , :` in a JSON value. Falls back to [`Token::Muted`].
+    JsonPunct,
 }
 
 impl Token {
     /// How many tokens there are — the length of a palette's arrays.
-    pub const COUNT: usize = 22;
+    pub const COUNT: usize = 27;
 
     /// Every token, in the order a palette stores them.
     pub const ALL: [Token; Token::COUNT] = [
@@ -113,6 +124,11 @@ impl Token {
         Token::SurfaceDetached,
         Token::OpenRow,
         Token::Background,
+        Token::JsonKey,
+        Token::JsonString,
+        Token::JsonNumber,
+        Token::JsonLiteral,
+        Token::JsonPunct,
     ];
 
     /// The token's slot in a palette's arrays — its position in [`Token::ALL`].
@@ -149,6 +165,11 @@ impl Token {
             Token::Danger => "danger",
             Token::SurfaceDetached => "surface-detached",
             Token::Background => "background",
+            Token::JsonKey => "json.key",
+            Token::JsonString => "json.string",
+            Token::JsonNumber => "json.number",
+            Token::JsonLiteral => "json.literal",
+            Token::JsonPunct => "json.punct",
             Token::OpenRow => return None,
         })
     }
@@ -391,6 +412,11 @@ impl Palette {
                 // a highlight — the amber of `Selected` is spoken for, and
                 // the two must never be mistaken for each other.
                 (SurfaceDetached, Slot::bg(Rgb::hex(0x1E2433))),
+                (JsonKey, h(0x7AA2F7)),
+                (JsonString, h(0x9ECE6A)),
+                (JsonNumber, h(0xFF9E64)),
+                (JsonLiteral, h(0xBB9AF7)),
+                (JsonPunct, h(0x9AA0B4)),
             ],
             &[
                 (Text, Slot::fg(253)),
@@ -413,6 +439,11 @@ impl Palette {
                 (Warn, Slot::fg(179)),
                 (Danger, Slot::fg(210)),
                 (SurfaceDetached, Slot::bg(236)),
+                (JsonKey, Slot::fg(111)),
+                (JsonString, Slot::fg(150)),
+                (JsonNumber, Slot::fg(215)),
+                (JsonLiteral, Slot::fg(141)),
+                (JsonPunct, Slot::fg(146)),
             ],
         )
     }
@@ -446,6 +477,11 @@ impl Palette {
                 (Danger, h(0xB4162B)),
                 (SurfaceDetached, Slot::bg(Rgb::hex(0xE6ECF7))),
                 (Background, Slot::bg(Rgb::hex(0xFFFFFF))),
+                (JsonKey, h(0x0550AE)),
+                (JsonString, h(0x0A6B3C)),
+                (JsonNumber, h(0x8A4B00)),
+                (JsonLiteral, h(0x6639BA)),
+                (JsonPunct, h(0x4F5863)),
             ],
         )
     }
@@ -480,6 +516,11 @@ impl Palette {
                 (Danger, h(0xFF8080)),
                 (SurfaceDetached, Slot::bg(Rgb::hex(0x10264D))),
                 (Background, Slot::bg(Rgb::hex(0x000000))),
+                (JsonKey, h(0x87AFFF)),
+                (JsonString, h(0x87FF5F)),
+                (JsonNumber, h(0xFFAF5F)),
+                (JsonLiteral, h(0xD7AFFF)),
+                (JsonPunct, h(0xBBBBBB)),
             ],
         )
     }
@@ -512,6 +553,12 @@ impl Palette {
         self.ansi_256[i] = quantize_slot(slot);
     }
 
+    /// Give `token` exactly what `from` sets, at both depths.
+    fn inherit(&mut self, token: Token, from: Token) {
+        self.true_color[token.index()] = self.true_color[from.index()];
+        self.ansi_256[token.index()] = self.ansi_256[from.index()];
+    }
+
     /// The colour this palette paints behind everything at `depth`, if it
     /// paints one. `None` for `dark`, for a user theme that says
     /// `"background": "terminal"`, and always in monochrome.
@@ -540,6 +587,15 @@ impl Palette {
         self.ansi_256[token.index()]
     }
 }
+
+/// The token each JSON token follows in a custom theme that does not set it.
+const JSON_FALLBACKS: &[(Token, Token)] = &[
+    (Token::JsonKey, Token::TypeJson),
+    (Token::JsonString, Token::Text),
+    (Token::JsonNumber, Token::Text),
+    (Token::JsonLiteral, Token::Text),
+    (Token::JsonPunct, Token::Muted),
+];
 
 /// The built-in theme names, for messages.
 pub const BUILTIN_NAMES: [&str; 3] = ["dark", "light", "high-contrast"];
@@ -585,6 +641,13 @@ pub fn select(
         p.name = name.to_string();
         for (token, spec) in &def.colors {
             p.set(*token, *spec);
+        }
+        // A JSON token the theme does not set follows the token it falls back
+        // to, so an existing theme renders a JSON value as it always did.
+        for (token, fallback) in JSON_FALLBACKS {
+            if !def.colors.iter().any(|(t, _)| t == token) {
+                p.inherit(*token, *fallback);
+            }
         }
         return Ok(p);
     }
@@ -695,7 +758,11 @@ fn monochrome(token: Token) -> Style {
         // DIM instead would collide with the focus signal, which already owns
         // intensity on the Viewer's header row.
         Token::SurfaceDetached => s,
-        Token::Muted | Token::Border | Token::EnvUnknown => s.add_modifier(Modifier::DIM),
+        // JSON in monochrome: keys bold, punctuation dim, the rest plain.
+        Token::Muted | Token::Border | Token::EnvUnknown | Token::JsonPunct => {
+            s.add_modifier(Modifier::DIM)
+        }
+        Token::JsonKey => s.add_modifier(Modifier::BOLD),
         Token::BorderFocus | Token::EnvProd | Token::Danger => s.add_modifier(Modifier::BOLD),
         // Every type token: no modifier. The TYPE column's word is what
         // carries the information here, per this module's own rule.
@@ -825,7 +892,7 @@ mod tests {
 
     /// The foreground tokens text is drawn in. `Border` is a decorative rule,
     /// not text, and is deliberately quiet; everything else must be readable.
-    const READABLE: [Token; 17] = [
+    const READABLE: [Token; 22] = [
         Token::Text,
         Token::Muted,
         Token::BorderFocus,
@@ -843,6 +910,11 @@ mod tests {
         Token::Ok,
         Token::Warn,
         Token::Danger,
+        Token::JsonKey,
+        Token::JsonString,
+        Token::JsonNumber,
+        Token::JsonLiteral,
+        Token::JsonPunct,
     ];
 
     const AA: f64 = 4.5;
@@ -1082,7 +1154,9 @@ mod tests {
             light.true_color(Token::Selected).fg
         );
         for t in Token::ALL {
-            if t != Token::BorderFocus && t != Token::Selected {
+            // The JSON tokens are the one exception: a theme that does not
+            // set them follows their fallbacks, not its base's colours.
+            if t != Token::BorderFocus && t != Token::Selected && !is_json(t) {
                 assert_eq!(p.true_color(t), light.true_color(t), "{t:?} not inherited");
                 assert_eq!(p.ansi_256(t), light.ansi_256(t), "{t:?} not inherited");
             }
@@ -1092,6 +1166,93 @@ mod tests {
             p.ansi_256(Token::BorderFocus),
             light.ansi_256(Token::BorderFocus)
         );
+    }
+
+    fn is_json(t: Token) -> bool {
+        JSON_FALLBACKS.iter().any(|(j, _)| *j == t)
+    }
+
+    #[test]
+    fn json_tokens_have_dotted_config_names() {
+        for (t, name) in [
+            (Token::JsonKey, "json.key"),
+            (Token::JsonString, "json.string"),
+            (Token::JsonNumber, "json.number"),
+            (Token::JsonLiteral, "json.literal"),
+            (Token::JsonPunct, "json.punct"),
+        ] {
+            assert_eq!(t.name(), Some(name));
+            assert_eq!(Token::from_name(name), Some(t));
+        }
+    }
+
+    #[test]
+    fn a_custom_theme_without_json_tokens_falls_back_to_text_muted_and_type_json() {
+        let cfg = config(
+            r##"{"theme":"m","themes":{"m":{"base":"light","text":"#101010","muted":"#202020","type.json":"#303030"}}}"##,
+        );
+        let p = select(None, Some(&cfg)).unwrap();
+        for (json, from) in JSON_FALLBACKS {
+            assert_eq!(p.true_color(*json), p.true_color(*from), "{json:?}");
+            assert_eq!(p.ansi_256(*json), p.ansi_256(*from), "{json:?}");
+        }
+        assert_eq!(p.true_color(Token::JsonKey).fg, Some(Rgb(0x30, 0x30, 0x30)));
+    }
+
+    #[test]
+    fn a_custom_theme_can_set_json_tokens_and_the_rest_still_fall_back() {
+        let cfg = config(
+            r##"{"theme":"m","themes":{"m":{"json.string":"#00ff00","json.key":"#ff0000"}}}"##,
+        );
+        let p = select(None, Some(&cfg)).unwrap();
+        assert_eq!(p.true_color(Token::JsonString).fg, Some(Rgb(0, 255, 0)));
+        assert_eq!(p.true_color(Token::JsonKey).fg, Some(Rgb(255, 0, 0)));
+        assert_eq!(p.true_color(Token::JsonNumber), p.true_color(Token::Text));
+        assert_ne!(
+            p.ansi_256(Token::JsonString),
+            p.ansi_256(Token::Text),
+            "the 256-colour slot follows the override"
+        );
+    }
+
+    #[test]
+    fn json_in_monochrome_is_bold_keys_dim_punctuation_and_plain_the_rest() {
+        let t = Theme::new(ColorDepth::Monochrome);
+        assert!(
+            t.style(Token::JsonKey)
+                .add_modifier
+                .contains(Modifier::BOLD)
+        );
+        assert!(
+            t.style(Token::JsonPunct)
+                .add_modifier
+                .contains(Modifier::DIM)
+        );
+        for plain in [Token::JsonString, Token::JsonNumber, Token::JsonLiteral] {
+            assert_eq!(t.style(plain), Style::default());
+        }
+    }
+
+    #[test]
+    fn the_json_tokens_are_five_distinct_hues_in_every_builtin() {
+        let json: Vec<Token> = JSON_FALLBACKS.iter().map(|(t, _)| *t).collect();
+        for p in builtins() {
+            for depth in [ColorDepth::TrueColor, ColorDepth::Ansi256] {
+                let theme = Theme::with_palette(depth, &p);
+                for i in 0..json.len() {
+                    for j in (i + 1)..json.len() {
+                        assert_ne!(
+                            theme.style(json[i]).fg,
+                            theme.style(json[j]).fg,
+                            "{} {depth:?}: {:?} and {:?}",
+                            p.name,
+                            json[i],
+                            json[j]
+                        );
+                    }
+                }
+            }
+        }
     }
 
     #[test]

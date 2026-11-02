@@ -1217,3 +1217,63 @@ fn half_a_million_marks_cost_a_bitset_and_a_walk() {
     assert!(state.marks.heap_bytes() <= N / 8 + 8 * 1024);
     assert!(walk < Duration::from_millis(16));
 }
+
+// ── #144: a large JSON value renders only the visible rows ───────────────
+
+/// A JSON Value of 200,000 lines plus one 1 MB string, wrapped to the pane:
+/// highlighting and soft-wrap are per visible row, so a frame and a keystroke
+/// stay at the 16ms target whatever the value's size. The wrap itself runs
+/// once per resize, off the render path's per-row work.
+#[test]
+#[ignore]
+fn a_large_json_value_renders_and_scrolls_in_a_frame() {
+    use redis_pane_core::state::OpenKey;
+    use redis_pane_core::state::value::{JsonValue, Value, Viewer};
+
+    let items: Vec<String> = (0..200_000)
+        .map(|i| format!("\"item number {i} with some text\""))
+        .collect();
+    let text = format!(
+        r#"{{"big":"{}","items":[{}]}}"#,
+        "lorem ipsum ".repeat(90_000),
+        items.join(",")
+    );
+    let parse_started = Instant::now();
+    let mut value = JsonValue::parse(&text);
+    let parse = parse_started.elapsed();
+    let wrap_started = Instant::now();
+    value.rewrap(100);
+    let wrap = wrap_started.elapsed();
+    println!(
+        "json {} bytes: parse+tokenize {parse:?} (shell task), rewrap {wrap:?}, {} lines -> {} rows",
+        text.len(),
+        value.lines.len(),
+        value.row_count()
+    );
+    assert!(
+        value.row_count() > 200_000 + 10_000,
+        "the long string wrapped"
+    );
+
+    let mut state = State {
+        open: Some(OpenKey::new(
+            None,
+            "big:json".into(),
+            Value::Json(value),
+            -1,
+            text.len() as u32,
+            0,
+        )),
+        ..base_state()
+    };
+    let open = state.open.as_mut().unwrap();
+    open.cursor_active = true;
+    open.cursor = 5;
+    // Park the window in the middle of the long string's rows.
+    open.offset = 5_000;
+    open.cursor = 5_005;
+
+    let frame = time_update_and_render(&state, 11, || key(KeyCode::Down));
+    println!("json value keystroke+frame: {frame:?}");
+    assert_budget("json keystroke+frame", frame, 16);
+}

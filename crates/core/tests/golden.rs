@@ -6190,3 +6190,204 @@ fn the_keys_pane_with_marks_keeps_read_only_quit_and_help_at_80x24() {
     }
     assert_golden("help_keys_marked_80", &frame);
 }
+
+// ── #144: JSON syntax colours and soft-wrapped long lines ───────────────────
+
+const NESTED_JSON: &str = r#"{"id":8812,"name":"Ada \"the first\" Lovelace","active":true,"manager":null,"score":-12.5e3,"roles":["admin","ops"],"address":{"city":"London","geo":[51.5,-0.12]},"empty":{},"none":[]}"#;
+
+fn long_json() -> String {
+    format!(
+        r#"{{"id":8812,"note":"{}","tags":["a","b"]}}"#,
+        "The quick brown fox jumps over the lazy dog. ".repeat(4)
+    )
+}
+
+/// A JSON value open in a terminal `cols` wide, wrapped to the pane exactly as
+/// the core does when the read lands.
+fn json_state(text: &str, cols: u16, rows: u16) -> State {
+    let mut state = opened(
+        "config:feature-flags",
+        Value::Json(JsonValue::parse(text)),
+        TTL_NONE,
+    );
+    state.cols = cols;
+    state.rows = rows;
+    let width = state.value_wrap_width();
+    state.open.as_mut().unwrap().rewrap(width);
+    state
+}
+
+fn json_in(state: &State, palette: Palette, depth: ColorDepth, w: u16, h: u16) -> String {
+    let frame = render::frame(
+        state,
+        &Theme::with_palette(depth, &palette),
+        &CLOCK,
+        Rect::new(0, 0, w, h),
+    );
+    render::to_golden(&frame)
+}
+
+#[test]
+fn golden_json_nested_dark_truecolor() {
+    let s = json_state(NESTED_JSON, 100, 30);
+    assert_golden(
+        "viewer_json_nested_dark",
+        &json_in(&s, Palette::dark(), ColorDepth::TrueColor, 100, 30),
+    );
+}
+
+#[test]
+fn golden_json_nested_light_truecolor() {
+    let s = json_state(NESTED_JSON, 100, 30);
+    assert_golden(
+        "viewer_json_nested_light",
+        &json_in(&s, Palette::light(), ColorDepth::TrueColor, 100, 30),
+    );
+}
+
+#[test]
+fn golden_json_nested_high_contrast_truecolor() {
+    let s = json_state(NESTED_JSON, 100, 30);
+    assert_golden(
+        "viewer_json_nested_high_contrast",
+        &json_in(&s, Palette::high_contrast(), ColorDepth::TrueColor, 100, 30),
+    );
+}
+
+#[test]
+fn golden_json_nested_dark_256() {
+    let s = json_state(NESTED_JSON, 100, 30);
+    assert_golden(
+        "viewer_json_nested_dark_256",
+        &json_in(&s, Palette::dark(), ColorDepth::Ansi256, 100, 30),
+    );
+}
+
+#[test]
+fn golden_json_nested_monochrome() {
+    let s = json_state(NESTED_JSON, 100, 30);
+    assert_golden(
+        "viewer_json_nested_mono",
+        &json_in(&s, Palette::dark(), ColorDepth::Monochrome, 100, 30),
+    );
+}
+
+#[test]
+fn golden_json_long_string_soft_wraps_at_80_columns() {
+    let s = json_state(&long_json(), 80, 24);
+    assert_golden("viewer_json_wrapped_80", &draw(&s, 80, 24));
+}
+
+#[test]
+fn golden_json_long_string_styles_at_80_columns() {
+    let s = json_state(&long_json(), 80, 24);
+    assert_golden(
+        "viewer_json_wrapped_80_dark",
+        &json_in(&s, Palette::dark(), ColorDepth::TrueColor, 80, 24),
+    );
+}
+
+#[test]
+fn a_long_json_line_is_clipped_nowhere_and_wraps_again_when_the_pane_narrows() {
+    let wide = draw(&json_state(&long_json(), 130, 24), 130, 24);
+    let narrow = draw(&json_state(&long_json(), 80, 24), 80, 24);
+    assert!(
+        !wide.contains('…') && !narrow.contains('…'),
+        "nothing is clipped"
+    );
+    // The value pane's non-blank rows: the narrow pane needs more of them.
+    let rows = |f: &str| {
+        f.lines()
+            .filter(|l| l.split('│').nth(1).is_some_and(|r| !r.trim().is_empty()))
+            .count()
+    };
+    assert!(
+        rows(&narrow) > rows(&wide),
+        "{} vs {}",
+        rows(&narrow),
+        rows(&wide)
+    );
+}
+
+#[test]
+fn golden_json_value_cursor_on_a_highlighted_row() {
+    let mut s = json_state(NESTED_JSON, 100, 30);
+    let open = s.open.as_mut().unwrap();
+    open.cursor_active = true;
+    open.cursor = 12; // `"name": ...`
+    assert_golden(
+        "viewer_json_cursor_dark",
+        &json_in(&s, Palette::dark(), ColorDepth::TrueColor, 100, 30),
+    );
+}
+
+#[test]
+fn the_cursor_row_of_a_json_value_is_selected_all_the_way_across_in_one_style() {
+    let mut s = json_state(NESTED_JSON, 100, 30);
+    let open = s.open.as_mut().unwrap();
+    open.cursor_active = true;
+    open.cursor = 12;
+    let theme = Theme::new(ColorDepth::TrueColor);
+    let frame = render::frame(&s, &theme, &CLOCK, Rect::new(0, 0, 100, 30));
+    let y = row_of(&frame, "Lovelace");
+    let selected = theme.style(Token::Selected);
+    let x0 = (52..100)
+        .find(|&x| frame.cell((x, y)).map(|c| c.symbol()) == Some("\""))
+        .unwrap();
+    for x in x0..x0 + 20 {
+        let c = frame.cell((x, y)).unwrap();
+        assert_eq!(c.style().fg, selected.fg, "x={x}");
+        assert_eq!(c.style().bg, selected.bg, "x={x}");
+    }
+}
+
+#[test]
+fn json_keys_strings_numbers_and_literals_land_in_their_own_colours() {
+    let s = json_state(NESTED_JSON, 100, 30);
+    let theme = Theme::new(ColorDepth::TrueColor);
+    let frame = render::frame(&s, &theme, &CLOCK, Rect::new(0, 0, 100, 30));
+    // Scan the value pane only (the keys pane is to its left).
+    let fg_at = |needle: &str, offset: u16| {
+        let chars: Vec<char> = needle.chars().collect();
+        for y in 0..30u16 {
+            for x in 52..(100 - chars.len() as u16) {
+                let hit = chars.iter().enumerate().all(|(i, ch)| {
+                    frame
+                        .cell((x + i as u16, y))
+                        .is_some_and(|c| c.symbol().starts_with(*ch))
+                });
+                if hit {
+                    return frame.cell((x + offset, y)).unwrap().style().fg;
+                }
+            }
+        }
+        panic!("{needle} not found");
+    };
+    assert_eq!(fg_at("\"id\"", 1), theme.style(Token::JsonKey).fg);
+    assert_eq!(fg_at("\"London\"", 1), theme.style(Token::JsonString).fg);
+    assert_eq!(fg_at("8812", 0), theme.style(Token::JsonNumber).fg);
+    assert_eq!(fg_at("true", 0), theme.style(Token::JsonLiteral).fg);
+    assert_eq!(fg_at("null", 0), theme.style(Token::JsonLiteral).fg);
+}
+
+#[test]
+fn a_custom_theme_without_json_tokens_renders_a_json_value_in_text_muted_and_type_json() {
+    let cfg = redis_pane_core::config::parse(
+        r##"{"theme":"m","themes":{"m":{"text":"#111111","muted":"#222222","type.json":"#333333"}}}"##,
+    )
+    .unwrap();
+    let palette = redis_pane_core::theme::select(None, Some(&cfg)).unwrap();
+    let theme = Theme::with_palette(ColorDepth::TrueColor, &palette);
+    assert_eq!(
+        theme.style(Token::JsonKey).fg,
+        theme.style(Token::TypeJson).fg
+    );
+    assert_eq!(
+        theme.style(Token::JsonString).fg,
+        theme.style(Token::Text).fg
+    );
+    assert_eq!(
+        theme.style(Token::JsonPunct).fg,
+        theme.style(Token::Muted).fg
+    );
+}

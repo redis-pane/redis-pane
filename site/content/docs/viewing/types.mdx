@@ -55,7 +55,13 @@ aren't expandable, and consumer groups aren't shown. See [Limits](../limits.md).
 ## JSON
 
 A String that holds a JSON object or array is pretty-printed over several lines so you can read
-it. A value that looks like JSON but doesn't parse is shown as the plain text it is. You edit it
+it, and coloured: keys, strings, numbers, `true`/`false`/`null` and punctuation each get their own
+colour. In a monochrome terminal keys are bold and punctuation is dim. A line longer than the pane
+wraps under its value instead of being cut off, and wraps again if you resize the terminal or move
+the divider. The header counts lines as they are in the JSON, not the rows on screen. On the row
+the cursor is on, the colours give way to the selection bar. Only a String is coloured: Hash
+fields, List items and Pub/Sub payloads are not. A value that looks like JSON but doesn't parse
+is shown as the plain text it is. You edit it
 as text, and if what you've typed no longer parses, the confirm step warns you without blocking.
 Redis itself doesn't care whether the bytes are JSON.
 
