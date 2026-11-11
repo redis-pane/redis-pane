@@ -461,6 +461,9 @@ against: the failure users learn to distrust is not a wrong value, it is being u
 └──────────────────────────────────────────────────────────┘
 ```
 
+Every age in the header (and the Dashboard's `updated … ago`) is printed by `format_duration`'s
+two-most-significant-units rule — `20h 34m ago`, never `1234m ago` (#151).
+
 The four `updated now` / `unchanged` rows are one rule, not four cases: **the header states what
 the last read found, and then stops.** They fade after a couple of seconds, because they are an
 account of an event rather than a description of the key — after that the resting phrase takes

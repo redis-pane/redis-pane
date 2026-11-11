@@ -2443,10 +2443,8 @@ pub fn read_age(state: &State, clock: &dyn Clock) -> String {
             let secs = clock.now_epoch_ms().saturating_sub(then) / 1000;
             if secs < 1 {
                 "read just now".to_string()
-            } else if secs < 60 {
-                format!("read {secs}s ago")
             } else {
-                format!("read {}m ago", secs / 60)
+                format!("read {} ago", crate::state::ttl::format_elapsed(secs))
             }
         }
     }

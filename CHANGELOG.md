@@ -9,6 +9,12 @@ not part of it.
 
 ## [Unreleased]
 
+### Changed
+
+- Ages in the Viewer header (`changed … ago`, `read … ago`, `deleted … ago`) and the Dashboard's
+  `updated … ago` read in at most two units, largest first: `20h 34m ago` rather than
+  `1234m ago` ([#151](https://github.com/redis-pane/redis-pane/issues/151)).
+
 ## [1.1.0] - 2026-11-02
 
 ### Added
