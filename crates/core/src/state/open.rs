@@ -638,12 +638,13 @@ impl OpenKey {
     }
 }
 
+/// How long ago `then_ms` was, at two most-significant units (`45s ago`,
+/// `20h 34m ago`, `2d 3h ago`) — never a bare count of minutes, which reads
+/// as `1234m ago` once a header has sat for a day (#151).
 fn ago(now_ms: u64, then_ms: u64) -> String {
-    let secs = now_ms.saturating_sub(then_ms) / 1000;
-    match secs {
+    match now_ms.saturating_sub(then_ms) / 1000 {
         0 => "just now".into(),
-        s if s < 60 => format!("{s}s ago"),
-        s => format!("{}m ago", s / 60),
+        s => format!("{} ago", super::ttl::format_elapsed(s)),
     }
 }
 
@@ -784,6 +785,27 @@ mod tests {
         let k = open();
         assert_eq!(k.currency(true, 40_000), "● live");
         assert_eq!(k.currency(false, 40_000), "○ manual · read 30s ago");
+    }
+
+    #[test]
+    fn a_long_age_reads_in_days_and_hours_not_a_pile_of_minutes() {
+        // #151: a header left for a day used to say "changed 1234m ago".
+        let mut k = open();
+        k.at_rest = false;
+        k.absorb(pair("v2"), 500, 120, 10_000);
+        assert_eq!(
+            k.currency(true, 10_000 + 1_234 * 60_000),
+            "● live · changed 20h 34m ago"
+        );
+        assert_eq!(
+            k.currency(true, 10_000 + 90_000),
+            "● live · changed 1m 30s ago"
+        );
+        let k = open();
+        assert_eq!(
+            k.currency(false, 10_000 + 183_600_000),
+            "○ manual · read 2d 3h ago"
+        );
     }
 
     #[test]

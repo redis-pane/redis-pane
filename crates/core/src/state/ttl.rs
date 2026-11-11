@@ -318,6 +318,13 @@ pub fn format_duration(seconds: i32) -> String {
     }
 }
 
+/// [`format_duration`] for an elapsed time — a `u64` of seconds, as the
+/// "… ago" readouts compute it — saturating at `i32::MAX` rather than
+/// wrapping on a clock that has run past it.
+pub fn format_elapsed(seconds: u64) -> String {
+    format_duration(i32::try_from(seconds).unwrap_or(i32::MAX))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -490,6 +497,12 @@ mod tests {
     #[test]
     fn format_duration_clamps_a_negative_input_rather_than_panicking() {
         assert_eq!(format_duration(-1), "0s");
+    }
+
+    #[test]
+    fn format_elapsed_saturates_rather_than_wrapping() {
+        assert_eq!(format_elapsed(74_040), "20h 34m");
+        assert_eq!(format_elapsed(u64::MAX), format_duration(i32::MAX));
     }
 
     /// Whitespace separates segments; it never separates a number from its

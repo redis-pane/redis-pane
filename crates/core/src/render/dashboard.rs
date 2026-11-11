@@ -133,7 +133,7 @@ fn summary_line(
 ) {
     let age = state.dashboard.active().last_updated_ms.map(|at| {
         let secs = clock.now_epoch_ms().saturating_sub(at) / 1000;
-        format!("updated {}s ago", secs)
+        format!("updated {} ago", crate::state::ttl::format_elapsed(secs))
     });
     let sep = theme.glyphs.get(Glyph::Separator);
     // Inside a node on a Cluster the title carries the way back:
