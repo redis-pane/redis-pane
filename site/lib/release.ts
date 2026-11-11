@@ -2,7 +2,7 @@
 // URLs use /releases/latest and never change; `latest` is the newest non-prerelease.
 import { gitConfig } from './shared';
 
-export const releaseVersion = '1.1.0';
+export const releaseVersion = '1.1.1';
 
 const repoUrl = `https://github.com/${gitConfig.user}/${gitConfig.repo}`;
 const downloadBase = `${repoUrl}/releases/latest/download`;
