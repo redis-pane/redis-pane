@@ -439,6 +439,7 @@ Released as `0.1.0-beta.5`. Issue fixes #106, #107, #108 and #111 (#120, #121) f
 |---|---|---|---|
 | Launch groundwork: social card, site metadata, community files, the Redis trademark notice, a "What's next" page, the social clip, Homebrew as the landing page's default tab | #139–#143 | [`launch-groundwork.md`](plans/launch-groundwork.md), [`launch-content.md`](plans/launch-content.md) | `1.1.0` (docs and site only) |
 | JSON values: syntax colours and soft-wrapped long lines (#144), plus `json:sample:*` fixtures | #145, #146 | [`json-highlighting.md`](plans/json-highlighting.md) | `1.1.0` |
+| Readable ages: header and Dashboard `… ago` in at most two units, `20h 34m ago` not `1234m ago` (#151) | #152 | none | `1.1.1` |
 
 ## 8. Explicitly not in M0–M3
 
