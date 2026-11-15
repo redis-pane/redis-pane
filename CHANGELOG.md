@@ -9,7 +9,10 @@ not part of it.
 
 ## [Unreleased]
 
-## [1.1.1] - 2026-11-11
+## [1.1.2] - 2026-11-15
+
+1.1.1 was tagged but never published: its release build failed on a retired macOS runner. 1.1.2
+ships the same change.
 
 ### Changed
 
@@ -202,8 +205,8 @@ Eighteen alpha releases (`0.1.0-alpha.1` to `0.1.0-alpha.18`) built the first us
 - Monitor, Pub/Sub, Slowlog and Dashboard views.
 - Clipboard copy, including OSC 52 over SSH, and prebuilt binaries for macOS, Linux and Windows.
 
-[Unreleased]: https://github.com/redis-pane/redis-pane/compare/v1.1.1...HEAD
-[1.1.1]: https://github.com/redis-pane/redis-pane/compare/v1.1.0...v1.1.1
+[Unreleased]: https://github.com/redis-pane/redis-pane/compare/v1.1.2...HEAD
+[1.1.2]: https://github.com/redis-pane/redis-pane/compare/v1.1.0...v1.1.2
 [1.1.0]: https://github.com/redis-pane/redis-pane/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/redis-pane/redis-pane/compare/v0.1.0-beta.8...v1.0.0
 [0.1.0-beta.8]: https://github.com/redis-pane/redis-pane/compare/v0.1.0-beta.7...v0.1.0-beta.8
