@@ -1077,9 +1077,10 @@ mod tests {
                     assert_eq!(v.inverse[i as usize], r as u32);
                 }
                 let shown = v.order.iter().collect::<std::collections::HashSet<_>>();
-                for i in 0..keys.len() {
+                assert!(v.inverse.len() >= keys.len());
+                for (i, &row) in v.inverse.iter().enumerate().take(keys.len()) {
                     if !shown.contains(&(i as u32)) {
-                        assert_eq!(v.inverse[i], NO_ROW);
+                        assert_eq!(row, NO_ROW);
                     }
                 }
                 if sort == SortBy::Name {
